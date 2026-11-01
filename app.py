@@ -130,6 +130,7 @@ def upload_confirm():
 def get_orders():
     status = request.args.get('status', '').strip()
     courier = request.args.get('courier', '').strip()
+    customs_status = request.args.get('customs_status', '').strip()
     search = request.args.get('search', '').strip()
     search_field = request.args.get('search_field', 'all').strip()
     sort_by = request.args.get('sort_by', 'single_barcode_asc').strip()
@@ -148,6 +149,14 @@ def get_orders():
     elif status and status != '전체':
         query += ' AND status = ?'
         params.append(status)
+
+    if customs_status and customs_status != '전체':
+        if customs_status == '오류':
+            query += " AND (customs_validation_status = '오류' OR status = '통관오류')"
+        elif customs_status == '일치':
+            query += " AND customs_validation_status = '일치'"
+        elif customs_status == '미검증':
+            query += " AND (customs_validation_status = '' OR customs_validation_status IS NULL)"
 
     if courier and courier != '전체':
         query += ' AND courier = ?'
@@ -592,6 +601,27 @@ def delete_orders():
     conn.close()
 
     return jsonify({'status': 'success', 'deleted_count': len(order_ids)})
+
+@app.route('/api/orders/bulk-weight', methods=['POST'])
+def bulk_update_weight():
+    data = request.get_json() or {}
+    order_ids = data.get('order_ids', [])
+    try:
+        weight = float(data.get('weight', 0.0) or 0.0)
+    except (ValueError, TypeError):
+        return jsonify({'error': '유효한 무게(kg) 숫자를 입력해주세요.'}), 400
+
+    if not order_ids:
+        return jsonify({'error': '무게를 적용할 주문을 선택하세요.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholders = ','.join(['?'] * len(order_ids))
+    cur.execute(f'UPDATE orders SET weight = ? WHERE id IN ({placeholders})', [weight] + order_ids)
+    conn.commit()
+    conn.close()
+
+    return jsonify({'status': 'success', 'updated_count': len(order_ids), 'weight': weight})
 
 # ----------------- 4. 배송 & 송장 & 출고 API -----------------
 @app.route('/api/shipping/issue-tracking', methods=['POST'])
@@ -1275,6 +1305,21 @@ def export_inventory_logs():
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
+@app.route('/api/inventory/logs/delete', methods=['POST'])
+def delete_inventory_logs():
+    data = request.get_json() or {}
+    log_ids = data.get('log_ids', [])
+    if not log_ids:
+        return jsonify({'error': '삭제할 입출고 내역을 선택하세요.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholders = ','.join(['?'] * len(log_ids))
+    cur.execute(f'DELETE FROM inventory_logs WHERE id IN ({placeholders})', log_ids)
+    conn.commit()
+    conn.close()
+
+    return jsonify({'status': 'success', 'deleted_count': len(log_ids)})
 
 # ----------------- 6. 세트상품/옵션 분할 규칙 API -----------------
 @app.route('/api/bundles', methods=['GET'])

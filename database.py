@@ -38,8 +38,8 @@ class PgCursorWrapper:
             self._cur.execute(trans_sql, (tbl_name,))
             return self
 
-        # 2. ? -> %s 변환
-        trans_sql = clean_sql.replace('?', '%s')
+        # 2. psycopg2 문자열 포맷팅 충돌 방지: 기존 %를 %%로 이스케이프 후 ? -> %s 변환
+        trans_sql = clean_sql.replace('%', '%%').replace('?', '%s')
 
         # 3. INSERT 시 lastrowid 자동 지원을 위한 RETURNING id 처리
         is_insert = trans_sql.upper().startswith('INSERT INTO')
@@ -66,7 +66,7 @@ class PgCursorWrapper:
         return self
 
     def executemany(self, sql, seq_of_params):
-        trans_sql = sql.replace('?', '%s')
+        trans_sql = sql.replace('%', '%%').replace('?', '%s')
         self._cur.executemany(trans_sql, seq_of_params)
         return self
 

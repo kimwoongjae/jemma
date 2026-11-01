@@ -284,9 +284,10 @@
             <div class="card border-0 shadow-sm mb-3">
                 <div class="card-body p-3">
                     <div class="row g-2 align-items-center mb-2">
-                        <div class="col-md-4">
+                        <!-- 1. 검색창 -->
+                        <div class="col-xl-3 col-md-4">
                             <div class="input-group">
-                                <select id="orderSearchField" class="form-select" style="max-width: 125px;" onchange="loadOrders()">
+                                <select id="orderSearchField" class="form-select" style="max-width: 120px;" onchange="loadOrders()">
                                     <option value="all">전체 검색</option>
                                     <option value="product_name">상품명</option>
                                     <option value="sku">바코드(SKU)</option>
@@ -300,7 +301,8 @@
                                 <button class="btn btn-outline-secondary" onclick="loadOrders()"><i class="fa-solid fa-magnifying-glass"></i></button>
                             </div>
                         </div>
-                        <div class="col-md-2">
+                        <!-- 2. 주문 상태 필터 -->
+                        <div class="col-xl-2 col-md-3">
                             <select id="statusFilter" class="form-select" onchange="loadOrders()">
                                 <option value="출고대기" selected>출고대기 (미발송)</option>
                                 <option value="주문접수">주문접수 (송장미발급)</option>
@@ -309,7 +311,8 @@
                                 <option value="출고완료">출고완료 (발송완료)</option>
                             </select>
                         </div>
-                        <div class="col-md-2">
+                        <!-- 3. 택배사 필터 -->
+                        <div class="col-xl-2 col-md-2">
                             <select id="orderCourierFilter" class="form-select" onchange="loadOrders()">
                                 <option value="전체">택배사 전체</option>
                                 <option value="나르다">나르다 (NARDA)</option>
@@ -320,14 +323,36 @@
                                 <option value="로젠택배">로젠택배</option>
                             </select>
                         </div>
-                        <div class="col-md-4 text-end d-flex gap-2 justify-content-end flex-wrap">
+                        <!-- 4. 통관부호 검증 상태 필터 -->
+                        <div class="col-xl-2 col-md-3">
+                            <select id="orderCustomsFilter" class="form-select" onchange="loadOrders()">
+                                <option value="전체" selected>통관부호: 전체</option>
+                                <option value="오류" class="text-danger fw-bold">통관부호: 검증오류</option>
+                                <option value="일치" class="text-success">통관부호: 정상일치</option>
+                                <option value="미검증" class="text-muted">통관부호: 미검증</option>
+                            </select>
+                        </div>
+                        <!-- 5. 무게(kg) 일괄 등록 -->
+                        <div class="col-xl-3 col-md-12">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light text-muted small"><i class="fa-solid fa-weight-scale me-1"></i>무게</span>
+                                <input type="number" id="bulkWeightInput" class="form-control" placeholder="무게(kg)" step="0.01" min="0">
+                                <button class="btn btn-outline-primary text-nowrap" onclick="applyBulkWeight()" title="선택한 주문들에 입력한 무게(kg)를 일괄 등록합니다">
+                                    일괄적용
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 액션 버튼 줄 -->
+                    <div class="row g-2 align-items-center mb-1">
+                        <div class="col-12 d-flex gap-2 justify-content-end flex-wrap">
                             <button class="btn btn-outline-info" onclick="checkStockDispatchAvailability()" title="재고 수량을 바탕으로 순서대로 출고 가능 여부를 확인합니다">
                                 <i class="fa-solid fa-boxes-packing me-1"></i> 출고여부 확인
                             </button>
                             <button class="btn btn-outline-primary" id="btnValidateCustoms" onclick="validateCustomsCodes()" title="관세청 개인통관고유부호 일치 여부를 검증합니다">
                                 <i class="fa-solid fa-shield-halved me-1"></i> 통관부호 검증
                             </button>
-                            <button class="btn btn-outline-warning" onclick="moveCustomsErrorOrders()" title="통관부호 검증 오류 건을 [통관부호 확인 목록]으로 이동합니다">
+                            <button class="btn btn-outline-warning fw-bold" onclick="moveCustomsErrorOrders()" title="통관부호 검증 오류 건을 [통관부호 확인 목록]으로 이동합니다">
                                 <i class="fa-solid fa-arrow-right-to-bracket me-1"></i> 오류건 확인목록 이동
                             </button>
                             <button class="btn btn-primary" onclick="issueTrackingSelected()">
@@ -339,8 +364,8 @@
                             <button class="btn btn-secondary" onclick="exportExcel()">
                                 <i class="fa-solid fa-file-excel me-1"></i> 송장 엑셀
                             </button>
-                            <button class="btn btn-outline-danger" onclick="deleteSelectedOrders()">
-                                <i class="fa-solid fa-trash"></i>
+                            <button class="btn btn-outline-danger" onclick="deleteSelectedOrders()" title="선택한 주문을 삭제합니다">
+                                <i class="fa-solid fa-trash me-1"></i> 선택 삭제
                             </button>
                         </div>
                     </div>
@@ -492,6 +517,9 @@
                             </select>
                         </div>
                         <div class="col-md-7 text-end d-flex gap-2 justify-content-end flex-wrap">
+                            <button class="btn btn-outline-danger" onclick="deleteSelectedDispatchedOrders()" title="선택한 발송 완료 주문을 삭제합니다">
+                                <i class="fa-solid fa-trash me-1"></i> 선택 삭제
+                            </button>
                             <button class="btn btn-success" onclick="exportDispatchedExcel(true)">
                                 <i class="fa-solid fa-file-excel me-1"></i> 선택 발송내역 엑셀 다운로드
                             </button>
@@ -772,6 +800,9 @@
                             </select>
                         </div>
                         <div class="col-md-7 text-end d-flex gap-2 justify-content-end flex-wrap">
+                            <button class="btn btn-outline-danger" onclick="deleteSelectedLogs()" title="선택한 입출고 내역을 삭제합니다">
+                                <i class="fa-solid fa-trash me-1"></i> 선택 삭제
+                            </button>
                             <button class="btn btn-success" onclick="exportSelectedLogs()">
                                 <i class="fa-solid fa-file-excel me-1"></i> 선택 내역 엑셀 다운로드
                             </button>
@@ -1372,10 +1403,11 @@
     async function loadOrders() {
         const status = document.getElementById('statusFilter')?.value || '출고대기';
         const courier = document.getElementById('orderCourierFilter')?.value || '전체';
+        const customs = document.getElementById('orderCustomsFilter')?.value || '전체';
         const search = document.getElementById('orderSearchInput')?.value || '';
         const searchField = document.getElementById('orderSearchField')?.value || 'all';
         try {
-            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
+            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&courier=${encodeURIComponent(courier)}&customs_status=${encodeURIComponent(customs)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
             ordersList = await res.json();
             renderOrdersTable(ordersList);
         } catch (e) {
@@ -1384,6 +1416,43 @@
             if (tbody) {
                 tbody.innerHTML = `<tr><td colspan="13" class="text-center py-5 text-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>주문 목록 로딩 중 일시적 오류: ${e.message} <br><button class="btn btn-sm btn-outline-secondary mt-2" onclick="loadOrders()"><i class="fa-solid fa-arrows-rotate me-1"></i>다시 불러오기</button></td></tr>`;
             }
+        }
+    }
+
+    async function applyBulkWeight() {
+        const checked = getSelectedOrderIds();
+        if (!checked || checked.length === 0) {
+            alert('무게를 적용할 주문을 먼저 체크박스로 선택해주세요.');
+            return;
+        }
+        const weightVal = document.getElementById('bulkWeightInput')?.value;
+        if (!weightVal || isNaN(parseFloat(weightVal)) || parseFloat(weightVal) < 0) {
+            alert('적용할 유효한 무게(kg) 숫자를 입력해주세요. (예: 0.5)');
+            document.getElementById('bulkWeightInput')?.focus();
+            return;
+        }
+        const weight = parseFloat(weightVal);
+        if (!confirm(`선택한 ${checked.length}건의 주문 무게를 ${weight}kg으로 일괄 변경하시겠습니까?`)) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/orders/bulk-weight', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    order_ids: checked,
+                    weight: weight
+                })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(`선택한 ${data.updated_count}건의 주문 무게가 ${data.weight}kg으로 일괄 적용되었습니다.`);
+                loadOrders();
+            } else {
+                alert('무게 일괄 적용 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('오류 발생: ' + e.message);
         }
     }
 
@@ -2256,6 +2325,34 @@
         loadShippingLabels(ids);
     }
 
+    async function deleteSelectedDispatchedOrders() {
+        const checked = Array.from(document.querySelectorAll('.dispatched-row-check:checked')).map(ck => parseInt(ck.value));
+        if (checked.length === 0) {
+            alert('삭제할 발송 주문을 먼저 체크박스로 선택해주세요.');
+            return;
+        }
+        if (!confirm(`선택한 ${checked.length}건의 발송 주문을 정말 삭제하시겠습니까?\n관련 출고 품목 데이터도 함께 삭제됩니다.`)) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/orders/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: checked })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(`${data.deleted_count}건의 발송 주문이 삭제되었습니다.`);
+                loadDispatchedOrders();
+                refreshAllData();
+            } else {
+                alert('삭제 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('삭제 오류: ' + e.message);
+        }
+    }
+
     // ==========================================
     // 2. 신규 [입고 (바코드 스캔)] 기능
     // ==========================================
@@ -2933,6 +3030,33 @@
     }
     function exportAllLogs() {
         window.location.href = `/api/inventory/export-logs`;
+    }
+
+    async function deleteSelectedLogs() {
+        const ids = getSelectedLogIds();
+        if (!ids || ids.length === 0) {
+            alert('삭제할 입출고 내역을 먼저 체크박스로 선택해주세요.');
+            return;
+        }
+        if (!confirm(`선택한 ${ids.length}건의 입출고 내역을 정말 삭제하시겠습니까?`)) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/inventory/logs/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ log_ids: ids })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(`${data.deleted_count}건의 입출고 내역이 삭제되었습니다.`);
+                loadInventoryLogs();
+            } else {
+                alert('삭제 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('삭제 오류: ' + e.message);
+        }
     }
 
     // ==========================================
