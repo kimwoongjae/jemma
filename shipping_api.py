@@ -206,7 +206,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
         cur.execute('''
             UPDATE orders
-            SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '송장발급', dispatched_at = ?
+            SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '출고완료', dispatched_at = ?
             WHERE id = ?
         ''', (tracking_no, target_courier, pdf_url, now_str, oid))
 

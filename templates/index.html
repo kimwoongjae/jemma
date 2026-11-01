@@ -1280,6 +1280,57 @@
     </div>
 </div>
 
+<!-- ================= 모달: 나르다 송장 발급 실시간 진행 팝업 ================= -->
+<div class="modal fade" id="issueTrackingProgressModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content shadow-lg border-0">
+            <div class="modal-header bg-primary text-white py-3">
+                <h5 class="modal-title fw-bold">
+                    <i class="fa-solid fa-plane-departure me-2"></i>나르다(NARDA) 송장 발급 및 출고 처리
+                </h5>
+            </div>
+            <div class="modal-body p-4">
+                <div class="text-center mb-3">
+                    <div class="spinner-border text-primary mb-2" id="trackingProgressSpinner" style="width: 2.5rem; height: 2.5rem;" role="status"></div>
+                    <div id="trackingProgressCheckIcon" class="text-success mb-2" style="font-size: 2.5rem; display: none;">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1" id="trackingProgressTitle">나르다 API로 주문 전송 중...</h6>
+                    <p class="text-muted small mb-0" id="trackingProgressSubtext">잠시만 기다려주세요. 송장번호 발급 및 재고 차감을 진행하고 있습니다.</p>
+                </div>
+
+                <!-- 프로그레스 바 -->
+                <div class="progress mb-2" style="height: 22px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary fw-bold" id="trackingProgressBar" role="progressbar" style="width: 0%;">
+                        0%
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between small text-muted mb-3">
+                    <span id="trackingProgressCount">0 / 0건 완료</span>
+                    <span id="trackingProgressPercent">0%</span>
+                </div>
+
+                <!-- 실시간 진행 로그 영역 -->
+                <div class="bg-light p-2 rounded border small" style="max-height: 140px; overflow-y: auto; font-family: monospace;" id="trackingProgressLog">
+                    <div class="text-muted">발급 준비 중...</div>
+                </div>
+            </div>
+            <div class="modal-footer py-2 justify-content-between" id="trackingProgressFooter" style="display: none;">
+                <span class="small text-success fw-bold" id="trackingProgressDoneMsg">
+                    <i class="fa-solid fa-circle-check me-1"></i>처리가 완료되었습니다.
+                </span>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-secondary btn-sm px-3" data-bs-dismiss="modal">닫기</button>
+                    <button type="button" class="btn btn-primary btn-sm px-3" id="btnGoPrintCenter" onclick="goToPrintCenterFromModal()">
+                        <i class="fa-solid fa-print me-1"></i>송장 출력 센터로 이동
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Bootstrap 5 JS -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
@@ -1957,57 +2008,125 @@
         return Array.from(document.querySelectorAll('.order-row-check:checked')).map(ck => parseInt(ck.value));
     }
 
+    let lastIssuedOrderIds = [];
+
     async function issueTrackingSelected() {
         const ids = getSelectedOrderIds();
         if (ids.length === 0) { alert('송장을 발급할 주문을 선택하세요.'); return; }
-        if (!confirm(`선택한 ${ids.length}건의 주문을 나르다 API로 전송하여 송장 발급 및 재고 차감을 진행하시겠습니까?`)) return;
+        if (!confirm(`선택한 ${ids.length}건의 주문을 나르다 API로 전송하여 송장 발급 및 출고 처리를 진행하시겠습니까?`)) return;
 
-        const btn = document.querySelector("button[onclick='issueTrackingSelected()']");
-        const origText = btn ? btn.innerHTML : '';
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> 나르다 전송 중...';
-        }
+        // 진행 팝업 모달 열기 및 초기화
+        const modalEl = document.getElementById('issueTrackingProgressModal');
+        const modal = new bootstrap.Modal(modalEl);
+        
+        document.getElementById('trackingProgressSpinner').style.display = 'inline-block';
+        document.getElementById('trackingProgressCheckIcon').style.display = 'none';
+        document.getElementById('trackingProgressTitle').textContent = '나르다 API로 주문 전송 중...';
+        document.getElementById('trackingProgressSubtext').textContent = '잠시만 기다려주세요. 송장번호 발급 및 재고 차감을 진행하고 있습니다.';
+        
+        const progressBar = document.getElementById('trackingProgressBar');
+        progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary fw-bold';
+        progressBar.style.width = '0%';
+        progressBar.textContent = '0%';
+        
+        document.getElementById('trackingProgressCount').textContent = `0 / ${ids.length}건 완료`;
+        document.getElementById('trackingProgressPercent').textContent = '0%';
+        
+        const logBox = document.getElementById('trackingProgressLog');
+        logBox.innerHTML = '<div class="text-muted">나르다 API와 통신을 시작합니다...</div>';
+        document.getElementById('trackingProgressFooter').style.display = 'none';
+
+        modal.show();
+
+        const chunkSize = 10;
+        let processedCount = 0;
+        let allUpdated = [];
+        let allFailed = [];
 
         try {
-            const res = await fetch('/api/shipping/issue-tracking', {
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ order_ids: ids })
-            });
-            const data = await res.json();
-            if (data.status === 'success') {
-                const sCount = data.success_count || (data.updated ? data.updated.length : 0);
-                let msg = `✅ 총 ${sCount}건 나르다 송장 발급 및 재고 차감 완료!\n입출고 내역에 나르다 송장번호와 함께 정상 출고 저장되었습니다.`;
-                if (data.failed && data.failed.length > 0) {
-                    msg += `\n\n⚠️ ${data.failed.length}건 나르다 API 전송 실패:`;
-                    data.failed.forEach(f => {
-                        msg += `\n- [${f.order_no} / ${f.recipient_name}]: ${f.error}`;
+            for (let i = 0; i < ids.length; i += chunkSize) {
+                const chunk = ids.slice(i, i + chunkSize);
+                try {
+                    const res = await fetch('/api/shipping/issue-tracking', {
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order_ids: chunk })
                     });
-                }
-                alert(msg);
-                refreshAllData();
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        const updated = data.updated || [];
+                        const failed = data.failed || [];
+                        allUpdated.push(...updated);
+                        allFailed.push(...failed);
 
-                if (sCount > 0) {
-                    if (confirm('지금 발급된 나르다 송장 라벨을 [송장 라벨 인쇄 센터]에서 바로 확인 및 인쇄하시겠습니까?')) {
-                        const tabTrigger = new bootstrap.Tab(document.getElementById('tab-labels'));
-                        tabTrigger.show();
-                        const updatedIds = (data.updated || []).map(o => o.order_id);
-                        loadShippingLabels(updatedIds.length > 0 ? updatedIds : ids);
-                        loadShippingBatches(false);
+                        updated.forEach(u => {
+                            const line = document.createElement('div');
+                            line.className = 'text-success';
+                            line.innerHTML = `✓ [${escapeHtml(u.order_no)}] ${escapeHtml(u.recipient_name)} - 송장: <strong>${escapeHtml(u.tracking_no || '-')}</strong>`;
+                            logBox.appendChild(line);
+                        });
+
+                        failed.forEach(f => {
+                            const line = document.createElement('div');
+                            line.className = 'text-danger';
+                            line.innerHTML = `✕ [${escapeHtml(f.order_no)}] ${escapeHtml(f.recipient_name)} 실패: ${escapeHtml(f.error || '오류')}`;
+                            logBox.appendChild(line);
+                        });
+                    } else {
+                        const line = document.createElement('div');
+                        line.className = 'text-danger';
+                        line.textContent = `청크 요청 실패: ${data.error || '알 수 없는 오류'}`;
+                        logBox.appendChild(line);
                     }
+                } catch (chunkErr) {
+                    const line = document.createElement('div');
+                    line.className = 'text-danger';
+                    line.textContent = `네트워크 오류: ${chunkErr.message}`;
+                    logBox.appendChild(line);
                 }
-            } else {
-                alert('발급 실패: ' + (data.error || '오류 발생'));
+
+                processedCount += chunk.length;
+                const percent = Math.min(100, Math.round((processedCount / ids.length) * 100));
+                progressBar.style.width = percent + '%';
+                progressBar.textContent = percent + '%';
+                document.getElementById('trackingProgressCount').textContent = `${Math.min(processedCount, ids.length)} / ${ids.length}건 완료`;
+                document.getElementById('trackingProgressPercent').textContent = percent + '%';
+                logBox.scrollTop = logBox.scrollHeight;
             }
+
+            // 완료 처리
+            progressBar.className = 'progress-bar bg-success fw-bold';
+            progressBar.style.width = '100%';
+            progressBar.textContent = '100% 완료';
+            document.getElementById('trackingProgressSpinner').style.display = 'none';
+            document.getElementById('trackingProgressCheckIcon').style.display = 'block';
+
+            document.getElementById('trackingProgressTitle').textContent = `총 ${allUpdated.length}건 나르다 송장 발급 완료!`;
+            document.getElementById('trackingProgressSubtext').innerHTML = `재고가 정상 차감되었으며, 주문이 <strong>[발송 내역 목록]</strong>으로 자동 이동되었습니다.`;
+            
+            lastIssuedOrderIds = allUpdated.map(u => u.order_id);
+            document.getElementById('trackingProgressFooter').style.display = 'flex';
+
+            // 주문 목록에서 출고 완료된 주문이 제거되고 발송 내역으로 이동하도록 새로고침
+            refreshAllData();
+
         } catch (e) {
-            alert('통신 오류: ' + e.message);
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = origText;
-            }
+            progressBar.className = 'progress-bar bg-danger fw-bold';
+            document.getElementById('trackingProgressTitle').textContent = '송장 발급 중 오류 발생';
+            document.getElementById('trackingProgressSubtext').textContent = e.message;
+            document.getElementById('trackingProgressFooter').style.display = 'flex';
         }
+    }
+
+    function goToPrintCenterFromModal() {
+        const modalEl = document.getElementById('issueTrackingProgressModal');
+        const modalInstance = bootstrap.Modal.getInstance(modalEl);
+        if (modalInstance) modalInstance.hide();
+
+        const tabTrigger = new bootstrap.Tab(document.getElementById('tab-labels'));
+        tabTrigger.show();
+        loadShippingLabels(lastIssuedOrderIds.length > 0 ? lastIssuedOrderIds : null);
+        loadShippingBatches(false);
     }
 
     async function dispatchSelected() {

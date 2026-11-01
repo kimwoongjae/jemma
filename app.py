@@ -201,9 +201,9 @@ def get_orders():
     params = []
 
     if status == '출고대기':
-        query += " AND status IN ('주문접수', '출고대기', '송장발급')"
-    elif status == '주문접수':
         query += " AND status IN ('주문접수', '출고대기')"
+    elif status == '주문접수':
+        query += " AND status = '주문접수'"
     elif status and status != '전체':
         query += ' AND status = ?'
         params.append(status)
@@ -297,7 +297,7 @@ def get_dispatched_orders():
     conn = get_connection()
     cur = conn.cursor()
 
-    query = "SELECT * FROM orders WHERE status = '출고완료'"
+    query = "SELECT * FROM orders WHERE status IN ('출고완료', '송장발급')"
     params = []
 
     if courier and courier != '전체':
