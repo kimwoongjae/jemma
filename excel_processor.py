@@ -47,7 +47,7 @@ def generate_sku(product_name, option_name):
         sku = f"SKU-{abs(hash(product_name + option_name)) % 100000:05d}"
     return sku
 
-def find_matching_product_info(product_name, option_name, conn=None, opt_rows=None, prod_rows=None):
+def find_matching_product_info(product_name, option_name, conn=None, opt_rows=None, prod_rows=None, exact_only=False):
     """
     재고관리(product_options 및 products) 테이블에서 상품명/옵션명 또는 합친 명칭과 일치하는 바코드 및 출고수량 배수를 조회합니다.
     """
@@ -81,13 +81,27 @@ def find_matching_product_info(product_name, option_name, conn=None, opt_rows=No
         for r in opt_rows:
             opt_name = (r['option_name'] or '').strip()
             if opt_name == combined or opt_name == product_name or (clean_o and opt_name == option_name):
-                return {'sku': r['sku'], 'dispatched_quantity': r['dispatched_quantity'] or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+                return {
+                    'sku': r['sku'],
+                    'dispatched_quantity': r['dispatched_quantity'] or 1,
+                    'unit_price': r.get('unit_price', 0.0),
+                    'matched': True,
+                    'matched_product_name': None,
+                    'matched_option_name': r.get('option_name')
+                }
 
         # 1-2. 공백 제거 후 일치
         for r in opt_rows:
             opt_name = re.sub(r'\s+', '', r['option_name'] or '')
             if opt_name == clean_combined or opt_name == clean_p:
-                return {'sku': r['sku'], 'dispatched_quantity': r['dispatched_quantity'] or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+                return {
+                    'sku': r['sku'],
+                    'dispatched_quantity': r['dispatched_quantity'] or 1,
+                    'unit_price': r.get('unit_price', 0.0),
+                    'matched': True,
+                    'matched_product_name': None,
+                    'matched_option_name': r.get('option_name')
+                }
 
         # 2-1. 완전 일치 (합친 명칭 or 상품명)
         for r in prod_rows:
@@ -95,14 +109,28 @@ def find_matching_product_info(product_name, option_name, conn=None, opt_rows=No
             p_opt = r['option_name'] or ''
             p_combined = f"{p_name} {p_opt}".strip() if p_opt else p_name
             if p_combined == combined or p_name == combined:
-                return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+                return {
+                    'sku': r['sku'],
+                    'dispatched_quantity': r.get('dispatched_quantity') or 1,
+                    'unit_price': r.get('unit_price', 0.0),
+                    'matched': True,
+                    'matched_product_name': r.get('product_name'),
+                    'matched_option_name': r.get('option_name')
+                }
 
         # 2-2. product_name + option_name 일치
         for r in prod_rows:
             p_name = r['product_name'] or ''
             p_opt = r['option_name'] or ''
             if p_name == product_name and (p_opt == option_name or not p_opt):
-                return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+                return {
+                    'sku': r['sku'],
+                    'dispatched_quantity': r.get('dispatched_quantity') or 1,
+                    'unit_price': r.get('unit_price', 0.0),
+                    'matched': True,
+                    'matched_product_name': r.get('product_name'),
+                    'matched_option_name': r.get('option_name')
+                }
 
         # 2-3. 공백 제거 후 일치
         for r in prod_rows:
@@ -110,17 +138,39 @@ def find_matching_product_info(product_name, option_name, conn=None, opt_rows=No
             p_opt = re.sub(r'\s+', '', r['option_name'] or '')
             p_comb = (p_name + p_opt) if p_opt else p_name
             if p_comb == clean_combined or p_name == clean_combined:
-                return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+                return {
+                    'sku': r['sku'],
+                    'dispatched_quantity': r.get('dispatched_quantity') or 1,
+                    'unit_price': r.get('unit_price', 0.0),
+                    'matched': True,
+                    'matched_product_name': r.get('product_name'),
+                    'matched_option_name': r.get('option_name')
+                }
 
-        # 2-4. 키워드 부분 일치
-        for r in prod_rows:
-            p_name = re.sub(r'\s+', '', r['product_name'] or '')
-            if len(p_name) >= 3 and (p_name in clean_combined or clean_combined in p_name):
-                if clean_o:
-                    if clean_o in p_name or (r['option_name'] and re.sub(r'\s+', '', r['option_name']) in clean_o):
-                        return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
-                else:
-                    return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+        # 2-4. 키워드 부분 일치 (exact_only=False 일 때만 수행)
+        if not exact_only:
+            for r in prod_rows:
+                p_name = re.sub(r'\s+', '', r['product_name'] or '')
+                if len(p_name) >= 3 and (p_name in clean_combined or clean_combined in p_name):
+                    if clean_o:
+                        if clean_o in p_name or (r['option_name'] and re.sub(r'\s+', '', r['option_name']) in clean_o):
+                            return {
+                                'sku': r['sku'],
+                                'dispatched_quantity': r.get('dispatched_quantity') or 1,
+                                'unit_price': r.get('unit_price', 0.0),
+                                'matched': True,
+                                'matched_product_name': r.get('product_name'),
+                                'matched_option_name': r.get('option_name')
+                            }
+                    else:
+                        return {
+                            'sku': r['sku'],
+                            'dispatched_quantity': r.get('dispatched_quantity') or 1,
+                            'unit_price': r.get('unit_price', 0.0),
+                            'matched': True,
+                            'matched_product_name': r.get('product_name'),
+                            'matched_option_name': r.get('option_name')
+                        }
 
     finally:
         if close_after and conn:
@@ -165,7 +215,7 @@ def sync_order_items_sku(conn=None):
         if close_after and conn:
             conn.close()
 
-def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=None, prod_rows=None, rules_cache=None):
+def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=None, prod_rows=None, rules_cache=None, delimiters=None):
     product_name = str(product_name).strip() if pd.notna(product_name) else '상품명미상'
     option_name = str(option_name).strip() if pd.notna(option_name) else '단일옵션'
     try:
@@ -211,50 +261,63 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
             })
         return items
 
-    # 2. 먼저 전체 옵션명이 재고관리에 등록된 단일 상품과 완전히 일치하는지 확인
-    direct_info = find_matching_product_info(product_name, option_name, conn, opt_rows=opt_rows, prod_rows=prod_rows)
+    # 2. 먼저 전체 옵션명이 재고관리에 등록된 단일 상품과 완전히 일치하는지 확인 (완전 일치만 허용)
+    direct_info = find_matching_product_info(product_name, option_name, conn, opt_rows=opt_rows, prod_rows=prod_rows, exact_only=True)
     if direct_info['matched']:
         opt_qty = direct_info['dispatched_quantity'] or 1
         return [{
-            'item_product_name': product_name,
-            'item_option_name': option_name,
+            'item_product_name': direct_info.get('matched_product_name') or product_name,
+            'item_option_name': direct_info.get('matched_option_name') or option_name,
             'sku': direct_info['sku'],
             'option_quantity': opt_qty,
             'quantity': qty * opt_qty,
             'matched': True
         }]
 
-    # 3. 구분 기호(+, ,, /, ?, &, |, ^ 등)로 자동 다중 품목 분할
+    # 3. 구분 기호(+, -, ,, /, ?, & 등)로 자동 다중 품목 분할
     items = []
-    delimiters_pattern = r'[\+\,\/\?\&\^\|]'
-    parts = [p.strip() for p in re.split(delimiters_pattern, option_name) if p.strip()]
+    if not delimiters:
+        delimiters = ['+', '-', '/', ',', '?', '&']
+    delimiters_pattern = '|'.join(re.escape(s.strip()) for s in delimiters if s and s.strip())
+
+    parts = [p.strip() for p in re.split(delimiters_pattern, option_name) if p.strip()] if delimiters_pattern else [option_name]
+
+    # 옵션명이 비어있거나 '단일옵션'인데 상품명에 구분 기호가 있는 경우 상품명 분할 지원
+    is_product_split = False
+    if len(parts) <= 1 and (not option_name or option_name in ('단일옵션', '단일상품')):
+        prod_parts = [p.strip() for p in re.split(delimiters_pattern, product_name) if p.strip()] if delimiters_pattern else [product_name]
+        if len(prod_parts) > 1:
+            parts = prod_parts
+            is_product_split = True
 
     if len(parts) > 1:
         for p in parts:
-            info = find_matching_product_info(product_name, p, conn, opt_rows=opt_rows, prod_rows=prod_rows)
+            lookup_p = '' if is_product_split else product_name
+            info = find_matching_product_info(lookup_p, p, conn, opt_rows=opt_rows, prod_rows=prod_rows)
             sku = info['sku'] if info['matched'] else generate_sku(product_name, p)
             opt_qty = info['dispatched_quantity'] if info['matched'] else 1
             items.append({
-                'item_product_name': product_name,
-                'item_option_name': p,
+                'item_product_name': info.get('matched_product_name') or (product_name if not is_product_split else p),
+                'item_option_name': info.get('matched_option_name') or (p if not is_product_split else '단일옵션'),
                 'sku': sku,
                 'option_quantity': opt_qty,
                 'quantity': qty * opt_qty,
                 'matched': info['matched']
             })
     else:
-        # 단일 품목 (옵션명에 숫자가 있는 경우 옵션 수량 인식, 예: '4', '4봉', '4개')
+        # 단일 품목 (부분 일치 포함 조회 및 숫자 수량 인식)
+        info = find_matching_product_info(product_name, option_name, conn, opt_rows=opt_rows, prod_rows=prod_rows, exact_only=False)
         num_match = re.match(r'^(\d+)\s*(개|봉|입|세트|box|박스)?$', option_name)
-        opt_qty = int(num_match.group(1)) if num_match else 1
-        sku = generate_sku(product_name, option_name)
+        opt_qty = (info['dispatched_quantity'] if info['matched'] else int(num_match.group(1))) if (info['matched'] or num_match) else 1
+        sku = info['sku'] if info['matched'] else generate_sku(product_name, option_name)
 
         items.append({
-            'item_product_name': product_name,
-            'item_option_name': option_name,
+            'item_product_name': info.get('matched_product_name') or product_name,
+            'item_option_name': info.get('matched_option_name') or option_name,
             'sku': sku,
             'option_quantity': opt_qty,
-            'quantity': qty * opt_qty if num_match else qty,
-            'matched': False
+            'quantity': qty * opt_qty if (num_match or info['matched']) else qty,
+            'matched': info['matched']
         })
 
     return items
@@ -281,6 +344,14 @@ def process_excel_file(file_path, batch_name=None):
         rules_cache = [dict(r) for r in cur.fetchall()]
     except Exception:
         rules_cache = []
+
+    try:
+        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
+        if not delimiters:
+            delimiters = ['+', '-', '/', ',', '?', '&']
+    except Exception:
+        delimiters = ['+', '-', '/', ',', '?', '&']
 
     parsed_orders = []
     preview_data = {
@@ -333,7 +404,7 @@ def process_excel_file(file_path, batch_name=None):
         shipping_memo = val('shipping_memo')
 
         # 분할 처리 (캐시 사용으로 초고속)
-        split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows, rules_cache=rules_cache)
+        split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows, rules_cache=rules_cache, delimiters=delimiters)
 
         for it in split_items:
             if not it.get('matched', False):

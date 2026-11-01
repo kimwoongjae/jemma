@@ -881,8 +881,26 @@
                             </button>
                         </div>
                         <div class="card-body p-0">
-                            <div class="alert alert-success m-3 py-2 small">
-                                <i class="fa-solid fa-circle-check me-1"></i> <strong>기호 자동 분할 완벽 지원:</strong> 번거롭게 세트 규칙을 등록하지 않아도, 옵션명에 <code>+</code>, <code>,</code>, <code>/</code>, <code>?</code>, <code>&</code> 등의 구분 기호가 포함된 상품(예: <code>LIGHT + PEARL</code>, <code>LIGHT / PEARL</code>, <code>LIGHT, PEARL</code>, <code>LIGHT ? PEARL</code>)은 시스템이 자동으로 각각의 단품으로 쪼개서 분할 출고 처리합니다.
+                            <!-- 옵션 자동 분할 구분 기호 리스트 관리 영역 -->
+                            <div class="p-3 bg-light border-bottom">
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <span class="fw-bold small text-dark">
+                                        <i class="fa-solid fa-tags text-primary me-1"></i> 옵션 자동 분할 구분 기호 리스트
+                                    </span>
+                                    <span class="text-muted" style="font-size: 11px;">※ 복잡한 세트 규칙 없이도, 아래 기호가 포함된 옵션명은 자동으로 단품 분할됩니다.</span>
+                                </div>
+                                <div class="d-flex align-items-center gap-2 flex-wrap mb-2" id="delimitersContainer">
+                                    <span class="text-muted small">기호 목록 로딩 중...</span>
+                                </div>
+                                <div class="d-flex align-items-center gap-2">
+                                    <div class="input-group input-group-sm" style="max-width: 260px;">
+                                        <input type="text" id="newDelimiterInput" class="form-control" placeholder="기호 입력 (예: -, ~, *, |)" maxlength="10" onkeyup="if(event.key==='Enter') addDelimiterSymbol()">
+                                        <button class="btn btn-outline-primary" type="button" onclick="addDelimiterSymbol()">
+                                            <i class="fa-solid fa-plus me-1"></i> 기호 추가
+                                        </button>
+                                    </div>
+                                    <small class="text-muted" style="font-size: 11px;">예: <code>-</code> 등록 시 <code>LIGHT - PEARL</code> 자동 분할</small>
+                                </div>
                             </div>
                             <div class="table-responsive">
                                 <table class="table table-hover table-custom align-middle mb-0">
@@ -3287,6 +3305,7 @@
     // 6. 설정 & 번들 규칙
     // ==========================================
     async function loadSettingsAndBundles() {
+        loadDelimiters();
         try {
             const sRes = await fetch('/api/settings');
             const s = await sRes.json();
@@ -3378,6 +3397,80 @@
         if (!confirm('삭제하시겠습니까?')) return;
         await fetch(`/api/bundles/${id}`, { method: 'DELETE' });
         loadSettingsAndBundles();
+    }
+
+    // ==========================================
+    // 옵션 자동 분할 구분 기호 리스트 관리
+    // ==========================================
+    async function loadDelimiters() {
+        try {
+            const res = await fetch('/api/delimiters');
+            const data = await res.json();
+            const list = Array.isArray(data) ? data : (data.delimiters || []);
+            const container = document.getElementById('delimitersContainer');
+            if (!container) return;
+            if (!list || list.length === 0) {
+                container.innerHTML = '<span class="text-muted small">등록된 구분 기호가 없습니다. 기호를 추가해보세요.</span>';
+                return;
+            }
+            container.innerHTML = list.map(sym => {
+                const encoded = encodeURIComponent(sym);
+                return `
+                    <span class="badge bg-white text-dark border px-2 py-1 fs-6 d-inline-flex align-items-center gap-2 shadow-sm">
+                        <code class="fw-bold fs-6 text-primary">${escapeHtml(sym)}</code>
+                        <button type="button" class="btn-close btn-close-dark" style="font-size: 0.65rem;" onclick="deleteDelimiterSymbol(decodeURIComponent('${encoded}'))" title="삭제"></button>
+                    </span>
+                `;
+            }).join('');
+        } catch (e) {
+            console.error('loadDelimiters error:', e);
+        }
+    }
+
+    async function addDelimiterSymbol() {
+        const input = document.getElementById('newDelimiterInput');
+        if (!input) return;
+        const symbol = input.value.trim();
+        if (!symbol) {
+            alert('추가할 구분 기호를 입력하세요.');
+            input.focus();
+            return;
+        }
+        try {
+            const res = await fetch('/api/delimiters', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                input.value = '';
+                loadDelimiters();
+            } else {
+                alert('기호 추가 실패: ' + (data.message || '알 수 없는 오류'));
+            }
+        } catch (e) {
+            alert('요청 중 오류가 발생했습니다: ' + e);
+        }
+    }
+
+    async function deleteDelimiterSymbol(symbol) {
+        if (!confirm(`'${symbol}' 구분 기호를 삭제하시겠습니까?`)) return;
+        try {
+            const res = await fetch('/api/delimiters/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                loadDelimiters();
+            } else {
+                alert('기호 삭제 실패: ' + (data.message || '알 수 없는 오류'));
+            }
+        } catch (e) {
+            alert('요청 중 오류가 발생했습니다: ' + e);
+        }
     }
 
     // 스크롤 감지하여 맨 위로 가기 버튼 토글

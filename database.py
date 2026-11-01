@@ -328,6 +328,24 @@ def init_db():
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', ('나르다', 'TOA', '5a65132fee9b4780c350b1942db432afd3232b30', 'calroid', 'TOA', '02-1234-5678', '서울특별시 강남구 테헤란로 123 물류센터', 1))
 
+    # 7. 옵션 자동 분할 구분 기호 설정 (Split Delimiters)
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS split_delimiters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT UNIQUE NOT NULL
+    )
+    ''')
+    try:
+        cur.execute('SELECT COUNT(*) as cnt FROM split_delimiters')
+        if cur.fetchone()['cnt'] == 0:
+            for s in ['+', '-', '/', ',', '?', '&']:
+                try:
+                    cur.execute('INSERT INTO split_delimiters (symbol) VALUES (?)', (s,))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
     print("Database initialized successfully at", DB_PATH)

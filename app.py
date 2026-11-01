@@ -1408,6 +1408,60 @@ def delete_bundle(rule_id):
     conn.close()
     return jsonify({'status': 'success'})
 
+# ----------------- 6-2. 옵션 자동 분할 구분 기호 API -----------------
+@app.route('/api/delimiters', methods=['GET'])
+def get_delimiters():
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
+        if not delimiters:
+            delimiters = ['+', '-', '/', ',', '?', '&']
+        return jsonify({'status': 'success', 'delimiters': delimiters})
+    except Exception as e:
+        return jsonify({'status': 'error', 'delimiters': ['+', '-', '/', ',', '?', '&'], 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/delimiters', methods=['POST'])
+def add_delimiter():
+    data = request.get_json() or {}
+    symbol = str(data.get('symbol', '')).strip()
+    if not symbol:
+        return jsonify({'status': 'error', 'message': '기호를 입력해주세요.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('INSERT INTO split_delimiters (symbol) VALUES (?) ON CONFLICT DO NOTHING', (symbol,))
+        conn.commit()
+        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
+        return jsonify({'status': 'success', 'message': f"'{symbol}' 기호가 추가되었습니다.", 'delimiters': delimiters})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/delimiters/delete', methods=['POST'])
+def delete_delimiter():
+    data = request.get_json() or {}
+    symbol = str(data.get('symbol', '')).strip()
+    if not symbol:
+        return jsonify({'status': 'error', 'message': '삭제할 기호를 지정해주세요.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('DELETE FROM split_delimiters WHERE symbol = ?', (symbol,))
+        conn.commit()
+        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
+        return jsonify({'status': 'success', 'message': f"'{symbol}' 기호가 삭제되었습니다.", 'delimiters': delimiters})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
 # ----------------- 7. 택배사 & 발송자 설정 API -----------------
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
