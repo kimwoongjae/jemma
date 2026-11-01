@@ -414,11 +414,12 @@ if sys.platform.startswith('win'):
         pass
 
 if __name__ == '__main__':
-    PORT = 5050
+    PORT = int(os.environ.get('PORT', 5050))
     print("=" * 60)
     print(f"[SERVER] Smart OMS / WMS System Running on port {PORT}...")
     print(f"[URL] Open your browser at: http://127.0.0.1:{PORT}")
     print("=" * 60)
     app.run(host='0.0.0.0', port=PORT, debug=False)
+
 
 
