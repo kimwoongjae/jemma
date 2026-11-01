@@ -348,7 +348,7 @@ def save_orders_to_db(parsed_data, batch_name):
             ord_data['original_product_name'], ord_data['original_option_name'], ord_data['original_quantity'],
             ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
             ord_data['customs_id'], ord_data['postal_code'], ord_data['address'], ord_data['shipping_memo'],
-            '출고대기', batch_name
+            '주문접수', batch_name
         ))
         order_id = cur.lastrowid
         saved_count += 1

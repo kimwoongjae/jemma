@@ -136,6 +136,9 @@ def init_db():
     if 'invoice_pdf_url' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN invoice_pdf_url TEXT DEFAULT ''")
 
+    # 기존 출고대기 상태 주문접수로 통일 정규화
+    cur.execute("UPDATE orders SET status = '주문접수' WHERE status = '출고대기'")
+
 
     # 4. 분할된 출고 아이템 (Order Items)
     cur.execute('''
