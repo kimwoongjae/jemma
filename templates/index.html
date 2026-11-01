@@ -380,9 +380,9 @@
                                     <th>바코드 (SKU)</th>
                                     <th class="text-center" style="width: 75px;">옵션 수량</th>
                                     <th class="text-center" style="width: 75px;">구매 수량</th>
-                                    <th>택배사 / 송장번호</th>
+                                    <th class="text-center text-primary" style="width: 85px; background-color: #eef6fc;">출고 수량</th>
                                     <th class="text-center" style="width: 95px;">출고여부</th>
-                                    <th class="text-center" style="width: 65px;">관리</th>
+                                    <th class="text-center" style="width: 70px;">관리</th>
                                 </tr>
                             </thead>
                             <tbody id="ordersTableBody">
@@ -1660,6 +1660,7 @@
                 const combinedName = optName ? `${it.item_product_name} ${optName}` : it.item_product_name;
                 const optQty = it.option_quantity || 1;
                 const buyQty = it.quantity || o.original_quantity || 1;
+                const dispatchQty = optQty * buyQty;
 
                 rowHtml += `
                     <td>
@@ -1670,23 +1671,26 @@
                         <code class="fw-bold text-dark">${it.sku || '-'}</code>
                     </td>
                     <td class="text-center fw-bold text-secondary">${optQty}개</td>
-                    <td class="text-center fs-6 fw-bold text-primary">${buyQty}개</td>
+                    <td class="text-center fw-bold text-dark">${buyQty}개</td>
+                    <td class="text-center fw-bold text-primary" style="background-color: #f3f8fd;">
+                        <span class="badge bg-primary fs-6 px-2 py-1">${dispatchQty}개</span>
+                    </td>
                 `;
 
                 if (idx === 0) {
                     rowHtml += `
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div>${courierBadge}</div>
-                            ${o.tracking_no ? `
-                                <div><code class="text-primary fw-bold">${o.tracking_no}</code></div>
-                                ${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}
-                            ` : '<span class="text-muted small">미발급</span>'}
-                        </td>
                         <td rowspan="${rowCount}" class="text-center bg-white">${dispatchBadge}</td>
                         <td rowspan="${rowCount}" class="text-center bg-white">
-                            <button class="btn btn-sm btn-outline-primary py-1 px-2" onclick="openEditOrderModal(${o.id})" title="주문 및 수취인 정보 수정">
-                                <i class="fa-solid fa-pen-to-square"></i>
-                            </button>
+                            <div class="d-flex flex-column gap-1 align-items-center">
+                                <button class="btn btn-sm btn-outline-primary py-1 px-2" onclick="openEditOrderModal(${o.id})" title="주문 및 수취인 정보 수정">
+                                    <i class="fa-solid fa-pen-to-square"></i>
+                                </button>
+                                ${o.invoice_pdf_url ? `
+                                    <a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-1" style="font-size: 10px;" title="나르다 송장 라벨 PDF 보기">
+                                        <i class="fa-solid fa-file-pdf"></i> PDF
+                                    </a>
+                                ` : ''}
+                            </div>
                         </td>
                     `;
                 }
@@ -2933,6 +2937,23 @@
     async function openPrintModalForSelected() {
         const ids = getSelectedOrderIds();
         if (ids.length === 0) { alert('송장 라벨을 출력할 주문을 선택하세요.'); return; }
+
+        // 선택한 주문 중 나르다 송장 라벨 PDF가 발급된 주문 확인
+        const allOrders = [...(ordersList || []), ...(dispatchedOrdersList || [])];
+        const nardaOrders = allOrders.filter(o => ids.includes(o.id) && o.invoice_pdf_url);
+
+        if (nardaOrders.length > 0) {
+            const printMerged = confirm(
+                `선택한 ${ids.length}건 중 ${nardaOrders.length}건에 [나르다 공식 송장 라벨]이 발급되어 있습니다.\n\n` +
+                `[확인]을 누르면 모든 송장이 1개의 통합 PDF로 합쳐져 한 번에 연속 출력됩니다!\n\n` +
+                `(취소를 누르면 시스템 내 표준 라벨 인쇄 센터로 이동합니다)`
+            );
+            if (printMerged) {
+                window.open(`/api/shipping/narda-pdf-bundle?order_ids=${nardaOrders.map(o => o.id).join(',')}`, '_blank');
+                return;
+            }
+        }
+
         const tabEl = document.querySelector('#tab-labels');
         new bootstrap.Tab(tabEl).show();
         loadShippingLabels(ids);
@@ -3119,7 +3140,24 @@
         await fetch(`/api/bundles/${id}`, { method: 'DELETE' });
         loadSettingsAndBundles();
     }
+
+    // 스크롤 감지하여 맨 위로 가기 버튼 토글
+    window.addEventListener('scroll', () => {
+        const btn = document.getElementById('btnScrollToTop');
+        if (btn) {
+            if (window.scrollY > 250) {
+                btn.style.display = 'flex';
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+    });
 </script>
+
+<!-- 플로팅 맨 위로 가기 버튼 -->
+<button id="btnScrollToTop" class="btn btn-primary rounded-circle shadow-lg" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" title="페이지 맨 위로 이동" style="position: fixed; bottom: 30px; right: 30px; width: 48px; height: 48px; z-index: 1050; display: none; align-items: center; justify-content: center; cursor: pointer; border: 2px solid #ffffff;">
+    <i class="fa-solid fa-arrow-up fs-5"></i>
+</button>
 
 </body>
 </html>

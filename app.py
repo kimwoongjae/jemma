@@ -641,6 +641,57 @@ def api_shipping_labels():
     conn.close()
     return jsonify(orders)
 
+@app.route('/api/shipping/narda-pdf-bundle', methods=['GET'])
+def api_narda_pdf_bundle():
+    order_ids_str = request.args.get('order_ids', '')
+    if not order_ids_str:
+        return "출력할 주문이 지정되지 않았습니다.", 400
+
+    order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
+    if not order_ids:
+        return "유효한 주문 ID가 없습니다.", 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholders = ','.join(['?'] * len(order_ids))
+    cur.execute(f"SELECT id, order_no, invoice_pdf_url FROM orders WHERE id IN ({placeholders}) AND invoice_pdf_url != ''", order_ids)
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        return "선택한 주문에 발급된 나르다 송장 PDF가 없습니다. 먼저 송장을 발급해주세요.", 404
+
+    from pypdf import PdfWriter
+    import io
+
+    writer = PdfWriter()
+    merged_count = 0
+
+    for r in rows:
+        pdf_url = r['invoice_pdf_url']
+        try:
+            resp = requests.get(pdf_url, timeout=15)
+            if resp.status_code == 200 and resp.content:
+                pdf_stream = io.BytesIO(resp.content)
+                writer.append(pdf_stream)
+                merged_count += 1
+        except Exception as e:
+            print(f"PDF 다운로드 실패 ({r['order_no']}, {pdf_url}): {e}")
+
+    if merged_count == 0:
+        return "PDF 파일을 다운로드하여 병합하지 못했습니다.", 500
+
+    output_stream = io.BytesIO()
+    writer.write(output_stream)
+    output_stream.seek(0)
+
+    return send_file(
+        output_stream,
+        mimetype='application/pdf',
+        as_attachment=False,
+        download_name=f'NARDA_통합송장_{merged_count}건.pdf'
+    )
+
 # ----------------- 5. 재고 관리 (WMS) 및 입고 API -----------------
 @app.route('/api/inventory', methods=['GET'])
 def get_inventory():
