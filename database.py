@@ -5,9 +5,11 @@ from datetime import datetime
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orders.db')
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=20.0)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
     return conn
+
 
 def init_db():
     conn = get_connection()
@@ -19,7 +21,10 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sku TEXT UNIQUE,
         product_name TEXT NOT NULL,
-        option_name TEXT NOT NULL,
+        option_name TEXT DEFAULT '',
+        english_name TEXT DEFAULT '',
+        hs_code TEXT DEFAULT '',
+        unit_price REAL DEFAULT 0.0,
         stock_quantity INTEGER DEFAULT 0,
         safety_stock INTEGER DEFAULT 10,
         location TEXT DEFAULT 'A-01',
@@ -27,6 +32,17 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+
+    # 기존 테이블 컬럼 마이그레이션 (english_name, hs_code, unit_price 추가)
+    cur.execute("PRAGMA table_info(products)")
+    existing_cols = [row[1] for row in cur.fetchall()]
+    if 'english_name' not in existing_cols:
+        cur.execute("ALTER TABLE products ADD COLUMN english_name TEXT DEFAULT ''")
+    if 'hs_code' not in existing_cols:
+        cur.execute("ALTER TABLE products ADD COLUMN hs_code TEXT DEFAULT ''")
+    if 'unit_price' not in existing_cols:
+        cur.execute("ALTER TABLE products ADD COLUMN unit_price REAL DEFAULT 0.0")
+
 
     # 2. 세트/옵션 분할 규칙 (Bundle Rules)
     cur.execute('''

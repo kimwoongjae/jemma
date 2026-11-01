@@ -1,6 +1,8 @@
 import os
 import json
+from datetime import datetime
 from flask import Flask, request, jsonify, render_template, send_file
+
 from werkzeug.utils import secure_filename
 
 from database import init_db, get_connection
@@ -247,112 +249,353 @@ def api_shipping_labels():
     conn.close()
     return jsonify(orders)
 
-# ----------------- 5. 재고 관리 (WMS) API -----------------
+# ----------------- 5. 재고 관리 (WMS) 및 입고 API -----------------
 @app.route('/api/inventory', methods=['GET'])
 def get_inventory():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM products ORDER BY stock_quantity ASC, product_name ASC')
+    cur.execute('SELECT * FROM products ORDER BY id DESC')
     products = [dict(p) for p in cur.fetchall()]
     conn.close()
     return jsonify(products)
 
-@app.route('/api/inventory/stock-in', methods=['POST'])
-def stock_in():
-    data = request.get_json() or {}
-    product_id = data.get('product_id')
-    qty = int(data.get('quantity', 0))
-    memo = data.get('memo', '일반 입고')
-
-    if not product_id or qty <= 0:
-        return jsonify({'error': '유효한 상품 및 입고 수량을 입력하세요.'}), 400
+@app.route('/api/inventory/search', methods=['GET'])
+def search_product_by_barcode():
+    barcode = request.args.get('barcode', '').strip()
+    if not barcode:
+        return jsonify({'found': False, 'message': '바코드를 입력하세요.'})
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM products WHERE id = ?', (product_id,))
+    cur.execute('SELECT * FROM products WHERE sku = ? LIMIT 1', (barcode,))
     prod = cur.fetchone()
-    if not prod:
-        conn.close()
-        return jsonify({'error': '상품을 찾을 수 없습니다.'}), 404
-
-    new_stock = prod['stock_quantity'] + qty
-    cur.execute('UPDATE products SET stock_quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (new_stock, product_id))
-    cur.execute('''
-        INSERT INTO inventory_logs (product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (prod['id'], prod['sku'], prod['product_name'], prod['option_name'], '입고', qty, new_stock, memo))
-
-    conn.commit()
     conn.close()
-    return jsonify({'status': 'success', 'new_stock': new_stock})
 
-@app.route('/api/inventory/adjust', methods=['POST'])
-def stock_adjust():
+    if prod:
+        return jsonify({'found': True, 'product': dict(prod)})
+    else:
+        return jsonify({'found': False, 'message': '신규 상품입니다 (미등록 바코드)'})
+
+@app.route('/api/inventory/barcode-stock-in', methods=['POST'])
+def barcode_stock_in():
     data = request.get_json() or {}
-    product_id = data.get('product_id')
-    new_stock = int(data.get('new_stock', 0))
-    memo = data.get('memo', '실사 재고 조정')
+    sku = data.get('sku', '').strip()
+    product_name = data.get('product_name', '').strip()
+    english_name = data.get('english_name', '').strip()
+    hs_code = data.get('hs_code', '').strip()
+    unit_price = float(data.get('unit_price', 0.0) or 0.0)
+    qty = int(data.get('quantity', 0) or 0)
+    memo = data.get('memo', '바코드 개별 입고')
+
+    if not sku:
+        return jsonify({'error': '바코드(SKU)는 필수입니다.'}), 400
+    if qty <= 0:
+        return jsonify({'error': '입고 수량은 1개 이상이어야 합니다.'}), 400
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM products WHERE id = ?', (product_id,))
+    cur.execute('SELECT * FROM products WHERE sku = ?', (sku,))
     prod = cur.fetchone()
-    if not prod:
-        conn.close()
-        return jsonify({'error': '상품을 찾을 수 없습니다.'}), 404
 
-    diff = new_stock - prod['stock_quantity']
-    cur.execute('UPDATE products SET stock_quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', (new_stock, product_id))
+    if prod:
+        new_stock = prod['stock_quantity'] + qty
+        cur.execute('''
+            UPDATE products
+            SET stock_quantity = ?, 
+                product_name = CASE WHEN ? != '' THEN ? ELSE product_name END,
+                english_name = CASE WHEN ? != '' THEN ? ELSE english_name END,
+                hs_code = CASE WHEN ? != '' THEN ? ELSE hs_code END,
+                unit_price = CASE WHEN ? > 0 THEN ? ELSE unit_price END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ''', (new_stock, product_name, product_name, english_name, english_name, hs_code, hs_code, unit_price, unit_price, prod['id']))
+        prod_id = prod['id']
+        p_name = product_name or prod['product_name']
+    else:
+        if not product_name:
+            product_name = f"상품_{sku}"
+        new_stock = qty
+        cur.execute('''
+            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (sku, product_name, '', english_name, hs_code, unit_price, new_stock))
+        prod_id = cur.lastrowid
+        p_name = product_name
+
+
+    # 입고 이력 로그
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     cur.execute('''
-        INSERT INTO inventory_logs (product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (prod['id'], prod['sku'], prod['product_name'], prod['option_name'], '재고조정', diff, new_stock, memo))
+        INSERT INTO inventory_logs (product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (prod_id, sku, p_name, '', '입고', qty, new_stock, memo, now_str))
 
     conn.commit()
     conn.close()
-    return jsonify({'status': 'success', 'new_stock': new_stock})
+    return jsonify({'status': 'success', 'new_stock': new_stock, 'product_name': p_name})
+
+@app.route('/api/inventory/batch-stock-in', methods=['POST'])
+def batch_stock_in():
+    data = request.get_json() or {}
+    items = data.get('items', [])
+    if not items:
+        return jsonify({'error': '입고할 품목 목록이 비어있습니다.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    success_count = 0
+    total_qty = 0
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    for it in items:
+        sku = str(it.get('sku', '')).strip()
+        qty = int(it.get('quantity', 0) or 0)
+        p_name = str(it.get('product_name', '')).strip()
+        unit_price = float(it.get('unit_price', 0.0) or 0.0)
+
+        if not sku or qty <= 0:
+            continue
+
+        cur.execute('SELECT * FROM products WHERE sku = ?', (sku,))
+        prod = cur.fetchone()
+
+        if prod:
+            new_stock = prod['stock_quantity'] + qty
+            cur.execute('''
+                UPDATE products
+                SET stock_quantity = ?,
+                    product_name = CASE WHEN ? != '' THEN ? ELSE product_name END,
+                    unit_price = CASE WHEN ? > 0 THEN ? ELSE unit_price END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (new_stock, p_name, p_name, unit_price, unit_price, prod['id']))
+            prod_id = prod['id']
+            actual_name = p_name or prod['product_name']
+        else:
+            actual_name = p_name or f"상품_{sku}"
+            new_stock = qty
+            cur.execute('''
+                INSERT INTO products (sku, product_name, option_name, unit_price, stock_quantity)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (sku, actual_name, '', unit_price, new_stock))
+            prod_id = cur.lastrowid
+
+
+        cur.execute('''
+            INSERT INTO inventory_logs (product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (prod_id, sku, actual_name, '', '입고', qty, new_stock, '일괄 바코드 스캔 입고', now_str))
+
+        success_count += 1
+        total_qty += qty
+
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success', 'processed_items': success_count, 'total_quantity': total_qty})
+
+@app.route('/api/inventory/upload-excel', methods=['POST'])
+def upload_products_excel():
+    if 'file' not in request.files:
+        return jsonify({'error': '업로드할 엑셀 파일이 없습니다.'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': '선택된 파일명이 없습니다.'}), 400
+
+    try:
+        import pandas as pd
+        df = pd.read_excel(file)
+        
+        # 컬럼 매핑 탐색
+        col_map = {}
+        for c in df.columns:
+            cs = str(c).strip().lower()
+            if '바코드' in cs or 'sku' in cs: col_map['sku'] = c
+            elif '상품명' in cs or '품목명' in cs: col_map['product_name'] = c
+            elif '영문' in cs: col_map['english_name'] = c
+            elif 'hs' in cs: col_map['hs_code'] = c
+            elif '단가' in cs or 'price' in cs: col_map['unit_price'] = c
+            elif '재고' in cs or '수량' in cs: col_map['stock_quantity'] = c
+
+        if 'sku' not in col_map and 'product_name' not in col_map:
+            return jsonify({'error': '엑셀에 [바코드(SKU)] 또는 [상품명] 컬럼이 필요합니다.'}), 400
+
+        conn = get_connection()
+        cur = conn.cursor()
+        saved_count = 0
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+        for _, row in df.iterrows():
+            sku = str(row.get(col_map.get('sku', ''), '')).strip()
+            name = str(row.get(col_map.get('product_name', ''), '')).strip()
+            eng = str(row.get(col_map.get('english_name', ''), '')).strip()
+            hs = str(row.get(col_map.get('hs_code', ''), '')).strip()
+            
+            try:
+                price = float(row.get(col_map.get('unit_price', ''), 0.0) or 0.0)
+            except:
+                price = 0.0
+            try:
+                stock = int(float(row.get(col_map.get('stock_quantity', ''), 0) or 0))
+            except:
+                stock = 0
+
+            if not sku and not name:
+                continue
+            if not sku:
+                sku = f"SKU-{abs(hash(name)) % 1000000:06d}"
+
+            cur.execute('SELECT * FROM products WHERE sku = ?', (sku,))
+            existing = cur.fetchone()
+
+            if existing:
+                cur.execute('''
+                    UPDATE products
+                    SET product_name = CASE WHEN ? != '' THEN ? ELSE product_name END,
+                        english_name = CASE WHEN ? != '' THEN ? ELSE english_name END,
+                        hs_code = CASE WHEN ? != '' THEN ? ELSE hs_code END,
+                        unit_price = ?,
+                        stock_quantity = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (name, name, eng, eng, hs, hs, price, stock, existing['id']))
+            else:
+                cur.execute('''
+                    INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (sku, name or sku, '', eng, hs, price, stock))
+                prod_id = cur.lastrowid
+
+                cur.execute('''
+                    INSERT INTO inventory_logs (product_id, sku, product_name, change_type, change_qty, resulting_stock, memo, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (prod_id, sku, name or sku, '엑셀등록', stock, stock, '엑셀 상품 일괄 등록', now_str))
+
+            saved_count += 1
+
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'success', 'message': f"{saved_count}개 상품이 엑셀에서 성공적으로 등록/반영되었습니다."})
+    except Exception as e:
+        return jsonify({'error': f'엑셀 처리 중 오류: {str(e)}'}), 500
 
 @app.route('/api/inventory/product', methods=['POST'])
 def save_product():
     data = request.get_json() or {}
     sku = data.get('sku', '').strip()
     product_name = data.get('product_name', '').strip()
-    option_name = data.get('option_name', '').strip()
-    stock_quantity = int(data.get('stock_quantity', 0))
-    safety_stock = int(data.get('safety_stock', 10))
-    location = data.get('location', 'A-01').strip()
+    english_name = data.get('english_name', '').strip()
+    hs_code = data.get('hs_code', '').strip()
+    unit_price = float(data.get('unit_price', 0.0) or 0.0)
+    stock_quantity = int(data.get('stock_quantity', 0) or 0)
     prod_id = data.get('id')
 
     if not sku or not product_name:
-        return jsonify({'error': 'SKU와 상품명은 필수입니다.'}), 400
+        return jsonify({'error': 'SKU(바코드)와 상품명은 필수입니다.'}), 400
 
     conn = get_connection()
     cur = conn.cursor()
     if prod_id:
         cur.execute('''
             UPDATE products
-            SET sku = ?, product_name = ?, option_name = ?, stock_quantity = ?, safety_stock = ?, location = ?, updated_at = CURRENT_TIMESTAMP
+            SET sku = ?, product_name = ?, english_name = ?, hs_code = ?, unit_price = ?, stock_quantity = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        ''', (sku, product_name, option_name, stock_quantity, safety_stock, location, prod_id))
+        ''', (sku, product_name, english_name, hs_code, unit_price, stock_quantity, prod_id))
     else:
         cur.execute('''
-            INSERT INTO products (sku, product_name, option_name, stock_quantity, safety_stock, location)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (sku, product_name, option_name, stock_quantity, safety_stock, location))
+            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (sku, product_name, '', english_name, hs_code, unit_price, stock_quantity))
 
+
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success'})
+
+@app.route('/api/inventory/product/<int:prod_id>', methods=['DELETE'])
+def delete_product(prod_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM products WHERE id = ?', (prod_id,))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
 
 @app.route('/api/inventory/logs', methods=['GET'])
 def get_inventory_logs():
-    limit = int(request.args.get('limit', 100))
+    limit = int(request.args.get('limit', 200))
+    search = request.args.get('search', '').strip()
+    change_type = request.args.get('type', '').strip()
+
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM inventory_logs ORDER BY id DESC LIMIT ?', (limit,))
+    query = 'SELECT * FROM inventory_logs WHERE 1=1'
+    params = []
+
+    if change_type and change_type != '전체':
+        query += ' AND change_type = ?'
+        params.append(change_type)
+
+    if search:
+        query += ' AND (sku LIKE ? OR product_name LIKE ? OR memo LIKE ?)'
+        wild = f'%{search}%'
+        params.extend([wild, wild, wild])
+
+    query += ' ORDER BY id DESC LIMIT ?'
+    params.append(limit)
+
+    cur.execute(query, params)
     logs = [dict(l) for l in cur.fetchall()]
     conn.close()
     return jsonify(logs)
+
+@app.route('/api/inventory/export-logs', methods=['GET'])
+def export_inventory_logs():
+    ids_str = request.args.get('ids', '').strip()
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if ids_str:
+        ids = [int(x) for x in ids_str.split(',') if x.strip().isdigit()]
+        placeholders = ','.join(['?'] * len(ids))
+        cur.execute(f'SELECT * FROM inventory_logs WHERE id IN ({placeholders}) ORDER BY id DESC', ids)
+    else:
+        cur.execute('SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 1000')
+
+    logs = cur.fetchall()
+    conn.close()
+
+    import openpyxl
+    from io import BytesIO
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "입출고내역"
+
+    headers = ["일시 (날짜)", "바코드 (SKU)", "상품명", "구분 (입고/출고)", "변동수량", "잔여재고", "참조/사유"]
+    ws.append(headers)
+
+    for l in logs:
+        # created_at 형식 정규화 (YYYY-MM-DD HH:MM)
+        date_str = str(l['created_at'])[:16]
+        ws.append([
+            date_str,
+            l['sku'],
+            l['product_name'],
+            l['change_type'],
+            l['change_qty'],
+            l['resulting_stock'],
+            l['memo'] or ''
+        ])
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='입출고내역리스트.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
 
 # ----------------- 6. 세트상품/옵션 분할 규칙 API -----------------
 @app.route('/api/bundles', methods=['GET'])

@@ -32,10 +32,11 @@ venv.bak/
 .env.local
 
 # Databases & User Data (개인정보 보호)
-*.db
+*.db*
 *.sqlite3
-orders.db
+orders.db*
 uploads/
+
 
 # Private Excel Files with Customer PII (실제 고객 개인정보 보호)
 *.xlsx
