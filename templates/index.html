@@ -879,7 +879,7 @@
                                 <button class="btn btn-danger" id="btnNardaPdfBundle" onclick="openCurrentBatchNardaPdf()" style="display: none;">
                                     <i class="fa-solid fa-file-pdf me-1"></i> 나르다 공식 PDF 통합 출력
                                 </button>
-                                <button class="btn btn-primary" onclick="window.print()">
+                                <button class="btn btn-primary" onclick="printCurrentLabels()">
                                     <i class="fa-solid fa-print me-1"></i> 라벨 바로 인쇄 (Ctrl+P)
                                 </button>
                             </div>
@@ -888,6 +888,28 @@
 
                     <!-- 인쇄 영역 -->
                     <div id="printArea" class="py-2">
+                        <!-- 나르다 공식 정품 PDF 송장 라벨 뷰어 -->
+                        <div id="nardaPdfViewerContainer" style="display: none;" class="mb-4">
+                            <div class="card border-0 shadow-sm">
+                                <div class="card-header bg-danger text-white py-2 d-flex justify-content-between align-items-center">
+                                    <div class="fw-bold">
+                                        <i class="fa-solid fa-plane-departure me-2"></i>나르다(NARDA AIR) 공식 정품 송장 라벨
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button class="btn btn-light btn-sm fw-bold text-danger" onclick="openCurrentBatchNardaPdf()">
+                                            <i class="fa-solid fa-arrow-up-right-from-square me-1"></i> 새 창에서 전체 열기 / 저장
+                                        </button>
+                                        <button class="btn btn-dark btn-sm fw-bold" onclick="printCurrentLabels()">
+                                            <i class="fa-solid fa-print me-1"></i> 바로 인쇄
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="card-body p-0 bg-secondary-subtle">
+                                    <iframe id="nardaPdfFrame" src="" style="width: 100%; height: 850px; border: none; display: block;"></iframe>
+                                </div>
+                            </div>
+                        </div>
+
                         <div id="labelsContainer" class="d-flex flex-column align-items-center">
                             <!-- 개별 송장 라벨들이 자바스크립트로 렌더링 됨 -->
                         </div>
@@ -3466,6 +3488,23 @@
         window.open(`/api/shipping/narda-pdf-bundle?order_ids=${currentBatchOrderIds.join(',')}`, '_blank');
     }
 
+    function printCurrentLabels() {
+        const frame = document.getElementById('nardaPdfFrame');
+        const pdfContainer = document.getElementById('nardaPdfViewerContainer');
+        if (pdfContainer && pdfContainer.style.display !== 'none' && frame && frame.contentWindow) {
+            try {
+                frame.contentWindow.focus();
+                frame.contentWindow.print();
+                return;
+            } catch (e) {
+                console.log('iframe direct print failed, opening popup', e);
+                openCurrentBatchNardaPdf();
+                return;
+            }
+        }
+        window.print();
+    }
+
     async function loadShippingLabels(specifiedIds = null) {
         let ids = specifiedIds;
         if (!ids || ids.length === 0) {
@@ -3473,6 +3512,10 @@
         }
 
         const container = document.getElementById('labelsContainer');
+        const pdfContainer = document.getElementById('nardaPdfViewerContainer');
+        const pdfFrame = document.getElementById('nardaPdfFrame');
+        const btnPdf = document.getElementById('btnNardaPdfBundle');
+
         if (!container) return;
         container.innerHTML = '<div class="p-4 text-center text-muted"><span class="spinner-border spinner-border-sm me-2"></span>송장 라벨 불러오는 중...</div>';
 
@@ -3483,8 +3526,42 @@
 
             container.innerHTML = '';
             if (!labels || labels.length === 0) {
+                if (pdfContainer) pdfContainer.style.display = 'none';
+                if (btnPdf) btnPdf.style.display = 'none';
                 container.innerHTML = `<div class="p-5 text-center text-muted">선택되거나 출력 가능한 주문이 없습니다.</div>`;
                 return;
+            }
+
+            // 나르다 공식 정품 PDF가 발급된 주문들 확인
+            const hasPdfOrders = labels.filter(o => o.invoice_pdf_url && o.invoice_pdf_url.trim() !== '');
+            if (hasPdfOrders.length > 0) {
+                const pdfIds = hasPdfOrders.map(o => o.id);
+                currentBatchOrderIds = pdfIds;
+                const bundleUrl = `/api/shipping/narda-pdf-bundle?order_ids=${pdfIds.join(',')}`;
+
+                if (pdfFrame && pdfContainer) {
+                    pdfFrame.src = bundleUrl;
+                    pdfContainer.style.display = 'block';
+                }
+                if (btnPdf) {
+                    btnPdf.style.display = 'inline-block';
+                    btnPdf.innerHTML = `<i class="fa-solid fa-file-pdf me-1"></i> 나르다 공식 PDF 통합 출력 (${hasPdfOrders.length}건)`;
+                }
+
+                container.innerHTML = `
+                    <div class="card border-0 shadow-sm w-100 my-2">
+                        <div class="card-header bg-light py-2 d-flex justify-content-between align-items-center">
+                            <span class="small fw-bold text-dark"><i class="fa-solid fa-boxes-packing me-1"></i>출고 품목 및 주문 패킹 확인 목록 (${labels.length}건)</span>
+                            <span class="badge bg-success">나르다 공식 PDF 라벨 탑재 완료</span>
+                        </div>
+                    </div>
+                `;
+            } else {
+                if (pdfContainer) {
+                    pdfContainer.style.display = 'none';
+                    if (pdfFrame) pdfFrame.src = '';
+                }
+                if (btnPdf) btnPdf.style.display = 'none';
             }
 
             labels.forEach(o => {

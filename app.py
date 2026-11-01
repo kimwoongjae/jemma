@@ -823,18 +823,21 @@ def api_shipping_labels():
 
 @app.route('/api/shipping/narda-pdf-bundle', methods=['GET'])
 def api_narda_pdf_bundle():
-    order_ids_str = request.args.get('order_ids', '')
-    if not order_ids_str:
-        return "출력할 주문이 지정되지 않았습니다.", 400
-
-    order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
-    if not order_ids:
-        return "유효한 주문 ID가 없습니다.", 400
-
+    order_ids_str = request.args.get('order_ids', '').strip()
     conn = get_connection()
     cur = conn.cursor()
-    placeholders = ','.join(['?'] * len(order_ids))
-    cur.execute(f"SELECT id, order_no, invoice_pdf_url FROM orders WHERE id IN ({placeholders}) AND invoice_pdf_url != ''", order_ids)
+
+    if order_ids_str:
+        order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
+        if not order_ids:
+            conn.close()
+            return "유효한 주문 ID가 없습니다.", 400
+        placeholders = ','.join(['?'] * len(order_ids))
+        cur.execute(f"SELECT id, order_no, invoice_pdf_url FROM orders WHERE id IN ({placeholders}) AND invoice_pdf_url != ''", order_ids)
+    else:
+        # 지정되지 않은 경우 최근 발급된 나르다 PDF 송장 주문 최대 200건 조회
+        cur.execute("SELECT id, order_no, invoice_pdf_url FROM orders WHERE invoice_pdf_url != '' ORDER BY id DESC LIMIT 200")
+
     rows = cur.fetchall()
     conn.close()
 
@@ -843,20 +846,34 @@ def api_narda_pdf_bundle():
 
     from pypdf import PdfWriter
     import io
+    import concurrent.futures
+
+    def fetch_single_pdf(r):
+        url = r['invoice_pdf_url']
+        try:
+            resp = requests.get(url, timeout=15)
+            if resp.status_code == 200 and resp.content:
+                return (r['id'], resp.content)
+        except Exception as e:
+            print(f"PDF 다운로드 실패 ({r['order_no']}, {url}): {e}")
+        return (r['id'], None)
+
+    # 병렬 다운로드 (최대 20개 동시 요청으로 대량 주문도 1~2초 만에 초고속 병합)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        pdf_dict = dict(executor.map(fetch_single_pdf, rows))
 
     writer = PdfWriter()
     merged_count = 0
 
     for r in rows:
-        pdf_url = r['invoice_pdf_url']
-        try:
-            resp = requests.get(pdf_url, timeout=15)
-            if resp.status_code == 200 and resp.content:
-                pdf_stream = io.BytesIO(resp.content)
+        content = pdf_dict.get(r['id'])
+        if content:
+            try:
+                pdf_stream = io.BytesIO(content)
                 writer.append(pdf_stream)
                 merged_count += 1
-        except Exception as e:
-            print(f"PDF 다운로드 실패 ({r['order_no']}, {pdf_url}): {e}")
+            except Exception as pe:
+                print(f"PDF 파싱 실패 ({r['order_no']}): {pe}")
 
     if merged_count == 0:
         return "PDF 파일을 다운로드하여 병합하지 못했습니다.", 500

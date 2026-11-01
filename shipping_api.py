@@ -31,6 +31,12 @@ def call_narda_regist_order(ord_row, items, settings):
     나르다(NARDA JP) 주문 등록 및 송장 발급 API 호출
     http://api.narda-jp.com/api/registOrder
     """
+    # 테스트 주문 전송 원천 차단
+    order_no_check = str(ord_row.get('order_no') or '').strip().upper()
+    recipient_check = str(ord_row.get('recipient_name') or '').strip()
+    if order_no_check.startswith('TEST') or recipient_check in ('홍길동', '테스트'):
+        return {"success": False, "error": "테스트 데이터는 나르다 API로 전송되지 않습니다."}
+
     url = "http://api.narda-jp.com/api/registOrder"
 
     # 전화번호 하이픈 제거
@@ -140,6 +146,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
     is_mock = settings.get('is_mock', 0)
     updated_orders = []
     failed_orders = []
+    aggregated_deductions = {}
 
     # 전체 상품 마스터 캐시 (SKU 및 상품명 매칭용)
     cur.execute('SELECT id, sku, product_name, option_name, english_name, hs_code, unit_price, product_url, stock_quantity FROM products')
@@ -211,7 +218,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         ''', (tracking_no, target_courier, pdf_url, now_str, oid))
 
         # ==========================================
-        # 품목별 재고 자동 차감 및 입출고 내역 기록 (중복 차감 방지)
+        # 품목별 재고 차감 및 바코드별 집계 (중복 차감 방지)
         # ==========================================
         cur.execute('SELECT * FROM order_items WHERE order_id = ? AND stock_deducted = 0', (oid,))
         items_to_deduct = [dict(r) for r in cur.fetchall()]
@@ -233,16 +240,22 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                 cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, matched_prod['id']))
                 matched_prod['stock_quantity'] = new_stock
 
-                memo_text = f"나르다 송장: {tracking_no} / 수취인: {ord_dict['recipient_name']}"
-                cur.execute('''
-                    INSERT INTO inventory_logs (
-                        product_id, sku, product_name, option_name,
-                        change_type, change_qty, resulting_stock, reference_no, memo
-                    ) VALUES (?, ?, ?, ?, '주문출고', ?, ?, ?, ?)
-                ''', (
-                    matched_prod['id'], matched_prod['sku'], matched_prod['product_name'], matched_prod['option_name'],
-                    -deduct_qty, new_stock, ord_dict['order_no'], memo_text
-                ))
+                # 바코드(SKU) 기준 일괄 집계 누적 (개별 주문마다 기록하지 않고 묶음당 1건만 기록)
+                sku_key = matched_prod['sku'] or str(matched_prod['id'])
+                if sku_key not in aggregated_deductions:
+                    aggregated_deductions[sku_key] = {
+                        'product_id': matched_prod['id'],
+                        'sku': matched_prod['sku'],
+                        'product_name': matched_prod['product_name'],
+                        'option_name': matched_prod.get('option_name') or '',
+                        'total_qty': 0,
+                        'final_stock': new_stock,
+                        'order_nos': set(),
+                        'courier': target_courier
+                    }
+                aggregated_deductions[sku_key]['total_qty'] += deduct_qty
+                aggregated_deductions[sku_key]['final_stock'] = new_stock
+                aggregated_deductions[sku_key]['order_nos'].add(ord_dict['order_no'])
 
             cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ?", (it['id'],))
 
@@ -254,6 +267,24 @@ def issue_tracking_numbers(order_ids, courier_name=None):
             'tracking_no': tracking_no,
             'invoice_pdf_url': pdf_url
         })
+
+    # ==========================================
+    # 바코드 기준으로 총수량 1건만 입출고 내역(inventory_logs)에 기입
+    # ==========================================
+    now_log_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    for agg in aggregated_deductions.values():
+        cnt = len(agg['order_nos'])
+        memo_text = f"총 {cnt}건 주문 일괄 출고 ({agg['courier']} 송장발급)"
+        ref_no = f"{cnt}건 일괄출고"
+        cur.execute('''
+            INSERT INTO inventory_logs (
+                product_id, sku, product_name, option_name,
+                change_type, change_qty, resulting_stock, reference_no, memo, created_at
+            ) VALUES (?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)
+        ''', (
+            agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
+            -agg['total_qty'], agg['final_stock'], ref_no, memo_text, now_log_str
+        ))
 
     conn.commit()
     conn.close()
@@ -267,12 +298,13 @@ def complete_dispatch(order_ids):
     발송 완료 처리:
     1. 주문 상태를 '출고완료'로 변경
     2. 연결된 order_items 품목들의 재고를 실제 차감 (stock_deducted = 1)
-    3. inventory_logs 에 '주문출고' 로그 기록
+    3. inventory_logs 에 바코드 기준 총수량 1건만 '주문출고' 로그 기록
     """
     conn = get_connection()
     cur = conn.cursor()
     dispatched_count = 0
     deducted_items = 0
+    aggregated_deductions = {}
 
     for oid in order_ids:
         cur.execute('SELECT * FROM orders WHERE id = ?', (oid,))
@@ -280,12 +312,10 @@ def complete_dispatch(order_ids):
         if not ord_row:
             continue
 
-        # 주문 상태 업데이트 및 발송일시 기록
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
         cur.execute("UPDATE orders SET status = '출고완료', dispatched_at = ? WHERE id = ?", (now_str, oid))
         dispatched_count += 1
 
-        # 품목별 재고 차감
         cur.execute('SELECT * FROM order_items WHERE order_id = ? AND stock_deducted = 0', (oid,))
         items = cur.fetchall()
 
@@ -293,20 +323,43 @@ def complete_dispatch(order_ids):
             cur.execute('SELECT * FROM products WHERE sku = ?', (it['sku'],))
             prod = cur.fetchone()
             if prod:
-                new_stock = prod['stock_quantity'] - it['quantity']
+                qty = it['quantity']
+                new_stock = prod['stock_quantity'] - qty
                 cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, prod['id']))
-                cur.execute('''
-                    INSERT INTO inventory_logs (
-                        product_id, sku, product_name, option_name,
-                        change_type, change_qty, resulting_stock, reference_no, memo
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    prod['id'], prod['sku'], prod['product_name'], prod['option_name'],
-                    '주문출고', -it['quantity'], new_stock, ord_row['order_no'], f"수취인: {ord_row['recipient_name']}"
-                ))
-            
+                
+                sku_key = prod['sku'] or str(prod['id'])
+                if sku_key not in aggregated_deductions:
+                    aggregated_deductions[sku_key] = {
+                        'product_id': prod['id'],
+                        'sku': prod['sku'],
+                        'product_name': prod['product_name'],
+                        'option_name': prod.get('option_name') or '',
+                        'total_qty': 0,
+                        'final_stock': new_stock,
+                        'order_nos': set()
+                    }
+                aggregated_deductions[sku_key]['total_qty'] += qty
+                aggregated_deductions[sku_key]['final_stock'] = new_stock
+                aggregated_deductions[sku_key]['order_nos'].add(ord_row['order_no'])
+
             cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ?", (it['id'],))
             deducted_items += 1
+
+    # 바코드 기준 1건만 기록
+    now_log_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    for agg in aggregated_deductions.values():
+        cnt = len(agg['order_nos'])
+        memo_text = f"총 {cnt}건 주문 일괄 출고"
+        ref_no = f"{cnt}건 일괄출고"
+        cur.execute('''
+            INSERT INTO inventory_logs (
+                product_id, sku, product_name, option_name,
+                change_type, change_qty, resulting_stock, reference_no, memo, created_at
+            ) VALUES (?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)
+        ''', (
+            agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
+            -agg['total_qty'], agg['final_stock'], ref_no, memo_text, now_log_str
+        ))
 
     conn.commit()
     conn.close()
