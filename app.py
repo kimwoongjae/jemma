@@ -59,23 +59,51 @@ def get_dashboard_stats():
 # ----------------- 2. 엑셀 업로드 및 주문 분할 -----------------
 @app.route('/api/upload/preview', methods=['POST'])
 def upload_preview():
-    if 'file' not in request.files:
-        return jsonify({'error': '업로드할 파일이 없습니다.'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': '선택된 파일명이 없습니다.'}), 400
+    # 단일 또는 복수 파일 지원 ('files' 또는 'file')
+    uploaded_files = request.files.getlist('files')
+    if not uploaded_files:
+        uploaded_files = request.files.getlist('file')
+    if not uploaded_files and 'file' in request.files:
+        uploaded_files = [request.files['file']]
 
-    filename = secure_filename(file.filename)
-    if not filename:
-        filename = f"order_{int(os.times()[4])}.xlsx"
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
+    # 빈 파일 제거
+    valid_files = [f for f in uploaded_files if f.filename != '']
+    if not valid_files:
+        return jsonify({'error': '업로드할 파일이 없습니다.'}), 400
+
+    merged_orders = []
+    total_excel_rows = 0
+    total_split_items = 0
+    batch_names = []
+    detected_cols = {}
 
     try:
-        preview_data = process_excel_file(filepath, batch_name=file.filename)
+        for idx, file in enumerate(valid_files):
+            filename = secure_filename(file.filename)
+            if not filename:
+                filename = f"order_{int(os.times()[4])}_{idx}.xlsx"
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(filepath)
+
+            parsed = process_excel_file(filepath, batch_name=file.filename)
+            total_excel_rows += parsed.get('total_excel_rows', 0)
+            total_split_items += parsed.get('total_split_items', 0)
+            batch_names.append(file.filename)
+            detected_cols.update(parsed.get('detected_columns', {}))
+            merged_orders.extend(parsed.get('orders', []))
+
+        preview_data = {
+            'batch_name': ', '.join(batch_names) if len(batch_names) <= 2 else f"{batch_names[0]} 외 {len(batch_names)-1}개 파일",
+            'total_files': len(valid_files),
+            'total_excel_rows': total_excel_rows,
+            'total_split_items': total_split_items,
+            'detected_columns': detected_cols,
+            'orders': merged_orders
+        }
         return jsonify(preview_data)
     except Exception as e:
         return jsonify({'error': f'엑셀 처리 중 오류: {str(e)}'}), 500
+
 
 @app.route('/api/upload/confirm', methods=['POST'])
 def upload_confirm():

@@ -276,10 +276,11 @@
                 <div class="card-body">
                     <div class="upload-dropzone" id="dropzone" onclick="document.getElementById('excelFileInput').click()">
                         <i class="fa-solid fa-cloud-arrow-up text-primary fs-1 mb-2"></i>
-                        <h5 class="fw-bold">발송 리스트 엑셀 파일을 여기에 끌어다 놓거나 클릭하여 선택하세요</h5>
-                        <p class="text-muted small mb-0">지원 형식: .xlsx, .xls | 세트 상품(`+` 기호)은 개별 품목으로 자동 분할 처리됩니다.</p>
-                        <input type="file" id="excelFileInput" accept=".xlsx, .xls" style="display:none;" onchange="handleExcelUpload(this)">
+                        <h5 class="fw-bold">발송 리스트 엑셀 파일을 여기에 끌어다 놓거나 클릭하여 선택하세요 (여러 파일 동시 선택 가능)</h5>
+                        <p class="text-muted small mb-0">지원 형식: .xlsx, .xls | Ctrl 또는 Shift 키로 여러 파일을 한 번에 묶어서 업로드할 수 있습니다.</p>
+                        <input type="file" id="excelFileInput" accept=".xlsx, .xls" multiple style="display:none;" onchange="handleExcelUpload(this)">
                     </div>
+
                 </div>
             </div>
 
@@ -796,20 +797,22 @@
         dropzone.addEventListener('drop', (e) => {
             const files = e.dataTransfer.files;
             if (files.length > 0) {
-                uploadExcelFile(files[0]);
+                uploadExcelFiles(files);
             }
         });
     }
 
     function handleExcelUpload(input) {
-        if (input.files.length > 0) {
-            uploadExcelFile(input.files[0]);
+        if (input.files && input.files.length > 0) {
+            uploadExcelFiles(input.files);
         }
     }
 
-    async function uploadExcelFile(file) {
+    async function uploadExcelFiles(files) {
         const formData = new FormData();
-        formData.append('file', file);
+        for (let i = 0; i < files.length; i++) {
+            formData.append('files', files[i]);
+        }
 
         try {
             const res = await fetch('/api/upload/preview', {
@@ -826,6 +829,7 @@
             document.getElementById('previewExcelRows').textContent = data.total_excel_rows;
             document.getElementById('previewSplitItems').textContent = data.total_split_items;
             document.getElementById('previewBatchName').textContent = data.batch_name;
+
 
             const tbody = document.getElementById('previewTableBody');
             tbody.innerHTML = '';
