@@ -1,19 +1,138 @@
-import sqlite3
 import os
+import re
+import sqlite3
 from datetime import datetime
+
+# Supabase PostgreSQL 연결 설정
+SUPABASE_CONFIG = {
+    "host": os.environ.get("PGHOST", "aws-0-ap-south-1.pooler.supabase.com"),
+    "port": int(os.environ.get("PGPORT", 5432)),
+    "user": os.environ.get("PGUSER", "postgres.qazeqzbajdlrddfvmtxy"),
+    "password": os.environ.get("PGPASSWORD", "-WHkmP9pnRbT+V%"),
+    "dbname": os.environ.get("PGDATABASE", "postgres"),
+    "sslmode": "require"
+}
+
+USE_POSTGRES = True
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    USE_POSTGRES = False
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orders.db')
 
+class PgCursorWrapper:
+    def __init__(self, raw_cursor):
+        self._cur = raw_cursor
+        self.lastrowid = None
+
+    def execute(self, sql, params=None):
+        clean_sql = sql.strip()
+
+        # 1. PRAGMA table_info(xxx) 변환
+        m = re.match(r"PRAGMA\s+table_info\((['\"]?(\w+)['\"]?)\)", clean_sql, re.IGNORECASE)
+        if m:
+            tbl_name = m.group(2).lower()
+            trans_sql = "SELECT column_name AS name FROM information_schema.columns WHERE table_name = %s ORDER BY ordinal_position"
+            self._cur.execute(trans_sql, (tbl_name,))
+            return self
+
+        # 2. ? -> %s 변환
+        trans_sql = clean_sql.replace('?', '%s')
+
+        # 3. INSERT 시 lastrowid 자동 지원을 위한 RETURNING id 처리
+        is_insert = trans_sql.upper().startswith('INSERT INTO')
+        has_returning = 'RETURNING' in trans_sql.upper()
+
+        if is_insert and not has_returning:
+            trans_sql_ret = trans_sql + ' RETURNING id'
+            try:
+                if params:
+                    self._cur.execute(trans_sql_ret, tuple(params))
+                else:
+                    self._cur.execute(trans_sql_ret)
+                ret_row = self._cur.fetchone()
+                if ret_row:
+                    self.lastrowid = ret_row['id'] if (isinstance(ret_row, dict) or hasattr(ret_row, '__getitem__')) else ret_row[0]
+                return self
+            except Exception:
+                pass
+
+        if params:
+            self._cur.execute(trans_sql, tuple(params))
+        else:
+            self._cur.execute(trans_sql)
+        return self
+
+    def executemany(self, sql, seq_of_params):
+        trans_sql = sql.replace('?', '%s')
+        self._cur.executemany(trans_sql, seq_of_params)
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def fetchmany(self, size=None):
+        return self._cur.fetchmany(size) if size else self._cur.fetchmany()
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    def close(self):
+        self._cur.close()
+
+class PgConnectionWrapper:
+    def __init__(self, pg_conn):
+        self._conn = pg_conn
+
+    def cursor(self):
+        return PgCursorWrapper(self._conn.cursor(cursor_factory=psycopg2.extras.DictCursor))
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
 def get_connection():
+    if USE_POSTGRES:
+        try:
+            db_url = os.environ.get('DATABASE_URL')
+            if db_url:
+                try:
+                    pg_conn = psycopg2.connect(db_url, sslmode='require')
+                    return PgConnectionWrapper(pg_conn)
+                except Exception:
+                    pass
+            # Default to Supabase kwargs
+            pg_conn = psycopg2.connect(**SUPABASE_CONFIG)
+            return PgConnectionWrapper(pg_conn)
+        except Exception as e:
+            print(f"[DB Warning] PostgreSQL connection failed ({e}), falling back to SQLite.")
+
+    # SQLite fallback
     conn = sqlite3.connect(DB_PATH, timeout=20.0)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA journal_mode=WAL')
     return conn
 
-
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
+
+    if isinstance(conn, PgConnectionWrapper):
+        conn.commit()
+        conn.close()
+        print("Connected to Supabase PostgreSQL cloud database successfully.")
+        return
 
     # 1. 상품 및 재고 마스터 (Products / SKU)
     cur.execute('''
