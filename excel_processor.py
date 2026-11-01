@@ -4,20 +4,20 @@ import pandas as pd
 from database import get_connection
 
 HEADER_MAP = {
-    'order_no': ['주문번호', '주문 번호', 'order_no', 'Order No'],
-    'courier': ['택배사', '배송업체', '배송사', 'courier'],
-    'tracking_no': ['송장번호', '운송장번호', 'tracking_no'],
+    'order_no': ['주문번호', '주문 번호', 'order_no', 'Order No', '발주번호', '주문관리코드', '주문식별자'],
+    'courier': ['택배사', '배송업체', '배송사', 'courier', '택배사명'],
+    'tracking_no': ['송장번호', '운송장번호', 'tracking_no', '운송장 번호', '송장'],
     'shipping_method': ['배송방법', '배송방식', 'shipping_method'],
-    'product_name': ['상품명', '주문상품명', '품목명', 'product_name'],
-    'option_name': ['옵션이름', '옵션명', '선택사항', 'option_name'],
-    'quantity': ['상품수량', '수량', '주문수량', 'qty', 'quantity'],
-    'recipient_name': ['수취인이름', '수취인', '받는사람', '받는분', '고객명', 'recipient_name'],
-    'recipient_phone1': ['수취인전화번호1', '수취인 전화번호1', '전화번호1', '연락처1', '수취인연락처', 'recipient_phone1'],
-    'recipient_phone2': ['수취인전화번호2', '수취인 전화번호2', '전화번호2', '연락처2', 'recipient_phone2'],
-    'customs_id': ['개인통관부호', '개인통관고유부호', '통관부호', 'customs_id'],
-    'postal_code': ['수취인우편번호', '우편번호', 'postal_code', 'zipcode'],
-    'address': ['수취인주소', '주소', '배송지', '배송주소', 'address'],
-    'shipping_memo': ['배송메세지', '배송요청사항', '배송메모', '배송요청', 'shipping_memo']
+    'product_name': ['상품명', '주문상품명', '품목명', 'product_name', '상품', '판매상품명'],
+    'option_name': ['옵션이름', '옵션명', '선택사항', 'option_name', '옵션정보', '옵션', '상품옵션', '선택옵션'],
+    'quantity': ['상품수량', '수량', '주문수량', 'qty', 'quantity', '구매수량'],
+    'recipient_name': ['수취인이름', '수취인', '받는사람', '받는분', '고객명', 'recipient_name', '수취인명'],
+    'recipient_phone1': ['수취인전화번호1', '수취인 전화번호1', '전화번호1', '연락처1', '수취인연락처', 'recipient_phone1', '수취인휴대폰', '휴대폰번호', '휴대전화', '수취인연락처1'],
+    'recipient_phone2': ['수취인전화번호2', '수취인 전화번호2', '전화번호2', '연락처2', 'recipient_phone2', '기타연락처', '전화번호', '수취인연락처2'],
+    'customs_id': ['개인통관부호', '개인통관고유부호', '통관부호', 'customs_id', '통관고유부호', '개인통관고유번호', '통관번호'],
+    'postal_code': ['수취인우편번호', '우편번호', 'postal_code', 'zipcode', '우편 번호', '수취인 우편번호'],
+    'address': ['수취인주소', '주소', '배송지', '배송주소', 'address', '수취인 기본주소', '기본주소', '배송지주소', '전체주소'],
+    'shipping_memo': ['배송메세지', '배송요청사항', '배송메모', '배송요청', 'shipping_memo', '배송메시지']
 }
 
 def detect_columns(df_columns):
@@ -26,8 +26,10 @@ def detect_columns(df_columns):
     for key, candidates in HEADER_MAP.items():
         found = None
         for cand in candidates:
+            cand_clean = re.sub(r'\s+', '', cand).lower()
             for actual in col_list:
-                if cand.lower() == actual.lower():
+                actual_clean = re.sub(r'\s+', '', actual).lower()
+                if cand_clean == actual_clean:
                     found = actual
                     break
             if found:
@@ -163,7 +165,7 @@ def sync_order_items_sku(conn=None):
         if close_after and conn:
             conn.close()
 
-def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=None, prod_rows=None):
+def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=None, prod_rows=None, rules_cache=None):
     product_name = str(product_name).strip() if pd.notna(product_name) else '상품명미상'
     option_name = str(option_name).strip() if pd.notna(option_name) else '단일옵션'
     try:
@@ -171,35 +173,43 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
     except:
         qty = 1
 
-    # 1. DB의 bundle_rules에서 매핑 룰 탐색
-    if conn:
+    # 1. DB의 bundle_rules에서 매핑 룰 탐색 (메모리 캐시 우선 조회로 초고속 처리)
+    rules = []
+    if rules_cache is not None:
+        rules = [
+            r for r in rules_cache
+            if (r.get('source_product_name') == product_name or r.get('source_product_name') == '*')
+            and r.get('source_option_name') == option_name
+        ]
+    elif conn:
         cur = conn.cursor()
         cur.execute('''
-            SELECT target_product_name, target_option_name, target_sku, multiplier
+            SELECT target_product_name, target_option_name, target_sku, multiplier, source_product_name, source_option_name
             FROM bundle_rules
             WHERE is_active = 1
               AND (source_product_name = ? OR source_product_name = '*')
               AND source_option_name = ?
         ''', (product_name, option_name))
         rules = cur.fetchall()
-        if rules:
-            items = []
-            for r in rules:
-                sub_p = r['target_product_name'] or product_name
-                sub_o = r['target_option_name'] or option_name
-                info = find_matching_product_info(sub_p, sub_o, conn, opt_rows=opt_rows, prod_rows=prod_rows)
-                sub_sku = r['target_sku'] or info['sku'] or generate_sku(sub_p, sub_o)
-                opt_multiplier = (r['multiplier'] or 1) * (info['dispatched_quantity'] if info['matched'] else 1)
-                sub_qty = qty * opt_multiplier
-                items.append({
-                    'item_product_name': sub_p,
-                    'item_option_name': sub_o,
-                    'sku': sub_sku,
-                    'option_quantity': opt_multiplier,
-                    'quantity': sub_qty,
-                    'matched': info['matched'] or bool(r['target_sku'])
-                })
-            return items
+
+    if rules:
+        items = []
+        for r in rules:
+            sub_p = r['target_product_name'] or product_name
+            sub_o = r['target_option_name'] or option_name
+            info = find_matching_product_info(sub_p, sub_o, conn, opt_rows=opt_rows, prod_rows=prod_rows)
+            sub_sku = r['target_sku'] or info['sku'] or generate_sku(sub_p, sub_o)
+            opt_multiplier = (r['multiplier'] or 1) * (info['dispatched_quantity'] if info['matched'] else 1)
+            sub_qty = qty * opt_multiplier
+            items.append({
+                'item_product_name': sub_p,
+                'item_option_name': sub_o,
+                'sku': sub_sku,
+                'option_quantity': opt_multiplier,
+                'quantity': sub_qty,
+                'matched': info['matched'] or bool(r['target_sku'])
+            })
+        return items
 
     # 2. 규칙이 없으면 '+' 기호로 분할
     items = []
@@ -259,6 +269,12 @@ def process_excel_file(file_path, batch_name=None):
     cur.execute('SELECT sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
     prod_rows = [dict(r) for r in cur.fetchall()]
 
+    try:
+        cur.execute('SELECT target_product_name, target_option_name, target_sku, multiplier, source_product_name, source_option_name FROM bundle_rules WHERE is_active = 1')
+        rules_cache = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        rules_cache = []
+
     parsed_orders = []
     preview_data = {
         'batch_name': batch_name,
@@ -296,8 +312,8 @@ def process_excel_file(file_path, batch_name=None):
         address = val('address')
         shipping_memo = val('shipping_memo')
 
-        # 분할 처리
-        split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows)
+        # 분할 처리 (캐시 사용으로 초고속)
+        split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows, rules_cache=rules_cache)
 
         for it in split_items:
             if not it.get('matched', False):
@@ -345,42 +361,72 @@ def save_orders_to_db(parsed_data, batch_name):
 
     # 1. 미등록 상품들 unregistered_products 테이블에 등록/갱신
     for unreg in parsed_data.get('unregistered_items', []):
-        cur.execute('''
-            INSERT INTO unregistered_products (product_name, option_name, combined_name, order_count, status)
-            VALUES (?, ?, ?, ?, 'pending')
-            ON CONFLICT(combined_name) DO UPDATE SET
-                order_count = order_count + ?,
-                status = 'pending'
-        ''', (unreg['product_name'], unreg['option_name'], unreg['combined_name'], unreg['count'], unreg['count']))
+        try:
+            cur.execute('''
+                INSERT INTO unregistered_products (product_name, option_name, combined_name, order_count, status)
+                VALUES (?, ?, ?, ?, 'pending')
+                ON CONFLICT(combined_name) DO UPDATE SET
+                    order_count = unregistered_products.order_count + EXCLUDED.order_count,
+                    status = 'pending'
+            ''', (unreg['product_name'], unreg['option_name'], unreg['combined_name'], unreg['count']))
+        except Exception:
+            pass
 
-    for ord_data in parsed_data['orders']:
-        cur.execute('''
+    orders = parsed_data.get('orders', [])
+    all_order_items = []
+
+    # 2. 주문 일괄 청크 삽입 (50건씩 묶어 쿼리 수 98% 절감)
+    CHUNK_SIZE = 50
+    for i in range(0, len(orders), CHUNK_SIZE):
+        chunk = orders[i:i + CHUNK_SIZE]
+        val_placeholders = []
+        params = []
+        for ord_data in chunk:
+            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            params.extend([
+                ord_data['order_no'], ord_data['courier'], ord_data['tracking_no'], ord_data['shipping_method'],
+                ord_data['original_product_name'], ord_data['original_option_name'], ord_data['original_quantity'],
+                ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
+                ord_data['customs_id'], ord_data['postal_code'], ord_data['address'], ord_data['shipping_memo'],
+                '주문접수', batch_name
+            ])
+        
+        insert_sql = f'''
             INSERT INTO orders (
                 order_no, courier, tracking_no, shipping_method,
                 original_product_name, original_option_name, original_quantity,
                 recipient_name, recipient_phone1, recipient_phone2,
                 customs_id, postal_code, address, shipping_memo,
                 status, upload_batch
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            ord_data['order_no'], ord_data['courier'], ord_data['tracking_no'], ord_data['shipping_method'],
-            ord_data['original_product_name'], ord_data['original_option_name'], ord_data['original_quantity'],
-            ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
-            ord_data['customs_id'], ord_data['postal_code'], ord_data['address'], ord_data['shipping_memo'],
-            '주문접수', batch_name
-        ))
-        order_id = cur.lastrowid
-        saved_count += 1
+            ) VALUES {', '.join(val_placeholders)}
+            RETURNING id
+        '''
+        cur.execute(insert_sql, params)
+        returned_rows = cur.fetchall()
+        for idx_c, ret in enumerate(returned_rows):
+            oid = ret['id'] if (isinstance(ret, dict) or hasattr(ret, '__getitem__')) else ret[0]
+            ord_data = chunk[idx_c]
+            saved_count += 1
+            for it in ord_data.get('split_items', []):
+                all_order_items.append((
+                    oid, ord_data['order_no'], it['sku'], it['item_product_name'],
+                    it['item_option_name'], it.get('option_quantity', 1), it['quantity'], '준비중'
+                ))
 
-        for it in ord_data['split_items']:
-            cur.execute('''
-                INSERT INTO order_items (
-                    order_id, order_no, sku, item_product_name, item_option_name, option_quantity, quantity, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                order_id, ord_data['order_no'], it['sku'], it['item_product_name'], it['item_option_name'], it.get('option_quantity', 1), it['quantity'], '준비중'
-            ))
-            item_count += 1
+    # 3. 분할 품목(order_items) 일괄 청크 삽입 (100건씩 묶어 초고속 삽입)
+    ITEM_CHUNK_SIZE = 100
+    for i in range(0, len(all_order_items), ITEM_CHUNK_SIZE):
+        chunk_items = all_order_items[i:i + ITEM_CHUNK_SIZE]
+        val_placeholders = ['(?, ?, ?, ?, ?, ?, ?, ?)' for _ in chunk_items]
+        item_params = []
+        for it in chunk_items:
+            item_params.extend(it)
+        cur.execute(f'''
+            INSERT INTO order_items (
+                order_id, order_no, sku, item_product_name, item_option_name, option_quantity, quantity, status
+            ) VALUES {', '.join(val_placeholders)}
+        ''', item_params)
+        item_count += len(chunk_items)
 
     conn.commit()
     conn.close()

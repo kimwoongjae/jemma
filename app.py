@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import uuid
+import time
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, send_file
 
@@ -79,21 +81,38 @@ def upload_preview():
     total_split_items = 0
     batch_names = []
     detected_cols = {}
+    all_unregistered = {}
 
     try:
         for idx, file in enumerate(valid_files):
-            filename = secure_filename(file.filename)
-            if not filename:
-                filename = f"order_{int(os.times()[4])}_{idx}.xlsx"
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            orig_name = file.filename or f"order_{idx+1}.xlsx"
+            ext = os.path.splitext(orig_name)[1].lower()
+            if ext not in ['.xlsx', '.xls']:
+                ext = '.xlsx'
+            safe_fname = f"upload_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], safe_fname)
             file.save(filepath)
 
-            parsed = process_excel_file(filepath, batch_name=file.filename)
-            total_excel_rows += parsed.get('total_excel_rows', 0)
-            total_split_items += parsed.get('total_split_items', 0)
-            batch_names.append(file.filename)
-            detected_cols.update(parsed.get('detected_columns', {}))
-            merged_orders.extend(parsed.get('orders', []))
+            try:
+                parsed = process_excel_file(filepath, batch_name=orig_name)
+                total_excel_rows += parsed.get('total_excel_rows', 0)
+                total_split_items += parsed.get('total_split_items', 0)
+                batch_names.append(orig_name)
+                detected_cols.update(parsed.get('detected_columns', {}))
+                merged_orders.extend(parsed.get('orders', []))
+
+                for unreg in parsed.get('unregistered_items', []):
+                    comb = unreg['combined_name']
+                    if comb not in all_unregistered:
+                        all_unregistered[comb] = dict(unreg)
+                    else:
+                        all_unregistered[comb]['count'] += unreg.get('count', 1)
+            finally:
+                if os.path.exists(filepath):
+                    try:
+                        os.remove(filepath)
+                    except Exception:
+                        pass
 
         preview_data = {
             'batch_name': ', '.join(batch_names) if len(batch_names) <= 2 else f"{batch_names[0]} 외 {len(batch_names)-1}개 파일",
@@ -101,7 +120,8 @@ def upload_preview():
             'total_excel_rows': total_excel_rows,
             'total_split_items': total_split_items,
             'detected_columns': detected_cols,
-            'orders': merged_orders
+            'orders': merged_orders,
+            'unregistered_items': list(all_unregistered.values())
         }
         return jsonify(preview_data)
     except Exception as e:

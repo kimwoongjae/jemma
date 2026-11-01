@@ -1017,7 +1017,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
-                <button type="button" class="btn btn-primary" onclick="confirmUploadData()">
+                <button type="button" class="btn btn-primary" id="btnConfirmUpload" onclick="confirmUploadData()">
                     <i class="fa-solid fa-check me-1"></i> 확인 및 주문 데이터베이스 등록
                 </button>
             </div>
@@ -1320,6 +1320,22 @@
     }
 
     async function uploadExcelFiles(files) {
+        const dropzone = document.getElementById('dropzone');
+        let origDropHtml = '';
+        if (dropzone) {
+            origDropHtml = dropzone.innerHTML;
+            dropzone.innerHTML = `
+                <div class="py-3 text-primary">
+                    <div class="spinner-border text-primary mb-2" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h5 class="fw-bold">엑셀 파일을 초고속 분석 중입니다...</h5>
+                    <p class="text-muted small mb-0">주문 품목 분할 및 재고 매핑을 진행하고 있습니다. 잠시만 기다려주세요.</p>
+                </div>
+            `;
+            dropzone.style.pointerEvents = 'none';
+        }
+
         const formData = new FormData();
         for (let i = 0; i < files.length; i++) {
             formData.append('files', files[i]);
@@ -1370,11 +1386,24 @@
             new bootstrap.Modal(document.getElementById('previewModal')).show();
         } catch (err) {
             alert('업로드 처리 중 오류 발생: ' + err.message);
+        } finally {
+            if (dropzone) {
+                dropzone.innerHTML = origDropHtml;
+                dropzone.style.pointerEvents = 'auto';
+            }
         }
     }
 
     async function confirmUploadData() {
         if (!currentPreviewData) return;
+        const btn = document.getElementById('btnConfirmUpload');
+        let origBtnText = '';
+        if (btn) {
+            origBtnText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin me-1"></i> 데이터베이스에 일괄 저장 중...`;
+        }
+
         try {
             const res = await fetch('/api/upload/confirm', {
                 method: 'POST',
@@ -1397,6 +1426,11 @@
             refreshAllData();
         } catch (err) {
             alert('등록 처리 오류: ' + err.message);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = origBtnText;
+            }
         }
     }
 
