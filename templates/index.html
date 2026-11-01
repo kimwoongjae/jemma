@@ -1,0 +1,1481 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스마트 주문관리 & 발송처리 시스템</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <!-- JsBarcode for barcode rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --primary-hover: #1d4ed8;
+            --sidebar-bg: #0f172a;
+            --sidebar-color: #e2e8f0;
+            --card-shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+            background-color: #f8fafc;
+            color: #1e293b;
+        }
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        .stat-card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: var(--card-shadow);
+            border: 1px solid #e2e8f0;
+            transition: transform 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+        .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+        }
+        .nav-tabs .nav-link {
+            font-weight: 600;
+            color: #64748b;
+            border: none;
+            border-bottom: 3px solid transparent;
+            padding: 12px 20px;
+        }
+        .nav-tabs .nav-link.active {
+            color: var(--primary-color);
+            border-bottom: 3px solid var(--primary-color);
+            background: transparent;
+        }
+        .upload-dropzone {
+            border: 2px dashed #94a3b8;
+            background: #ffffff;
+            border-radius: 14px;
+            padding: 35px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+        .upload-dropzone:hover, .upload-dropzone.dragover {
+            border-color: var(--primary-color);
+            background: #eff6ff;
+        }
+        .table-custom th {
+            background-color: #f1f5f9;
+            color: #475569;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .table-custom td {
+            font-size: 13.5px;
+            vertical-align: middle;
+        }
+        .badge-split {
+            background-color: #e0e7ff;
+            color: #3730a3;
+            font-weight: 600;
+        }
+        .badge-stock-danger {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+        .badge-stock-ok {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+        /* 라벨 인쇄 전용 스타일 */
+        .shipping-label-card {
+            width: 100mm;
+            min-height: 145mm;
+            border: 2px solid #000;
+            padding: 12px;
+            margin: 0 auto 20px auto;
+            background: #fff;
+            box-sizing: border-box;
+            page-break-after: always;
+            font-family: 'Malgun Gothic', 'Dotum', sans-serif;
+            color: #000;
+        }
+        .label-header {
+            border-bottom: 2px solid #000;
+            padding-bottom: 6px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .label-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+            margin-bottom: 8px;
+        }
+        .label-table th, .label-table td {
+            border: 1px solid #333;
+            padding: 5px;
+        }
+        .label-table th {
+            background: #eee;
+            width: 25%;
+        }
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #printArea, #printArea * {
+                visibility: visible;
+            }
+            #printArea {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+            .no-print {
+                display: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 상단 헤더 -->
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark px-4 py-3 shadow-sm">
+    <div class="container-fluid">
+        <a class="navbar-brand d-flex align-items-center gap-2" href="#">
+            <i class="fa-solid fa-boxes-packing text-primary fs-4"></i>
+            <span>스마트 주문관리 & 발송처리 (OMS/WMS)</span>
+        </a>
+        <div class="d-flex align-items-center gap-3">
+            <span class="badge bg-primary px-3 py-2 rounded-pill">
+                <i class="fa-solid fa-truck-fast me-1"></i> 택배 API 연동 가동 중
+            </span>
+            <button class="btn btn-outline-light btn-sm" onclick="refreshAllData()">
+                <i class="fa-solid fa-arrows-rotate me-1"></i> 새로고침
+            </button>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid px-4 py-4">
+    <!-- 대시보드 통계 카드 -->
+    <div class="row g-3 mb-4">
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="stat-card d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="text-muted small fw-bold">총 주문 건수</div>
+                    <div class="fs-4 fw-bold mt-1" id="stat-total-orders">0</div>
+                </div>
+                <div class="stat-icon bg-primary-subtle text-primary">
+                    <i class="fa-solid fa-cart-shopping"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="stat-card d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="text-muted small fw-bold">송장 미발급</div>
+                    <div class="fs-4 fw-bold mt-1 text-warning" id="stat-pending-tracking">0</div>
+                </div>
+                <div class="stat-icon bg-warning-subtle text-warning">
+                    <i class="fa-solid fa-clock"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="stat-card d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="text-muted small fw-bold">송장 발급 완료</div>
+                    <div class="fs-4 fw-bold mt-1 text-info" id="stat-issued-tracking">0</div>
+                </div>
+                <div class="stat-icon bg-info-subtle text-info">
+                    <i class="fa-solid fa-barcode"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="stat-card d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="text-muted small fw-bold">출고 완료</div>
+                    <div class="fs-4 fw-bold mt-1 text-success" id="stat-completed-dispatch">0</div>
+                </div>
+                <div class="stat-icon bg-success-subtle text-success">
+                    <i class="fa-solid fa-circle-check"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="stat-card d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="text-muted small fw-bold">분할 출고 품목</div>
+                    <div class="fs-4 fw-bold mt-1 text-indigo" id="stat-total-items">0</div>
+                </div>
+                <div class="stat-icon bg-light text-primary">
+                    <i class="fa-solid fa-puzzle-piece"></i>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4 col-sm-6">
+            <div class="stat-card d-flex align-items-center justify-content-between">
+                <div>
+                    <div class="text-muted small fw-bold">재고 부족 품목</div>
+                    <div class="fs-4 fw-bold mt-1 text-danger" id="stat-low-stock">0</div>
+                </div>
+                <div class="stat-icon bg-danger-subtle text-danger">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 네비게이션 탭 -->
+    <ul class="nav nav-tabs mb-4" id="mainTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="tab-orders" data-bs-toggle="tab" data-bs-target="#orders-pane" type="button" role="tab">
+                <i class="fa-solid fa-file-invoice me-1"></i> 주문 관리 & 엑셀 업로드
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tab-labels" data-bs-toggle="tab" data-bs-target="#labels-pane" type="button" role="tab" onclick="loadShippingLabels()">
+                <i class="fa-solid fa-print me-1"></i> 송장 라벨 인쇄 센터
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tab-inventory" data-bs-toggle="tab" data-bs-target="#inventory-pane" type="button" role="tab" onclick="loadInventory()">
+                <i class="fa-solid fa-warehouse me-1"></i> 재고 관리 (WMS)
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tab-settings" data-bs-toggle="tab" data-bs-target="#settings-pane" type="button" role="tab" onclick="loadSettingsAndBundles()">
+                <i class="fa-solid fa-sliders me-1"></i> 세트 분할 & 택배 API 설정
+            </button>
+        </li>
+    </ul>
+
+    <!-- 탭 본문 -->
+    <div class="tab-content" id="mainTabsContent">
+        
+        <!-- 1. 주문 관리 탭 -->
+        <div class="tab-pane fade show active" id="orders-pane" role="tabpanel">
+            
+            <!-- 엑셀 업로드 구역 -->
+            <div class="card mb-4 border-0 shadow-sm">
+                <div class="card-body">
+                    <div class="upload-dropzone" id="dropzone" onclick="document.getElementById('excelFileInput').click()">
+                        <i class="fa-solid fa-cloud-arrow-up text-primary fs-1 mb-2"></i>
+                        <h5 class="fw-bold">발송 리스트 엑셀 파일을 여기에 끌어다 놓거나 클릭하여 선택하세요</h5>
+                        <p class="text-muted small mb-0">지원 형식: .xlsx, .xls | 세트 상품(`+` 기호)은 개별 품목으로 자동 분할 처리됩니다.</p>
+                        <input type="file" id="excelFileInput" accept=".xlsx, .xls" style="display:none;" onchange="handleExcelUpload(this)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 주문 테이블 컨트롤 바 -->
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-body p-3">
+                    <div class="row g-2 align-items-center">
+                        <div class="col-md-3">
+                            <div class="input-group">
+                                <span class="input-group-text bg-white"><i class="fa-solid fa-magnifying-glass text-muted"></i></span>
+                                <input type="text" id="orderSearchInput" class="form-control" placeholder="주문번호, 수취인, 전화번호, 송장번호 검색" onkeyup="if(event.key==='Enter') loadOrders()">
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <select id="statusFilter" class="form-select" onchange="loadOrders()">
+                                <option value="전체">상태 전체</option>
+                                <option value="주문접수">주문접수 (송장미발급)</option>
+                                <option value="송장발급">송장발급 완료</option>
+                                <option value="출고완료">출고완료 (발송완료)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-7 text-end d-flex gap-2 justify-content-end flex-wrap">
+                            <button class="btn btn-outline-primary" onclick="issueTrackingSelected()">
+                                <i class="fa-solid fa-barcode me-1"></i> 선택 송장발급 (API)
+                            </button>
+                            <button class="btn btn-success" onclick="dispatchSelected()">
+                                <i class="fa-solid fa-truck-ramp-box me-1"></i> 선택 출고완료 (재고차감)
+                            </button>
+                            <button class="btn btn-outline-dark" onclick="openPrintModalForSelected()">
+                                <i class="fa-solid fa-print me-1"></i> 선택 송장출력
+                            </button>
+                            <button class="btn btn-secondary" onclick="exportExcel()">
+                                <i class="fa-solid fa-file-excel me-1"></i> 송장 엑셀 다운로드
+                            </button>
+                            <button class="btn btn-outline-danger" onclick="deleteSelectedOrders()">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 주문 목록 테이블 -->
+            <div class="card border-0 shadow-sm">
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover table-custom align-middle mb-0" id="ordersTable">
+                            <thead>
+                                <tr>
+                                    <th style="width: 40px;" class="text-center">
+                                        <input type="checkbox" class="form-check-input" id="checkAllOrders" onchange="toggleSelectAllOrders(this)">
+                                    </th>
+                                    <th>주문번호</th>
+                                    <th>수취인 / 연락처</th>
+                                    <th>통관부호</th>
+                                    <th>배송지 주소</th>
+                                    <th>주문 원본 (상품/옵션/수량)</th>
+                                    <th>분할 출고 품목 (SKU)</th>
+                                    <th>택배사 / 송장번호</th>
+                                    <th>상태</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ordersTableBody">
+                                <tr>
+                                    <td colspan="9" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. 송장 라벨 인쇄 탭 -->
+        <div class="tab-pane fade" id="labels-pane" role="tabpanel">
+            <div class="card border-0 shadow-sm mb-3 no-print">
+                <div class="card-body d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="fw-bold mb-1"><i class="fa-solid fa-print text-primary me-2"></i>표준 택배 운송장 라벨 출력</h5>
+                        <p class="text-muted small mb-0">송장번호가 발급된 주문 라벨을 미리보고 인쇄합니다. (100x150mm 또는 A4 지원)</p>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-primary" onclick="window.print()">
+                            <i class="fa-solid fa-print me-1"></i> 지금 바로 인쇄하기 (Ctrl+P)
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 인쇄 영역 -->
+            <div id="printArea" class="py-2">
+                <div id="labelsContainer" class="d-flex flex-column align-items-center">
+                    <!-- 개별 송장 라벨들이 자바스크립트로 렌더링 됨 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 재고 관리 탭 -->
+        <div class="tab-pane fade" id="inventory-pane" role="tabpanel">
+            <div class="row g-4">
+                <div class="col-lg-8">
+                    <div class="card border-0 shadow-sm mb-3">
+                        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                            <h5 class="fw-bold mb-0"><i class="fa-solid fa-boxes-stacked text-primary me-2"></i>상품 및 단품 SKU 재고 현황</h5>
+                            <button class="btn btn-primary btn-sm" onclick="openNewProductModal()">
+                                <i class="fa-solid fa-plus me-1"></i> 새 상품/SKU 추가
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover table-custom align-middle mb-0" id="inventoryTable">
+                                    <thead>
+                                        <tr>
+                                            <th>SKU 코드</th>
+                                            <th>상품명</th>
+                                            <th>옵션명</th>
+                                            <th>창고위치</th>
+                                            <th>안전재고</th>
+                                            <th>현재고</th>
+                                            <th>재고상태</th>
+                                            <th class="text-center">재고작업</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="inventoryTableBody">
+                                        <!-- 자바스크립트 렌더링 -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-4">
+                    <div class="card border-0 shadow-sm">
+                        <div class="card-header bg-white py-3">
+                            <h5 class="fw-bold mb-0"><i class="fa-solid fa-clock-rotate-left text-primary me-2"></i>최근 입출고 이력 (로그)</h5>
+                        </div>
+                        <div class="card-body p-0" style="max-height: 650px; overflow-y: auto;">
+                            <ul class="list-group list-group-flush" id="inventoryLogsList">
+                                <!-- 로그 리스트 -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. 세트 분할 및 배송 설정 탭 -->
+        <div class="tab-pane fade" id="settings-pane" role="tabpanel">
+            <div class="row g-4">
+                <!-- 세트 상품 분할 규칙 설정 -->
+                <div class="col-lg-7">
+                    <div class="card border-0 shadow-sm">
+                        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                            <div>
+                                <h5 class="fw-bold mb-1"><i class="fa-solid fa-network-wired text-primary me-2"></i>세트/옵션 분할 규칙 (Bundle Rules)</h5>
+                                <p class="text-muted small mb-0">주문서에 들어오는 특정 옵션이나 세트를 원하는 단품 품목으로 자동 쪼개는 규칙을 등록합니다.</p>
+                            </div>
+                            <button class="btn btn-sm btn-primary" onclick="openAddBundleModal()">
+                                <i class="fa-solid fa-plus me-1"></i> 규칙 추가
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="alert alert-info m-3 py-2 small">
+                                <i class="fa-solid fa-circle-info me-1"></i> <strong>기본 내장 자동 분할:</strong> 규칙을 별도로 등록하지 않아도, 옵션명에 <code>+</code> 기호가 포함된 상품(예: <code>LIGHT + PEARL</code>)은 자동으로 각각의 단품으로 분할됩니다.
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-hover table-custom align-middle mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>규칙명</th>
+                                            <th>주문 상품명</th>
+                                            <th>주문 옵션명</th>
+                                            <th>분할될 대상 품목</th>
+                                            <th>배수</th>
+                                            <th class="text-center">관리</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="bundleRulesTableBody">
+                                        <!-- 자바스크립트 렌더링 -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 택배사 API 및 발송인 정보 설정 -->
+                <div class="col-lg-5">
+                    <div class="card border-0 shadow-sm">
+                        <div class="card-header bg-white py-3">
+                            <h5 class="fw-bold mb-0"><i class="fa-solid fa-truck text-primary me-2"></i>택배사 연동 및 발송인 정보</h5>
+                        </div>
+                        <div class="card-body">
+                            <form id="settingsForm" onsubmit="saveCourierSettings(event)">
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">연동 택배사</label>
+                                    <select class="form-select" id="settingCourierName">
+                                        <option value="CJ대한통운">CJ대한통운</option>
+                                        <option value="우체국택배">우체국택배</option>
+                                        <option value="한진택배">한진택배</option>
+                                        <option value="롯데택배">롯데택배</option>
+                                        <option value="로젠택배">로젠택배</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">택배사 고객사 코드 (계약번호)</label>
+                                    <input type="text" class="form-control" id="settingCustomerCode" placeholder="예: 30123456">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">API 인증키 (API Key)</label>
+                                    <input type="password" class="form-control" id="settingApiKey" placeholder="API Key 입력">
+                                </div>
+                                <div class="mb-3 form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="settingIsMock" checked>
+                                    <label class="form-check-label fw-bold" for="settingIsMock">시뮬레이션 모의 발급 모드 사용</label>
+                                    <div class="text-muted small">실제 API 키 없이도 표준 운송장 번호 생성 및 전체 발송 프로세스를 테스트할 수 있습니다.</div>
+                                </div>
+                                <hr>
+                                <h6 class="fw-bold mb-3">보내는 사람 (발송인) 정보 (송장에 인쇄됨)</h6>
+                                <div class="mb-2">
+                                    <label class="form-label small">발송처 상호 / 이름</label>
+                                    <input type="text" class="form-control" id="settingSenderName" value="프리비 물류센터">
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label small">발송처 연락처</label>
+                                    <input type="text" class="form-control" id="settingSenderPhone" value="02-1234-5678">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label small">발송처 주소</label>
+                                    <input type="text" class="form-control" id="settingSenderAddress" value="서울특별시 강남구 테헤란로 123 물류빌딩 3층">
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100">
+                                    <i class="fa-solid fa-floppy-disk me-1"></i> 설정 저장하기
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- ================= 모달 1: 엑셀 파싱 및 분할 미리보기 모달 ================= -->
+<div class="modal fade" id="previewModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="fa-solid fa-file-excel me-2"></i>엑셀 주문 데이터 분석 및 상품 분할 미리보기
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-light border mb-3">
+                    <div class="row text-center">
+                        <div class="col-md-4">
+                            <span class="text-muted">엑셀 원본 행 수:</span>
+                            <strong class="fs-5 text-primary ms-1" id="previewExcelRows">0</strong>건
+                        </div>
+                        <div class="col-md-4">
+                            <span class="text-muted">분할 생성될 출고 품목 수:</span>
+                            <strong class="fs-5 text-success ms-1" id="previewSplitItems">0</strong>개
+                        </div>
+                        <div class="col-md-4">
+                            <span class="text-muted">배치 파일명:</span>
+                            <span class="badge bg-secondary ms-1" id="previewBatchName">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-responsive" style="max-height: 480px;">
+                    <table class="table table-bordered table-sm align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>주문번호</th>
+                                <th>수취인</th>
+                                <th>전화번호</th>
+                                <th>통관부호</th>
+                                <th>원본 주문 상품 (옵션)</th>
+                                <th class="table-primary text-primary">👉 자동 분할된 출고 품목 (SKU)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="previewTableBody">
+                            <!-- 자바스크립트로 채워짐 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-primary" onclick="confirmUploadData()">
+                    <i class="fa-solid fa-check me-1"></i> 확인 및 주문 데이터베이스 등록
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 모달 2: 빠른 입고 모달 ================= -->
+<div class="modal fade" id="stockInModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="fa-solid fa-dolly text-success me-2"></i>재고 입고 등록</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="modalStockInProdId">
+                <div class="mb-3">
+                    <label class="form-label text-muted small">입고 대상 상품</label>
+                    <div class="fw-bold fs-6" id="modalStockInProdName">-</div>
+                    <div class="text-muted small" id="modalStockInSku">-</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">입고 수량 (+)</label>
+                    <input type="number" class="form-control form-control-lg" id="modalStockInQty" min="1" value="50">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">입고 메모</label>
+                    <input type="text" class="form-control" id="modalStockInMemo" value="공장 정기 입고">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                <button type="button" class="btn btn-success" onclick="submitStockIn()">입고 확정</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 모달 3: 재고 실사 조정 모달 ================= -->
+<div class="modal fade" id="stockAdjustModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="fa-solid fa-sliders text-warning me-2"></i>재고 수량 직접 조정</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="modalAdjustProdId">
+                <div class="mb-3">
+                    <label class="form-label text-muted small">대상 상품</label>
+                    <div class="fw-bold" id="modalAdjustProdName">-</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">변경할 최종 재고 수량</label>
+                    <input type="number" class="form-control form-control-lg" id="modalAdjustNewStock" min="0">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">조정 사유</label>
+                    <input type="text" class="form-control" id="modalAdjustMemo" value="월말 실사 재고 반영">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                <button type="button" class="btn btn-warning" onclick="submitStockAdjust()">조정 저장</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 모달 4: 새 상품/SKU 등록 모달 ================= -->
+<div class="modal fade" id="productModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="fa-solid fa-box text-primary me-2"></i>상품 / SKU 등록</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="productForm">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">SKU 코드 (바코드)</label>
+                        <input type="text" class="form-control" id="prodSku" placeholder="예: SKU-PROPOLIS-01" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">상품명</label>
+                        <input type="text" class="form-control" id="prodName" placeholder="예: [프리비] 브라질 프로폴리스" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">옵션명</label>
+                        <input type="text" class="form-control" id="prodOption" placeholder="예: 단품 / 기본">
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label fw-bold">초기 재고</label>
+                            <input type="number" class="form-control" id="prodStock" value="100">
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label fw-bold">안전 재고</label>
+                            <input type="number" class="form-control" id="prodSafety" value="20">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">창고 적재 위치</label>
+                        <input type="text" class="form-control" id="prodLocation" value="A-01">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                <button type="button" class="btn btn-primary" onclick="submitProductForm()">저장</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ================= 모달 5: 세트 분할 규칙 추가 모달 ================= -->
+<div class="modal fade" id="bundleModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="fa-solid fa-network-wired text-primary me-2"></i>세트 분할 규칙 추가</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="bundleForm">
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold">규칙 설명 (이름)</label>
+                        <input type="text" class="form-control" id="bundleRuleName" placeholder="예: 기미스틱 1+1 세트 분할">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold">매칭할 주문 상품명 (* 입력 시 전체)</label>
+                        <input type="text" class="form-control" id="bundleSourceP" placeholder="예: [프리비] 엘모사 기미스틱">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold text-danger">매칭할 주문 옵션명 (필수)</label>
+                        <input type="text" class="form-control" id="bundleSourceO" placeholder="예: 4 (또는 LIGHT + PEARL)" required>
+                    </div>
+                    <hr>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold text-primary">분할되어 출고될 대상 상품명</label>
+                        <input type="text" class="form-control" id="bundleTargetP" placeholder="예: [프리비] 엘모사 기미스틱" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold text-primary">분할되어 출고될 대상 옵션명</label>
+                        <input type="text" class="form-control" id="bundleTargetO" placeholder="예: PEARL (밤 전용)" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label small">단품 SKU (선택)</label>
+                            <input type="text" class="form-control" id="bundleTargetSku" placeholder="미입력시 자동생성">
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label small fw-bold">출고 수량 배수</label>
+                            <input type="number" class="form-control" id="bundleMultiplier" value="1" min="1">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                <button type="button" class="btn btn-primary" onclick="submitBundleRule()">규칙 저장</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Bootstrap 5 JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    let currentPreviewData = null;
+    let ordersList = [];
+    let inventoryList = [];
+
+    document.addEventListener('DOMContentLoaded', () => {
+        refreshAllData();
+        setupDragAndDrop();
+    });
+
+    function refreshAllData() {
+        loadStats();
+        loadOrders();
+        loadInventory();
+        loadInventoryLogs();
+        loadSettingsAndBundles();
+    }
+
+    // 1. 대시보드 통계 로드
+    async function loadStats() {
+        try {
+            const res = await fetch('/api/dashboard/stats');
+            const data = await res.json();
+            document.getElementById('stat-total-orders').textContent = data.total_orders.toLocaleString();
+            document.getElementById('stat-pending-tracking').textContent = data.pending_tracking.toLocaleString();
+            document.getElementById('stat-issued-tracking').textContent = data.issued_tracking.toLocaleString();
+            document.getElementById('stat-completed-dispatch').textContent = data.completed_dispatch.toLocaleString();
+            document.getElementById('stat-total-items').textContent = data.total_items.toLocaleString();
+            document.getElementById('stat-low-stock').textContent = data.low_stock_count.toLocaleString();
+        } catch (e) {
+            console.error('Stats load error', e);
+        }
+    }
+
+    // 2. 드래그 앤 드롭 업로드 설정
+    function setupDragAndDrop() {
+        const dropzone = document.getElementById('dropzone');
+        ['dragenter', 'dragover'].forEach(name => {
+            dropzone.addEventListener(name, (e) => {
+                e.preventDefault();
+                dropzone.classList.add('dragover');
+            });
+        });
+        ['dragleave', 'drop'].forEach(name => {
+            dropzone.addEventListener(name, (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('dragover');
+            });
+        });
+        dropzone.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                uploadExcelFile(files[0]);
+            }
+        });
+    }
+
+    function handleExcelUpload(input) {
+        if (input.files.length > 0) {
+            uploadExcelFile(input.files[0]);
+        }
+    }
+
+    async function uploadExcelFile(file) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const res = await fetch('/api/upload/preview', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (data.error) {
+                alert('업로드 오류: ' + data.error);
+                return;
+            }
+
+            currentPreviewData = data;
+            document.getElementById('previewExcelRows').textContent = data.total_excel_rows;
+            document.getElementById('previewSplitItems').textContent = data.total_split_items;
+            document.getElementById('previewBatchName').textContent = data.batch_name;
+
+            const tbody = document.getElementById('previewTableBody');
+            tbody.innerHTML = '';
+
+            data.orders.slice(0, 30).forEach(o => {
+                const tr = document.createElement('tr');
+                const splitBadges = o.split_items.map(it => 
+                    `<div class="mb-1"><span class="badge bg-primary text-wrap text-start">${it.item_product_name} [${it.item_option_name}] x ${it.quantity}개 <small class="text-white-50">(${it.sku})</small></span></div>`
+                ).join('');
+
+                tr.innerHTML = `
+                    <td class="fw-bold">${o.order_no}</td>
+                    <td>${o.recipient_name}</td>
+                    <td>${o.recipient_phone1}</td>
+                    <td><code>${o.customs_id || '-'}</code></td>
+                    <td>${o.original_product_name} <br><small class="text-muted">[${o.original_option_name}] x ${o.original_quantity}</small></td>
+                    <td>${splitBadges}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            if (data.orders.length > 30) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td colspan="6" class="text-center text-muted">... 외 ${data.orders.length - 30}건 생략 (전체 ${data.orders.length}건 등록 예정) ...</td>`;
+                tbody.appendChild(tr);
+            }
+
+            const modal = new bootstrap.Modal(document.getElementById('previewModal'));
+            modal.show();
+        } catch (err) {
+            alert('업로드 처리 중 오류 발생: ' + err.message);
+        }
+    }
+
+    async function confirmUploadData() {
+        if (!currentPreviewData) return;
+        try {
+            const res = await fetch('/api/upload/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(currentPreviewData)
+            });
+            const data = await res.json();
+            if (data.error) {
+                alert('저장 실패: ' + data.error);
+                return;
+            }
+            alert(data.message);
+            bootstrap.Modal.getInstance(document.getElementById('previewModal')).hide();
+            document.getElementById('excelFileInput').value = '';
+            refreshAllData();
+        } catch (err) {
+            alert('등록 처리 오류: ' + err.message);
+        }
+    }
+
+    // 3. 주문 목록 조회
+    async function loadOrders() {
+        const status = document.getElementById('statusFilter').value;
+        const search = document.getElementById('orderSearchInput').value;
+
+        try {
+            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&search=${encodeURIComponent(search)}`);
+            ordersList = await res.json();
+            renderOrdersTable(ordersList);
+        } catch (e) {
+            console.error('Order load error', e);
+        }
+    }
+
+    function renderOrdersTable(orders) {
+        const tbody = document.getElementById('ordersTableBody');
+        tbody.innerHTML = '';
+
+        if (!orders || orders.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center py-5 text-muted">등록된 주문 데이터가 없습니다. 엑셀 파일을 업로드해보세요!</td></tr>`;
+            return;
+        }
+
+        orders.forEach(o => {
+            const tr = document.createElement('tr');
+            
+            let statusBadge = '<span class="badge bg-secondary">주문접수</span>';
+            if (o.status === '송장발급') statusBadge = '<span class="badge bg-info text-dark">송장발급</span>';
+            else if (o.status === '출고완료') statusBadge = '<span class="badge bg-success">출고완료</span>';
+
+            const splitItemsHtml = o.items.map(it => `
+                <div class="small py-0.5">
+                    <i class="fa-solid fa-angle-right text-muted me-1"></i>
+                    <strong>${it.item_option_name}</strong> : ${it.quantity}개
+                    ${it.stock_deducted ? '<span class="badge bg-success-subtle text-success py-0 px-1">재고차감됨</span>' : '<span class="badge bg-secondary-subtle text-muted py-0 px-1">재고대기</span>'}
+                </div>
+            `).join('');
+
+            tr.innerHTML = `
+                <td class="text-center">
+                    <input type="checkbox" class="form-check-input order-row-check" value="${o.id}">
+                </td>
+                <td>
+                    <div class="fw-bold">${o.order_no}</div>
+                    <small class="text-muted">${o.created_at || ''}</small>
+                </td>
+                <td>
+                    <div class="fw-bold">${o.recipient_name}</div>
+                    <small class="text-muted">${o.recipient_phone1 || ''}</small>
+                </td>
+                <td><code>${o.customs_id || '-'}</code></td>
+                <td><small class="text-secondary">${o.address || '-'}</small></td>
+                <td>
+                    <div class="fw-bold text-truncate" style="max-width: 180px;" title="${o.original_product_name}">${o.original_product_name}</div>
+                    <small class="text-muted">[${o.original_option_name}] x ${o.original_quantity}</small>
+                </td>
+                <td>
+                    <div class="bg-light p-2 rounded" style="min-width: 190px;">
+                        ${splitItemsHtml}
+                    </div>
+                </td>
+                <td>
+                    <div><strong>${o.courier}</strong></div>
+                    ${o.tracking_no ? `<code class="text-primary fw-bold">${o.tracking_no}</code>` : '<span class="text-muted small">미발급</span>'}
+                </td>
+                <td>${statusBadge}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function toggleSelectAllOrders(master) {
+        document.querySelectorAll('.order-row-check').forEach(ck => ck.checked = master.checked);
+    }
+
+    function getSelectedOrderIds() {
+        return Array.from(document.querySelectorAll('.order-row-check:checked')).map(ck => parseInt(ck.value));
+    }
+
+    // 4. 선택 송장 발급
+    async function issueTrackingSelected() {
+        const ids = getSelectedOrderIds();
+        if (ids.length === 0) {
+            alert('송장을 발급할 주문을 하나 이상 선택해주세요.');
+            return;
+        }
+
+        if (!confirm(`선택한 ${ids.length}건의 주문에 대해 택배사 API 송장번호를 발급하시겠습니까?`)) return;
+
+        try {
+            const res = await fetch('/api/shipping/issue-tracking', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: ids })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(`${data.updated.length}건의 송장번호가 발급되었습니다!`);
+                refreshAllData();
+            } else {
+                alert('발급 실패: ' + (data.error || '알 수 없는 오류'));
+            }
+        } catch (e) {
+            alert('통신 오류: ' + e.message);
+        }
+    }
+
+    // 5. 선택 출고 완료 (재고 자동 차감)
+    async function dispatchSelected() {
+        const ids = getSelectedOrderIds();
+        if (ids.length === 0) {
+            alert('출고 처리할 주문을 선택해주세요.');
+            return;
+        }
+
+        if (!confirm(`선택한 ${ids.length}건의 주문을 '출고완료' 처리하고 연관 품목 재고를 차감하시겠습니까?`)) return;
+
+        try {
+            const res = await fetch('/api/shipping/dispatch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: ids })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(data.message);
+                refreshAllData();
+            } else {
+                alert('출고 처리 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+
+    // 6. 송장 엑셀 다운로드
+    function exportExcel() {
+        const ids = getSelectedOrderIds();
+        const param = ids.length > 0 ? `?order_ids=${ids.join(',')}` : '';
+        window.location.href = `/api/shipping/export-excel${param}`;
+    }
+
+    // 7. 주문 삭제
+    async function deleteSelectedOrders() {
+        const ids = getSelectedOrderIds();
+        if (ids.length === 0) {
+            alert('삭제할 주문을 선택해주세요.');
+            return;
+        }
+        if (!confirm(`선택한 ${ids.length}건의 주문 데이터를 완전히 삭제하시겠습니까?`)) return;
+
+        try {
+            const res = await fetch('/api/orders/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: ids })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert('삭제되었습니다.');
+                refreshAllData();
+            }
+        } catch (e) {
+            alert('삭제 오류: ' + e.message);
+        }
+    }
+
+    // 8. 송장 라벨 인쇄 렌더링
+    async function openPrintModalForSelected() {
+        const ids = getSelectedOrderIds();
+        if (ids.length === 0) {
+            alert('송장 라벨을 출력할 주문을 선택해주세요.');
+            return;
+        }
+        // 탭 이동 후 렌더링
+        const tabEl = document.querySelector('#tab-labels');
+        const tab = new bootstrap.Tab(tabEl);
+        tab.show();
+        loadShippingLabels(ids);
+    }
+
+    async function loadShippingLabels(specifiedIds = null) {
+        let ids = specifiedIds;
+        if (!ids) {
+            ids = getSelectedOrderIds();
+        }
+        if (!ids || ids.length === 0) {
+            // 송장발급된 상위 20개 주문 자동 로드
+            const resOrders = await fetch('/api/orders?status=송장발급&limit=30');
+            const list = await resOrders.json();
+            ids = list.map(o => o.id);
+        }
+
+        const container = document.getElementById('labelsContainer');
+        container.innerHTML = '';
+
+        if (!ids || ids.length === 0) {
+            container.innerHTML = `<div class="p-5 text-center text-muted">선택되거나 출력 가능한(송장발급된) 주문이 없습니다.</div>`;
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/shipping/labels?order_ids=${ids.join(',')}`);
+            const labels = await res.json();
+
+            labels.forEach(o => {
+                const card = document.createElement('div');
+                card.className = 'shipping-label-card';
+
+                const itemsRows = o.items.map(it => `
+                    <tr>
+                        <td style="font-weight:bold;">${it.item_product_name}</td>
+                        <td>${it.item_option_name}</td>
+                        <td style="text-align:center; font-weight:bold;">${it.quantity}</td>
+                    </tr>
+                `).join('');
+
+                card.innerHTML = `
+                    <div class="label-header">
+                        <div style="font-size: 16px; font-weight: bold;">[${o.courier}] 택배운송장</div>
+                        <div style="font-size: 11px;">주문: ${o.order_no}</div>
+                    </div>
+
+                    <!-- 바코드 영역 -->
+                    <div style="text-align:center; margin-bottom: 8px;">
+                        <svg id="barcode-${o.id}"></svg>
+                    </div>
+
+                    <table class="label-table">
+                        <tr>
+                            <th>받는 사람</th>
+                            <td colspan="3"><strong style="font-size:14px;">${o.recipient_name}</strong> 님 (${o.recipient_phone1 || ''})</td>
+                        </tr>
+                        <tr>
+                            <th>도착 주소</th>
+                            <td colspan="3"><strong style="font-size:12px;">[${o.postal_code || ''}] ${o.address}</strong></td>
+                        </tr>
+                        <tr>
+                            <th>통관고유부호</th>
+                            <td><code>${o.customs_id || '없음'}</code></td>
+                            <th>배송요청</th>
+                            <td>${o.shipping_memo || '문앞 배송'}</td>
+                        </tr>
+                        <tr>
+                            <th>보내는 사람</th>
+                            <td colspan="3">${o.sender.sender_name} (${o.sender.sender_phone})<br><small>${o.sender.sender_address}</small></td>
+                        </tr>
+                    </table>
+
+                    <div style="font-size:11px; font-weight:bold; margin-bottom:4px;">📦 분할 출고 상품 내역:</div>
+                    <table class="label-table" style="font-size:10px;">
+                        <thead>
+                            <tr style="background:#eee;">
+                                <th>품목명</th>
+                                <th>단품 옵션</th>
+                                <th style="width:15%; text-align:center;">수량</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${itemsRows}
+                        </tbody>
+                    </table>
+                `;
+                container.appendChild(card);
+
+                // 바코드 생성
+                if (o.tracking_no) {
+                    try {
+                        JsBarcode(`#barcode-${o.id}`, o.tracking_no, {
+                            format: "CODE128",
+                            width: 1.8,
+                            height: 45,
+                            displayValue: true,
+                            fontSize: 13
+                        });
+                    } catch (e) {
+                        console.error('Barcode error', e);
+                    }
+                }
+            });
+        } catch (e) {
+            console.error('Labels load error', e);
+        }
+    }
+
+    // 9. 재고 관리 (WMS)
+    async function loadInventory() {
+        try {
+            const res = await fetch('/api/inventory');
+            inventoryList = await res.json();
+            renderInventoryTable(inventoryList);
+        } catch (e) {
+            console.error('Inventory load error', e);
+        }
+    }
+
+    function renderInventoryTable(products) {
+        const tbody = document.getElementById('inventoryTableBody');
+        tbody.innerHTML = '';
+
+        if (!products || products.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center py-5 text-muted">등록된 상품 재고가 없습니다.</td></tr>`;
+            return;
+        }
+
+        products.forEach(p => {
+            const tr = document.createElement('tr');
+            const isDanger = p.stock_quantity <= p.safety_stock;
+            const stockBadge = isDanger ? 
+                `<span class="badge badge-stock-danger"><i class="fa-solid fa-triangle-exclamation me-1"></i>부족 (${p.stock_quantity}개)</span>` : 
+                `<span class="badge badge-stock-ok">안전 (${p.stock_quantity}개)</span>`;
+
+            tr.innerHTML = `
+                <td><code>${p.sku}</code></td>
+                <td class="fw-bold">${p.product_name}</td>
+                <td>${p.option_name}</td>
+                <td><span class="badge bg-light text-dark border">${p.location}</span></td>
+                <td>${p.safety_stock}개</td>
+                <td class="fs-6 fw-bold ${isDanger ? 'text-danger' : 'text-success'}">${p.stock_quantity}</td>
+                <td>${stockBadge}</td>
+                <td class="text-center">
+                    <button class="btn btn-sm btn-outline-success me-1" onclick="openStockInModal(${p.id}, '${p.product_name}', '${p.sku}')">
+                        <i class="fa-solid fa-plus me-1"></i>입고
+                    </button>
+                    <button class="btn btn-sm btn-outline-warning" onclick="openStockAdjustModal(${p.id}, '${p.product_name}', ${p.stock_quantity})">
+                        <i class="fa-solid fa-sliders me-1"></i>조정
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function loadInventoryLogs() {
+        try {
+            const res = await fetch('/api/inventory/logs?limit=40');
+            const logs = await res.json();
+            const listEl = document.getElementById('inventoryLogsList');
+            listEl.innerHTML = '';
+
+            logs.forEach(l => {
+                const isPlus = l.change_qty > 0;
+                const li = document.createElement('li');
+                li.className = 'list-group-item d-flex justify-content-between align-items-start py-2';
+                li.innerHTML = `
+                    <div>
+                        <div class="fw-bold small">${l.product_name} [${l.option_name}]</div>
+                        <div class="text-muted" style="font-size: 11px;">
+                            ${l.change_type} | ${l.memo || ''} ${l.reference_no ? '(' + l.reference_no + ')' : ''}
+                        </div>
+                        <div class="text-muted" style="font-size: 10px;">${l.created_at}</div>
+                    </div>
+                    <div class="text-end">
+                        <span class="fw-bold ${isPlus ? 'text-success' : 'text-danger'}">
+                            ${isPlus ? '+' : ''}${l.change_qty}
+                        </span>
+                        <div class="text-muted" style="font-size: 10px;">잔여 ${l.resulting_stock}</div>
+                    </div>
+                `;
+                listEl.appendChild(li);
+            });
+        } catch (e) {
+            console.error('Logs load error', e);
+        }
+    }
+
+    function openStockInModal(prodId, prodName, sku) {
+        document.getElementById('modalStockInProdId').value = prodId;
+        document.getElementById('modalStockInProdName').textContent = prodName;
+        document.getElementById('modalStockInSku').textContent = sku;
+        new bootstrap.Modal(document.getElementById('stockInModal')).show();
+    }
+
+    async function submitStockIn() {
+        const prodId = document.getElementById('modalStockInProdId').value;
+        const qty = parseInt(document.getElementById('modalStockInQty').value);
+        const memo = document.getElementById('modalStockInMemo').value;
+
+        if (!qty || qty <= 0) {
+            alert('입고 수량을 올바르게 입력하세요.');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/inventory/stock-in', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_id: prodId, quantity: qty, memo: memo })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                bootstrap.Modal.getInstance(document.getElementById('stockInModal')).hide();
+                refreshAllData();
+            }
+        } catch (e) {
+            alert('입고 실패: ' + e.message);
+        }
+    }
+
+    function openStockAdjustModal(prodId, prodName, currentStock) {
+        document.getElementById('modalAdjustProdId').value = prodId;
+        document.getElementById('modalAdjustProdName').textContent = prodName;
+        document.getElementById('modalAdjustNewStock').value = currentStock;
+        new bootstrap.Modal(document.getElementById('stockAdjustModal')).show();
+    }
+
+    async function submitStockAdjust() {
+        const prodId = document.getElementById('modalAdjustProdId').value;
+        const newStock = parseInt(document.getElementById('modalAdjustNewStock').value);
+        const memo = document.getElementById('modalAdjustMemo').value;
+
+        try {
+            const res = await fetch('/api/inventory/adjust', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_id: prodId, new_stock: newStock, memo: memo })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                bootstrap.Modal.getInstance(document.getElementById('stockAdjustModal')).hide();
+                refreshAllData();
+            }
+        } catch (e) {
+            alert('재고 조정 실패: ' + e.message);
+        }
+    }
+
+    function openNewProductModal() {
+        document.getElementById('productForm').reset();
+        new bootstrap.Modal(document.getElementById('productModal')).show();
+    }
+
+    async function submitProductForm() {
+        const sku = document.getElementById('prodSku').value;
+        const name = document.getElementById('prodName').value;
+        const opt = document.getElementById('prodOption').value;
+        const stock = document.getElementById('prodStock').value;
+        const safety = document.getElementById('prodSafety').value;
+        const loc = document.getElementById('prodLocation').value;
+
+        if (!sku || !name) {
+            alert('SKU와 상품명은 필수입니다.');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/inventory/product', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sku: sku,
+                    product_name: name,
+                    option_name: opt,
+                    stock_quantity: stock,
+                    safety_stock: safety,
+                    location: loc
+                })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                bootstrap.Modal.getInstance(document.getElementById('productModal')).hide();
+                refreshAllData();
+            }
+        } catch (e) {
+            alert('상품 등록 오류: ' + e.message);
+        }
+    }
+
+    // 10. 세트 분할 규칙 & 택배사 API 설정
+    async function loadSettingsAndBundles() {
+        // 택배사 설정
+        try {
+            const sRes = await fetch('/api/settings');
+            const s = await sRes.json();
+            if (s && s.courier_name) {
+                document.getElementById('settingCourierName').value = s.courier_name;
+                document.getElementById('settingCustomerCode').value = s.customer_code || '';
+                document.getElementById('settingApiKey').value = s.api_key || '';
+                document.getElementById('settingSenderName').value = s.sender_name || '';
+                document.getElementById('settingSenderPhone').value = s.sender_phone || '';
+                document.getElementById('settingSenderAddress').value = s.sender_address || '';
+                document.getElementById('settingIsMock').checked = s.is_mock === 1;
+            }
+        } catch (e) {
+            console.error('Settings load error', e);
+        }
+
+        // 번들 규칙 목록
+        try {
+            const bRes = await fetch('/api/bundles');
+            const bundles = await bRes.json();
+            const tbody = document.getElementById('bundleRulesTableBody');
+            tbody.innerHTML = '';
+
+            if (bundles.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted">등록된 맞춤 규칙이 없습니다. (옵션 내 '+' 기호 자동 분할은 상시 동작합니다)</td></tr>`;
+                return;
+            }
+
+            bundles.forEach(b => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="fw-bold">${b.rule_name}</td>
+                    <td>${b.source_product_name === '*' ? '<span class="badge bg-secondary">모든상품</span>' : b.source_product_name}</td>
+                    <td><span class="badge bg-warning text-dark">${b.source_option_name}</span></td>
+                    <td><strong>${b.target_product_name}</strong> [${b.target_option_name}]</td>
+                    <td>${b.multiplier}개</td>
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteBundleRule(${b.id})">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (e) {
+            console.error('Bundles load error', e);
+        }
+    }
+
+    async function saveCourierSettings(e) {
+        e.preventDefault();
+        const payload = {
+            courier_name: document.getElementById('settingCourierName').value,
+            customer_code: document.getElementById('settingCustomerCode').value,
+            api_key: document.getElementById('settingApiKey').value,
+            sender_name: document.getElementById('settingSenderName').value,
+            sender_phone: document.getElementById('settingSenderPhone').value,
+            sender_address: document.getElementById('settingSenderAddress').value,
+            is_mock: document.getElementById('settingIsMock').checked
+        };
+
+        try {
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert('택배사 및 발송자 설정이 저장되었습니다.');
+            }
+        } catch (err) {
+            alert('저장 실패: ' + err.message);
+        }
+    }
+
+    function openAddBundleModal() {
+        document.getElementById('bundleForm').reset();
+        new bootstrap.Modal(document.getElementById('bundleModal')).show();
+    }
+
+    async function submitBundleRule() {
+        const payload = {
+            rule_name: document.getElementById('bundleRuleName').value,
+            source_product_name: document.getElementById('bundleSourceP').value,
+            source_option_name: document.getElementById('bundleSourceO').value,
+            target_product_name: document.getElementById('bundleTargetP').value,
+            target_option_name: document.getElementById('bundleTargetO').value,
+            target_sku: document.getElementById('bundleTargetSku').value,
+            multiplier: parseInt(document.getElementById('bundleMultiplier').value)
+        };
+
+        if (!payload.source_option_name || !payload.target_product_name || !payload.target_option_name) {
+            alert('옵션명과 대상 상품 정보는 필수입니다.');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/bundles', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                bootstrap.Modal.getInstance(document.getElementById('bundleModal')).hide();
+                loadSettingsAndBundles();
+            }
+        } catch (err) {
+            alert('규칙 저장 오류: ' + err.message);
+        }
+    }
+
+    async function deleteBundleRule(id) {
+        if (!confirm('이 분할 규칙을 삭제하시겠습니까?')) return;
+        try {
+            await fetch(`/api/bundles/${id}`, { method: 'DELETE' });
+            loadSettingsAndBundles();
+        } catch (e) {
+            alert('삭제 실패: ' + e.message);
+        }
+    }
+</script>
+
+</body>
+</html>
