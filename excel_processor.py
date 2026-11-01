@@ -211,10 +211,25 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
             })
         return items
 
-    # 2. 규칙이 없으면 '+' 기호로 분할
+    # 2. 먼저 전체 옵션명이 재고관리에 등록된 단일 상품과 완전히 일치하는지 확인
+    direct_info = find_matching_product_info(product_name, option_name, conn, opt_rows=opt_rows, prod_rows=prod_rows)
+    if direct_info['matched']:
+        opt_qty = direct_info['dispatched_quantity'] or 1
+        return [{
+            'item_product_name': product_name,
+            'item_option_name': option_name,
+            'sku': direct_info['sku'],
+            'option_quantity': opt_qty,
+            'quantity': qty * opt_qty,
+            'matched': True
+        }]
+
+    # 3. 구분 기호(+, ,, /, ?, &, |, ^ 등)로 자동 다중 품목 분할
     items = []
-    if '+' in option_name:
-        parts = [p.strip() for p in option_name.split('+') if p.strip()]
+    delimiters_pattern = r'[\+\,\/\?\&\^\|]'
+    parts = [p.strip() for p in re.split(delimiters_pattern, option_name) if p.strip()]
+
+    if len(parts) > 1:
         for p in parts:
             info = find_matching_product_info(product_name, p, conn, opt_rows=opt_rows, prod_rows=prod_rows)
             sku = info['sku'] if info['matched'] else generate_sku(product_name, p)
@@ -228,26 +243,18 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
                 'matched': info['matched']
             })
     else:
-        # 단일 품목
-        info = find_matching_product_info(product_name, option_name, conn, opt_rows=opt_rows, prod_rows=prod_rows)
-        if info['matched']:
-            sku = info['sku']
-            opt_qty = info['dispatched_quantity'] or 1
-            matched = True
-        else:
-            # 옵션명에 숫자가 있는 경우 옵션 수량 인식, 예: '4', '4봉', '4개'
-            num_match = re.match(r'^(\d+)\s*(개|봉|입|세트|box|박스)?$', option_name)
-            opt_qty = int(num_match.group(1)) if num_match else 1
-            sku = generate_sku(product_name, option_name)
-            matched = False
+        # 단일 품목 (옵션명에 숫자가 있는 경우 옵션 수량 인식, 예: '4', '4봉', '4개')
+        num_match = re.match(r'^(\d+)\s*(개|봉|입|세트|box|박스)?$', option_name)
+        opt_qty = int(num_match.group(1)) if num_match else 1
+        sku = generate_sku(product_name, option_name)
 
         items.append({
             'item_product_name': product_name,
             'item_option_name': option_name,
             'sku': sku,
             'option_quantity': opt_qty,
-            'quantity': qty,
-            'matched': matched
+            'quantity': qty * opt_qty if num_match else qty,
+            'matched': False
         })
 
     return items
