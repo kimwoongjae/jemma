@@ -196,10 +196,22 @@ def get_orders():
     cur.execute(query, params)
     orders = [dict(row) for row in cur.fetchall()]
 
-    # 각 주문의 분할 품목(order_items) 조회
-    for o in orders:
-        cur.execute('SELECT * FROM order_items WHERE order_id = ?', (o['id'],))
-        o['items'] = [dict(it) for it in cur.fetchall()]
+    # 모든 주문의 order_items를 1번의 쿼리로 일괄 조회 (N+1 문제 해결 -> 초고속 로딩)
+    if orders:
+        order_ids = [o['id'] for o in orders]
+        placeholders = ','.join(['?'] * len(order_ids))
+        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        items_by_order = {}
+        for it in cur.fetchall():
+            oid = it['order_id']
+            if oid not in items_by_order:
+                items_by_order[oid] = []
+            items_by_order[oid].append(dict(it))
+        for o in orders:
+            o['items'] = items_by_order.get(o['id'], [])
+    else:
+        for o in orders:
+            o['items'] = []
 
     conn.close()
 
@@ -260,9 +272,21 @@ def get_dispatched_orders():
     cur.execute(query, params)
     orders = [dict(row) for row in cur.fetchall()]
 
-    for o in orders:
-        cur.execute('SELECT * FROM order_items WHERE order_id = ?', (o['id'],))
-        o['items'] = [dict(it) for it in cur.fetchall()]
+    if orders:
+        order_ids = [o['id'] for o in orders]
+        placeholders = ','.join(['?'] * len(order_ids))
+        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        items_by_order = {}
+        for it in cur.fetchall():
+            oid = it['order_id']
+            if oid not in items_by_order:
+                items_by_order[oid] = []
+            items_by_order[oid].append(dict(it))
+        for o in orders:
+            o['items'] = items_by_order.get(o['id'], [])
+    else:
+        for o in orders:
+            o['items'] = []
 
     conn.close()
     return jsonify(orders)
@@ -333,10 +357,20 @@ def check_dispatch_availability():
         cur.execute("SELECT * FROM orders WHERE status IN ('주문접수', '출고대기', '송장발급') ORDER BY id DESC")
         orders = [dict(r) for r in cur.fetchall()]
 
+    items_by_order = {}
+    if orders:
+        o_ids = [o['id'] for o in orders]
+        placeholders = ','.join(['?'] * len(o_ids))
+        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', o_ids)
+        for it in cur.fetchall():
+            oid = it['order_id']
+            if oid not in items_by_order:
+                items_by_order[oid] = []
+            items_by_order[oid].append(dict(it))
+
     availability_results = {}
     for o in orders:
-        cur.execute('SELECT * FROM order_items WHERE order_id = ?', (o['id'],))
-        items = [dict(it) for it in cur.fetchall()]
+        items = items_by_order.get(o['id'], [])
 
         all_available = True
         any_available = False
@@ -633,10 +667,23 @@ def api_shipping_labels():
     cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
     orders = [dict(row) for row in cur.fetchall()]
 
-    for o in orders:
-        cur.execute('SELECT * FROM order_items WHERE order_id = ?', (o['id'],))
-        o['items'] = [dict(it) for it in cur.fetchall()]
-        o['sender'] = sender_info
+    if orders:
+        order_ids = [o['id'] for o in orders]
+        placeholders = ','.join(['?'] * len(order_ids))
+        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        items_by_order = {}
+        for it in cur.fetchall():
+            oid = it['order_id']
+            if oid not in items_by_order:
+                items_by_order[oid] = []
+            items_by_order[oid].append(dict(it))
+        for o in orders:
+            o['items'] = items_by_order.get(o['id'], [])
+            o['sender'] = sender_info
+    else:
+        for o in orders:
+            o['items'] = []
+            o['sender'] = sender_info
 
     conn.close()
     return jsonify(orders)

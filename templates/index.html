@@ -1380,6 +1380,10 @@
             renderOrdersTable(ordersList);
         } catch (e) {
             console.error('Order load error', e);
+            const tbody = document.getElementById('ordersTableBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="13" class="text-center py-5 text-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>주문 목록 로딩 중 일시적 오류: ${e.message} <br><button class="btn btn-sm btn-outline-secondary mt-2" onclick="loadOrders()"><i class="fa-solid fa-arrows-rotate me-1"></i>다시 불러오기</button></td></tr>`;
+            }
         }
     }
 
