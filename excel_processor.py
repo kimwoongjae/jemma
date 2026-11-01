@@ -45,14 +45,14 @@ def generate_sku(product_name, option_name):
         sku = f"SKU-{abs(hash(product_name + option_name)) % 100000:05d}"
     return sku
 
-def find_matching_barcode(product_name, option_name, conn=None):
+def find_matching_product_info(product_name, option_name, conn=None):
     """
-    재고관리(products) 테이블에서 상품명/옵션명 또는 합친 명칭과 일치하는 바코드(SKU)를 조회합니다.
+    재고관리(product_options 및 products) 테이블에서 상품명/옵션명 또는 합친 명칭과 일치하는 바코드 및 출고수량 배수를 조회합니다.
     """
     combined = f"{product_name} {option_name}".strip() if (option_name and option_name != '단일옵션') else product_name
     clean_combined = re.sub(r'\s+', '', combined)
     clean_p = re.sub(r'\s+', '', product_name)
-    clean_o = re.sub(r'\s+', '', option_name) if option_name != '단일옵션' else ''
+    clean_o = re.sub(r'\s+', '', option_name) if (option_name and option_name != '단일옵션') else ''
 
     close_after = False
     if not conn:
@@ -62,50 +62,75 @@ def find_matching_barcode(product_name, option_name, conn=None):
 
     try:
         cur = conn.cursor()
-        cur.execute('SELECT sku, product_name, option_name FROM products')
+        
+        # 1. product_options 테이블 우선 조회 (옵션별 상세 상품명 & 출고수량 배수)
+        try:
+            cur.execute('SELECT sku, option_name, unit_price, dispatched_quantity FROM product_options')
+            opt_rows = [dict(r) for r in cur.fetchall()]
+        except Exception:
+            opt_rows = []
+
+        # 1-1. 옵션명 완전 일치
+        for r in opt_rows:
+            opt_name = (r['option_name'] or '').strip()
+            if opt_name == combined or opt_name == product_name or (clean_o and opt_name == option_name):
+                return {'sku': r['sku'], 'dispatched_quantity': r['dispatched_quantity'] or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+
+        # 1-2. 공백 제거 후 일치
+        for r in opt_rows:
+            opt_name = re.sub(r'\s+', '', r['option_name'] or '')
+            if opt_name == clean_combined or opt_name == clean_p:
+                return {'sku': r['sku'], 'dispatched_quantity': r['dispatched_quantity'] or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
+
+        # 2. products 마스터 테이블 조회
+        cur.execute('SELECT sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
         rows = [dict(r) for r in cur.fetchall()]
 
-        # 1. 완전 일치 (합친 명칭 or 상품명)
+        # 2-1. 완전 일치 (합친 명칭 or 상품명)
         for r in rows:
             p_name = r['product_name'] or ''
             p_opt = r['option_name'] or ''
             p_combined = f"{p_name} {p_opt}".strip() if p_opt else p_name
             if p_combined == combined or p_name == combined:
-                return r['sku']
+                return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
 
-        # 2. product_name + option_name 일치
+        # 2-2. product_name + option_name 일치
         for r in rows:
             p_name = r['product_name'] or ''
             p_opt = r['option_name'] or ''
             if p_name == product_name and (p_opt == option_name or not p_opt):
-                return r['sku']
+                return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
 
-        # 3. 공백 제거 후 일치
+        # 2-3. 공백 제거 후 일치
         for r in rows:
             p_name = re.sub(r'\s+', '', r['product_name'] or '')
             p_opt = re.sub(r'\s+', '', r['option_name'] or '')
             p_comb = (p_name + p_opt) if p_opt else p_name
             if p_comb == clean_combined or p_name == clean_combined:
-                return r['sku']
+                return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
 
-        # 4. 키워드 부분 일치
+        # 2-4. 키워드 부분 일치
         for r in rows:
             p_name = re.sub(r'\s+', '', r['product_name'] or '')
             if len(p_name) >= 3 and (p_name in clean_combined or clean_combined in p_name):
                 if clean_o:
                     if clean_o in p_name or (r['option_name'] and re.sub(r'\s+', '', r['option_name']) in clean_o):
-                        return r['sku']
+                        return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
                 else:
-                    return r['sku']
+                    return {'sku': r['sku'], 'dispatched_quantity': r.get('dispatched_quantity') or 1, 'unit_price': r.get('unit_price', 0.0), 'matched': True}
 
     finally:
         if close_after:
             conn.close()
 
-    return None
+    return {'sku': None, 'dispatched_quantity': 1, 'unit_price': 0.0, 'matched': False}
+
+def find_matching_barcode(product_name, option_name, conn=None):
+    res = find_matching_product_info(product_name, option_name, conn)
+    return res['sku'] if res['matched'] else None
 
 def sync_order_items_sku(conn=None):
-    """모든 order_items의 상품명/옵션명에 맞추어 재고관리(products)의 바코드(SKU)로 최신 동기화"""
+    """모든 order_items의 상품명/옵션명에 맞추어 재고관리(products 및 product_options)의 바코드(SKU) 및 옵션출고수량으로 최신 동기화"""
     close_after = False
     if not conn:
         from database import get_connection
@@ -114,12 +139,15 @@ def sync_order_items_sku(conn=None):
 
     try:
         cur = conn.cursor()
-        cur.execute('SELECT id, item_product_name, item_option_name, sku FROM order_items')
+        cur.execute('SELECT id, item_product_name, item_option_name, sku, option_quantity FROM order_items')
         items = cur.fetchall()
         for it in items:
-            matched_sku = find_matching_barcode(it['item_product_name'], it['item_option_name'], conn)
-            if matched_sku and matched_sku != it['sku']:
-                cur.execute('UPDATE order_items SET sku = ? WHERE id = ?', (matched_sku, it['id']))
+            info = find_matching_product_info(it['item_product_name'], it['item_option_name'], conn)
+            if info['matched']:
+                new_sku = info['sku']
+                new_opt_qty = info['dispatched_quantity'] or 1
+                if new_sku != it['sku'] or (it['option_quantity'] == 1 and new_opt_qty > 1):
+                    cur.execute('UPDATE order_items SET sku = ?, option_quantity = ? WHERE id = ?', (new_sku, new_opt_qty, it['id']))
         conn.commit()
     finally:
         if close_after:
@@ -149,15 +177,17 @@ def split_order_items(product_name, option_name, quantity, conn=None):
             for r in rules:
                 sub_p = r['target_product_name'] or product_name
                 sub_o = r['target_option_name'] or option_name
-                matched_sku = r['target_sku'] or find_matching_barcode(sub_p, sub_o, conn)
-                sub_sku = matched_sku or generate_sku(sub_p, sub_o)
-                sub_qty = qty * (r['multiplier'] or 1)
+                info = find_matching_product_info(sub_p, sub_o, conn)
+                sub_sku = r['target_sku'] or info['sku'] or generate_sku(sub_p, sub_o)
+                opt_multiplier = (r['multiplier'] or 1) * (info['dispatched_quantity'] if info['matched'] else 1)
+                sub_qty = qty * opt_multiplier
                 items.append({
                     'item_product_name': sub_p,
                     'item_option_name': sub_o,
                     'sku': sub_sku,
-                    'option_quantity': r['multiplier'] or 1,
-                    'quantity': sub_qty
+                    'option_quantity': opt_multiplier,
+                    'quantity': sub_qty,
+                    'matched': info['matched'] or bool(r['target_sku'])
                 })
             return items
 
@@ -166,34 +196,38 @@ def split_order_items(product_name, option_name, quantity, conn=None):
     if '+' in option_name:
         parts = [p.strip() for p in option_name.split('+') if p.strip()]
         for p in parts:
-            matched_sku = find_matching_barcode(product_name, p, conn)
-            sku = matched_sku or generate_sku(product_name, p)
+            info = find_matching_product_info(product_name, p, conn)
+            sku = info['sku'] if info['matched'] else generate_sku(product_name, p)
+            opt_qty = info['dispatched_quantity'] if info['matched'] else 1
             items.append({
                 'item_product_name': product_name,
                 'item_option_name': p,
                 'sku': sku,
-                'option_quantity': 1,
-                'quantity': qty
+                'option_quantity': opt_qty,
+                'quantity': qty * opt_qty,
+                'matched': info['matched']
             })
     else:
-        # 단일 품목 (옵션명에 숫자가 있는 경우 옵션 수량 인식, 예: '4', '4봉', '4개')
-        import re
-        opt_qty = 1
-        num_match = re.match(r'^(\d+)\s*(개|봉|입|세트|box|박스)?$', option_name)
-        if num_match:
-            try:
-                opt_qty = int(num_match.group(1))
-            except:
-                opt_qty = 1
+        # 단일 품목
+        info = find_matching_product_info(product_name, option_name, conn)
+        if info['matched']:
+            sku = info['sku']
+            opt_qty = info['dispatched_quantity'] or 1
+            matched = True
+        else:
+            # 옵션명에 숫자가 있는 경우 옵션 수량 인식, 예: '4', '4봉', '4개'
+            num_match = re.match(r'^(\d+)\s*(개|봉|입|세트|box|박스)?$', option_name)
+            opt_qty = int(num_match.group(1)) if num_match else 1
+            sku = generate_sku(product_name, option_name)
+            matched = False
 
-        matched_sku = find_matching_barcode(product_name, option_name, conn)
-        sku = matched_sku or generate_sku(product_name, option_name)
         items.append({
             'item_product_name': product_name,
             'item_option_name': option_name,
             'sku': sku,
             'option_quantity': opt_qty,
-            'quantity': qty
+            'quantity': qty,
+            'matched': matched
         })
 
     return items
@@ -213,6 +247,8 @@ def process_excel_file(file_path, batch_name=None):
         'detected_columns': {k: v for k, v in col_map.items() if v},
         'orders': []
     }
+
+    unregistered_dict = {}
 
     for idx, row in df.iterrows():
         def val(k):
@@ -244,6 +280,18 @@ def process_excel_file(file_path, batch_name=None):
         # 분할 처리
         split_items = split_order_items(product_name, option_name, quantity, conn)
 
+        for it in split_items:
+            if not it.get('matched', False):
+                comb = f"{it['item_product_name']} {it['item_option_name']}".strip() if (it['item_option_name'] and it['item_option_name'] != '단일옵션') else it['item_product_name']
+                if comb not in unregistered_dict:
+                    unregistered_dict[comb] = {
+                        'product_name': it['item_product_name'],
+                        'option_name': it['item_option_name'],
+                        'combined_name': comb,
+                        'count': 0
+                    }
+                unregistered_dict[comb]['count'] += (it.get('quantity') or 1)
+
         order_obj = {
             'order_no': order_no,
             'courier': courier,
@@ -267,6 +315,7 @@ def process_excel_file(file_path, batch_name=None):
     conn.close()
     preview_data['orders'] = parsed_orders
     preview_data['total_split_items'] = sum(len(o['split_items']) for o in parsed_orders)
+    preview_data['unregistered_items'] = list(unregistered_dict.values())
     return preview_data
 
 def save_orders_to_db(parsed_data, batch_name):
@@ -274,6 +323,16 @@ def save_orders_to_db(parsed_data, batch_name):
     cur = conn.cursor()
     saved_count = 0
     item_count = 0
+
+    # 1. 미등록 상품들 unregistered_products 테이블에 등록/갱신
+    for unreg in parsed_data.get('unregistered_items', []):
+        cur.execute('''
+            INSERT INTO unregistered_products (product_name, option_name, combined_name, order_count, status)
+            VALUES (?, ?, ?, ?, 'pending')
+            ON CONFLICT(combined_name) DO UPDATE SET
+                order_count = order_count + ?,
+                status = 'pending'
+        ''', (unreg['product_name'], unreg['option_name'], unreg['combined_name'], unreg['count'], unreg['count']))
 
     for ord_data in parsed_data['orders']:
         cur.execute('''
@@ -289,27 +348,12 @@ def save_orders_to_db(parsed_data, batch_name):
             ord_data['original_product_name'], ord_data['original_option_name'], ord_data['original_quantity'],
             ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
             ord_data['customs_id'], ord_data['postal_code'], ord_data['address'], ord_data['shipping_memo'],
-            '주문접수', batch_name
+            '출고대기', batch_name
         ))
         order_id = cur.lastrowid
         saved_count += 1
 
         for it in ord_data['split_items']:
-            # 상품 마스터(products)에 SKU 없으면 자동 등록 (기본재고 100으로 편의 등록 가능)
-            cur.execute('SELECT id, stock_quantity FROM products WHERE sku = ?', (it['sku'],))
-            prod = cur.fetchone()
-            if not prod:
-                cur.execute('''
-                    INSERT INTO products (sku, product_name, option_name, stock_quantity, safety_stock)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (it['sku'], it['item_product_name'], it['item_option_name'], 100, 10))
-                prod_id = cur.lastrowid
-                # 초기 입고 로그
-                cur.execute('''
-                    INSERT INTO inventory_logs (product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (prod_id, it['sku'], it['item_product_name'], it['item_option_name'], '신규등록', 100, 100, '주문 업로드 시 자동 등록'))
-
             cur.execute('''
                 INSERT INTO order_items (
                     order_id, order_no, sku, item_product_name, item_option_name, option_quantity, quantity, status
@@ -321,4 +365,8 @@ def save_orders_to_db(parsed_data, batch_name):
 
     conn.commit()
     conn.close()
-    return {'saved_orders': saved_count, 'saved_items': item_count}
+    return {
+        'saved_orders': saved_count,
+        'saved_items': item_count,
+        'unregistered_items': parsed_data.get('unregistered_items', [])
+    }

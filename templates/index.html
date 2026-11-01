@@ -226,6 +226,12 @@
             </button>
         </li>
         <li class="nav-item">
+            <button class="nav-link text-danger fw-bold" id="tab-customs-error" data-bs-toggle="tab" data-bs-target="#customs-error-pane" type="button" role="tab" onclick="loadCustomsErrorOrders()">
+                <i class="fa-solid fa-id-card-clip me-1"></i> 개인통관고유부호 확인 목록
+                <span class="badge bg-danger rounded-pill ms-1" id="customsErrorCountBadge">0</span>
+            </button>
+        </li>
+        <li class="nav-item">
             <button class="nav-link" id="tab-dispatched" data-bs-toggle="tab" data-bs-target="#dispatched-pane" type="button" role="tab" onclick="loadDispatchedOrders()">
                 <i class="fa-solid fa-truck-fast text-success me-1"></i> 발송 내역 목록
             </button>
@@ -321,6 +327,9 @@
                             <button class="btn btn-outline-primary" id="btnValidateCustoms" onclick="validateCustomsCodes()" title="관세청 개인통관고유부호 일치 여부를 검증합니다">
                                 <i class="fa-solid fa-shield-halved me-1"></i> 통관부호 검증
                             </button>
+                            <button class="btn btn-outline-warning" onclick="moveCustomsErrorOrders()" title="통관부호 검증 오류 건을 [통관부호 확인 목록]으로 이동합니다">
+                                <i class="fa-solid fa-arrow-right-to-bracket me-1"></i> 오류건 확인목록 이동
+                            </button>
                             <button class="btn btn-primary" onclick="issueTrackingSelected()">
                                 <i class="fa-solid fa-barcode me-1"></i> 선택 송장발급
                             </button>
@@ -379,6 +388,79 @@
                             <tbody id="ordersTableBody">
                                 <tr>
                                     <td colspan="13" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 1-2. 신규 [개인통관고유부호 확인 목록] 탭 -->
+        <div class="tab-pane fade" id="customs-error-pane" role="tabpanel">
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-body p-3">
+                    <div class="row g-2 align-items-center mb-2">
+                        <div class="col-md-4">
+                            <div class="input-group">
+                                <span class="input-group-text bg-white"><i class="fa-solid fa-magnifying-glass text-muted"></i></span>
+                                <input type="text" id="customsErrorSearchInput" class="form-control" placeholder="수취인, 통관부호, 전화번호, 주문번호 검색" onkeyup="if(event.key==='Enter') loadCustomsErrorOrders()">
+                                <button class="btn btn-outline-secondary" onclick="loadCustomsErrorOrders()"><i class="fa-solid fa-magnifying-glass"></i></button>
+                            </div>
+                        </div>
+                        <div class="col-md-8 text-end d-flex gap-2 justify-content-end flex-wrap align-items-center">
+                            <button class="btn btn-outline-primary" id="btnValidateCustomsInErrorTab" onclick="validateCustomsCodesInErrorTab()">
+                                <i class="fa-solid fa-shield-halved me-1"></i> 통관부호 재검증
+                            </button>
+                            <button class="btn btn-success" onclick="moveBackToOrdersList()">
+                                <i class="fa-solid fa-arrow-left me-1"></i> 선택 정상건 주문관리로 복귀
+                            </button>
+                            <button class="btn btn-outline-danger" onclick="deleteSelectedCustomsErrorOrders()">
+                                <i class="fa-solid fa-trash me-1"></i> 선택 삭제
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 카운트 및 설명 바 -->
+                    <div class="d-flex align-items-center justify-content-between pt-2 border-top">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge bg-danger fs-6 px-3 py-2" id="customsErrorSelectionBadge">
+                                <i class="fa-solid fa-id-card-clip me-1"></i> 선택: <strong id="selectedCustomsErrorCount">0</strong>건 / 총 통관오류 <strong id="totalCustomsErrorCount">0</strong>건
+                            </span>
+                            <span class="text-muted small">※ 통관부호 불일치/형식오류 건 목록입니다. [수정]으로 올바른 정보를 입력 후 [통관부호 재검증]을 눌러 '정상'이 되면 [주문관리로 복귀]를 눌러주세요.</span>
+                        </div>
+                        <div>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadCustomsErrorOrders()">
+                                <i class="fa-solid fa-arrows-rotate me-1"></i> 새로고침
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 통관오류 주문 목록 테이블 -->
+            <div class="card border-0 shadow-sm">
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-hover align-middle mb-0" id="customsErrorTable">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width: 40px;" class="text-center">
+                                        <input type="checkbox" class="form-check-input" id="checkAllCustomsError" onchange="toggleSelectAllCustomsError(this)">
+                                    </th>
+                                    <th style="width: 80px;" class="text-center">무게 (kg)</th>
+                                    <th>주문번호</th>
+                                    <th>수취인 / 연락처</th>
+                                    <th>통관부호 / 검증결과</th>
+                                    <th>배송지 주소 / 우편번호</th>
+                                    <th>상품명 + 옵션명</th>
+                                    <th class="text-center" style="width: 75px;">옵션수량</th>
+                                    <th class="text-center" style="width: 75px;">구매수량</th>
+                                    <th class="text-center" style="width: 140px;">관리 / 수정</th>
+                                </tr>
+                            </thead>
+                            <tbody id="customsErrorTableBody">
+                                <tr>
+                                    <td colspan="10" class="text-center py-5 text-muted">통관부호 확인 대상 주문이 없습니다.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -594,8 +676,22 @@
             </div>
         </div>
 
-        <!-- 3. 재고 관리 탭 (컬럼: SKU바코드, 상품명, 영문명, HS코드, 단가$, 재고, 편집) -->
+        <!-- 3. 재고 관리 탭 (컬럼: SKU바코드, 상품명, 영문명, HS코드, 단가$, 출고수량, 재고, 편집) -->
         <div class="tab-pane fade" id="inventory-pane" role="tabpanel">
+            <!-- 주문 엑셀에서 발견된 미등록 신규 상품 알림 배너 -->
+            <div class="alert alert-warning border-warning shadow-sm mb-3" id="unregisteredProductsBanner" style="display: none;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div class="fw-bold text-dark">
+                        <i class="fa-solid fa-triangle-exclamation text-danger me-2 fs-5"></i>
+                        주문에서 새로 발견된 미등록 상품 (<span id="unregisteredCount" class="fw-bold text-danger">0</span>건)
+                        <span class="fw-normal text-muted small ms-2">※ 주문 엑셀에 포함되었으나 재고관리에 없는 상품입니다. 바코드를 지정해 등록하면 주문 품목과 자동 연결됩니다.</span>
+                    </div>
+                </div>
+                <div class="d-flex flex-wrap gap-2" id="unregisteredProductsList">
+                    <!-- 미등록 상품 칩들이 JS로 렌더링됨 -->
+                </div>
+            </div>
+
             <div class="card border-0 shadow-sm mb-3">
                 <div class="card-body p-3">
                     <div class="row g-2 align-items-center">
@@ -605,7 +701,13 @@
                                 <input type="text" id="inventorySearchInput" class="form-control" placeholder="바코드(SKU), 상품명, 영문명, HS코드 검색" onkeyup="renderInventoryTable(filterInventory())">
                             </div>
                         </div>
-                        <div class="col-md-8 text-end d-flex gap-2 justify-content-end flex-wrap">
+                        <div class="col-md-8 text-end d-flex gap-2 justify-content-end flex-wrap align-items-center">
+                            <span class="badge bg-light text-dark border p-2" id="inventorySelectionBadge">
+                                <i class="fa-solid fa-check-double me-1 text-primary"></i>선택: <strong id="selectedProductCount">0</strong>개
+                            </span>
+                            <button class="btn btn-outline-danger" onclick="deleteSelectedProducts()">
+                                <i class="fa-solid fa-trash me-1"></i> 선택 상품 삭제
+                            </button>
                             <button class="btn btn-outline-success" onclick="document.getElementById('productExcelInput').click()">
                                 <i class="fa-solid fa-file-excel me-1"></i> 엑셀 상품 일괄 업로드
                             </button>
@@ -627,15 +729,18 @@
                         <table class="table table-hover table-custom align-middle mb-0" id="inventoryTable">
                             <thead>
                                 <tr>
+                                    <th style="width: 40px;" class="text-center">
+                                        <input type="checkbox" class="form-check-input" id="checkAllProducts" onchange="toggleSelectAllProducts(this)">
+                                    </th>
                                     <th>SKU / 바코드</th>
-                                    <th>상품명</th>
+                                    <th>상품명 (옵션별 명칭)</th>
                                     <th>영문명</th>
                                     <th>HS코드</th>
-                                    <th class="text-center">재고 수량</th>
-                                    <th class="text-end">단가 ($)</th>
-                                    <th class="text-center">상품 URL</th>
+                                    <th class="text-end" style="width: 95px;">단가 ($)</th>
+                                    <th class="text-center" style="width: 90px;">출고 수량</th>
+                                    <th class="text-center" style="width: 95px;">재고 수량</th>
+                                    <th class="text-center" style="width: 90px;">상품 URL</th>
                                     <th class="text-center" style="width: 100px;">관리</th>
-
                                 </tr>
                             </thead>
                             <tbody id="inventoryTableBody">
@@ -789,17 +894,24 @@
                                     </select>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label fw-bold">택배사 고객사 코드 (계약번호)</label>
-                                    <input type="text" class="form-control" id="settingCustomerCode" placeholder="예: 30123456">
+                                    <label class="form-label fw-bold">택배사 고객사 코드 / 나르다 송하인 (sender) <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="settingCustomerCode" placeholder="예: TOA">
+                                    <div class="text-muted small">나르다 API 전송 시 송하인(sender) 코드 값으로 전송됩니다.</div>
+                                </div>
+                                <div class="mb-3" id="nardaIdGroup">
+                                    <label class="form-label fw-bold">나르다 회원 ID (narda_id) <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="settingNardaId" placeholder="예: calroid" value="calroid">
+                                    <div class="text-muted small">나르다 API 계정 아이디입니다.</div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label fw-bold">API 인증키 (API Key)</label>
-                                    <input type="password" class="form-control" id="settingApiKey" placeholder="API Key 입력">
+                                    <label class="form-label fw-bold">API 인증키 (API Key / narda_api_key) <span class="text-danger">*</span></label>
+                                    <input type="password" class="form-control" id="settingApiKey" placeholder="API Key 입력 (예: 5a65132fee9b4780c350b1942db432afd3232b30)">
+                                    <div class="text-muted small">나르다 주문등록 API 인증키(narda_api_key)로 전송됩니다.</div>
                                 </div>
                                 <div class="mb-3 form-check form-switch">
                                     <input class="form-check-input" type="checkbox" id="settingIsMock" checked>
                                     <label class="form-check-label fw-bold" for="settingIsMock">시뮬레이션 모의 발급 모드 사용</label>
-                                    <div class="text-muted small">실제 API 키 없이도 표준 운송장 번호 생성 및 전체 발송 프로세스를 테스트할 수 있습니다.</div>
+                                    <div class="text-muted small">※ 스위치를 끄면(OFF) 선택한 주문을 나르다 실 API(http://api.narda-jp.com)로 전송하여 실제 운송장번호와 라벨 PDF를 발급받습니다.</div>
                                 </div>
                                 <hr>
                                 <h6 class="fw-bold mb-3">보내는 사람 (발송인) 정보 (송장에 인쇄됨)</h6>
@@ -884,7 +996,7 @@
 
 <!-- ================= 모달 2: 상품 직접 등록 / 편집 모달 ================= -->
 <div class="modal fade" id="productModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title fw-bold" id="productModalTitle"><i class="fa-solid fa-box text-primary me-2"></i>상품 정보 편집</h5>
@@ -893,35 +1005,72 @@
             <div class="modal-body">
                 <form id="productForm">
                     <input type="hidden" id="prodId">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">SKU / 바코드 <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="prodSku" placeholder="바코드 입력 또는 스캔" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">상품명 <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" id="prodName" placeholder="예: [프리비] 엘모사 기미스틱" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">영문명</label>
-                        <input type="text" class="form-control" id="prodEnglish" placeholder="예: ELMOSA BLEMISH STICK">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">SKU / 바코드 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="prodSku" placeholder="바코드 입력 또는 스캔" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold">대표 상품명 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="prodName" placeholder="예: [일본] 브라질산 그린프로폴리스 고함량 캔디" required>
+                        </div>
                     </div>
                     <div class="row">
-                        <div class="col-6 mb-3">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">영문명</label>
+                            <input type="text" class="form-control" id="prodEnglish" placeholder="예: ELMOSA BLEMISH STICK">
+                        </div>
+                        <div class="col-md-3 mb-3">
                             <label class="form-label">HS코드</label>
                             <input type="text" class="form-control" id="prodHsCode" placeholder="예: 3304.99.1000">
                         </div>
-                        <div class="col-6 mb-3">
+                        <div class="col-md-3 mb-3">
                             <label class="form-label fw-bold">단가 ($)</label>
                             <input type="number" class="form-control" id="prodUnitPrice" step="0.01" value="0.00">
                         </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label fw-bold text-primary">재고 수량</label>
+                            <input type="number" class="form-control" id="prodStock" value="0" min="0">
+                        </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">재고 수량</label>
-                        <input type="number" class="form-control form-control-lg" id="prodStock" value="0" min="0">
+                    <div class="row">
+                        <div class="col-md-8 mb-3">
+                            <label class="form-label">상품 URL (링크)</label>
+                            <input type="url" class="form-control" id="prodUrl" placeholder="예: https://smartstore.naver.com/products/12345">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold">기본 출고수량</label>
+                            <input type="number" class="form-control" id="prodDispatchedQty" value="1" min="1">
+                        </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">상품 URL (링크)</label>
-                        <input type="url" class="form-control" id="prodUrl" placeholder="예: https://smartstore.naver.com/products/12345">
+
+                    <hr class="my-3">
+                    <!-- 옵션별 상품명 & 출고수량 설정 구역 -->
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            <label class="form-label fw-bold mb-0 text-dark">
+                                <i class="fa-solid fa-list-ol text-success me-1"></i> 옵션 상품 & 출고 수량 배수 설정
+                            </label>
+                            <div class="text-muted small">동일한 바코드에 대해 옵션 상품명과 주문 시 차감할 출고 수량(1개, 2개, 4개 등)을 추가/삭제할 수 있습니다.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-success" onclick="addModalOptionRow()">
+                            <i class="fa-solid fa-plus me-1"></i> 옵션 상품 추가
+                        </button>
+                    </div>
+                    <div class="table-responsive border rounded bg-light p-2 mb-2">
+                        <table class="table table-sm table-bordered bg-white align-middle mb-0" id="modalOptionsTable">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>옵션 상품명 (주문 매칭 명칭)</th>
+                                    <th style="width: 130px;" class="text-end">단가 ($)</th>
+                                    <th style="width: 140px;" class="text-center">출고 수량 (배수)</th>
+                                    <th style="width: 60px;" class="text-center">삭제</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modalOptionsTableBody">
+                                <!-- JS로 행 추가/삭제 -->
+                            </tbody>
+                        </table>
                     </div>
 
                 </form>
@@ -1057,9 +1206,24 @@
 <script>
     let currentPreviewData = null;
     let ordersList = [];
+    let customsErrorOrdersList = [];
     let dispatchedOrdersList = [];
     let inventoryList = [];
     let inventoryLogsList = [];
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+    function escapeJs(str) {
+        if (!str) return '';
+        return String(str).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+    }
 
     document.addEventListener('DOMContentLoaded', () => {
         refreshAllData();
@@ -1070,8 +1234,10 @@
     function refreshAllData() {
         loadStats();
         loadOrders();
+        loadCustomsErrorOrders();
         loadDispatchedOrders();
         loadInventory();
+        loadUnregisteredProducts();
         loadInventoryLogs();
         loadSettingsAndBundles();
     }
@@ -1150,15 +1316,15 @@
             data.orders.slice(0, 30).forEach(o => {
                 const tr = document.createElement('tr');
                 const splitBadges = o.split_items.map(it => 
-                    `<div class="mb-1"><span class="badge bg-primary text-wrap text-start">${it.item_product_name} [${it.item_option_name}] x ${it.quantity}개 <small class="text-white-50">(${it.sku})</small></span></div>`
+                    `<div class="mb-1"><span class="badge bg-primary text-wrap text-start">${escapeHtml(it.item_product_name)} [${escapeHtml(it.item_option_name)}] x ${it.quantity}개 <small class="text-white-50">(${escapeHtml(it.sku)})</small></span></div>`
                 ).join('');
 
                 tr.innerHTML = `
-                    <td class="fw-bold">${o.order_no}</td>
-                    <td>${o.recipient_name}</td>
-                    <td>${o.recipient_phone1}</td>
-                    <td><code>${o.customs_id || '-'}</code></td>
-                    <td>${o.original_product_name} <br><small class="text-muted">[${o.original_option_name}] x ${o.original_quantity}</small></td>
+                    <td class="fw-bold">${escapeHtml(o.order_no)}</td>
+                    <td>${escapeHtml(o.recipient_name)}</td>
+                    <td>${escapeHtml(o.recipient_phone1)}</td>
+                    <td><code>${escapeHtml(o.customs_id || '-')}</code></td>
+                    <td>${escapeHtml(o.original_product_name)} <br><small class="text-muted">[${escapeHtml(o.original_option_name)}] x ${o.original_quantity}</small></td>
                     <td>${splitBadges}</td>
                 `;
                 tbody.appendChild(tr);
@@ -1189,7 +1355,12 @@
                 alert('저장 실패: ' + data.error);
                 return;
             }
-            alert(data.message);
+            const unCount = data.unregistered_count || (currentPreviewData.unregistered_items ? currentPreviewData.unregistered_items.length : 0);
+            if (unCount > 0) {
+                alert(`✅ ${data.message}\n\n⚠️ 주의: 재고관리에 등록되지 않은 신규 상품이 ${unCount}건 발견되었습니다!\n[재고 관리] 탭 상단 배너에서 바코드를 지정해 등록할 수 있습니다.`);
+            } else {
+                alert(data.message);
+            }
             bootstrap.Modal.getInstance(document.getElementById('previewModal')).hide();
             document.getElementById('excelFileInput').value = '';
             refreshAllData();
@@ -1253,24 +1424,47 @@
         const originalHtml = btn ? btn.innerHTML : '';
         if (btn) {
             btn.disabled = true;
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> 검증 중...';
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> 검증 시작...';
         }
 
         try {
-            const res = await fetch('/api/orders/validate-customs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ order_ids: targetIds })
-            });
-            const data = await res.json();
-            if (data.status === 'success') {
-                const normalCount = data.results ? data.results.filter(r => r.status === '정상').length : 0;
-                const errorCount = data.results ? data.results.filter(r => r.status === '오류').length : 0;
-                alert(`통관부호 검증이 완료되었습니다!\n총 검증: ${data.total_checked || 0}건\n정상: ${normalCount}건\n오류: ${errorCount}건`);
-                loadOrders();
-            } else {
-                alert('검증 오류: ' + (data.error || '실패'));
+            const chunkSize = 50;
+            let totalChecked = 0;
+            let normalCount = 0;
+            let errorCount = 0;
+
+            for (let i = 0; i < targetIds.length; i += chunkSize) {
+                const chunk = targetIds.slice(i, i + chunkSize);
+                const currentEnd = Math.min(i + chunkSize, targetIds.length);
+                if (btn) {
+                    btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin me-1"></i> 검증 중 (${currentEnd} / ${targetIds.length}건)...`;
+                }
+
+                const res = await fetch('/api/orders/validate-customs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order_ids: chunk })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`서버 응답 오류 (${res.status}): ${errText.substring(0, 100)}`);
+                }
+
+                const data = await res.json();
+                if (data.status === 'success') {
+                    totalChecked += (data.total_checked || 0);
+                    if (data.results) {
+                        normalCount += data.results.filter(r => r.status === '정상').length;
+                        errorCount += data.results.filter(r => r.status === '오류').length;
+                    }
+                } else {
+                    throw new Error(data.message || '검증 실패');
+                }
             }
+
+            alert(`통관부호 검증이 완료되었습니다!\n총 검증: ${totalChecked}건\n정상: ${normalCount}건\n오류: ${errorCount}건`);
+            loadOrders();
         } catch (e) {
             alert('검증 요청 실패: ' + e.message);
         } finally {
@@ -1282,7 +1476,9 @@
     }
 
     function openEditOrderModal(orderId) {
-        const order = ordersList.find(o => o.id === orderId);
+        const order = ordersList.find(o => o.id === orderId) || 
+                      customsErrorOrdersList.find(o => o.id === orderId) || 
+                      dispatchedOrdersList.find(o => o.id === orderId);
         if (!order) return;
         document.getElementById('editOrderId').value = order.id;
         document.getElementById('editOrderNo').value = order.order_no;
@@ -1324,6 +1520,7 @@
                 const modalInst = bootstrap.Modal.getInstance(modalEl);
                 if (modalInst) modalInst.hide();
                 loadOrders();
+                loadCustomsErrorOrders();
             } else {
                 alert('저장 실패: ' + (data.error || '오류'));
             }
@@ -1342,11 +1539,16 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ order_ids: [orderId] })
             });
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(`서버 응답 오류 (${res.status}): ${errText.substring(0, 100)}`);
+            }
             const data = await res.json();
             if (data.status === 'success' && data.results && data.results.length > 0) {
                 const resItem = data.results[0];
                 alert(`관세청 검증 결과: [${resItem.status}]\n${resItem.message || '정상적으로 성명과 부호가 일치합니다.'}`);
                 loadOrders();
+                loadCustomsErrorOrders();
             }
         } catch (e) {
             alert('검증 오류: ' + e.message);
@@ -1475,7 +1677,10 @@
                     rowHtml += `
                         <td rowspan="${rowCount}" class="bg-white">
                             <div>${courierBadge}</div>
-                            ${o.tracking_no ? `<code class="text-primary fw-bold">${o.tracking_no}</code>` : '<span class="text-muted small">미발급</span>'}
+                            ${o.tracking_no ? `
+                                <div><code class="text-primary fw-bold">${o.tracking_no}</code></div>
+                                ${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}
+                            ` : '<span class="text-muted small">미발급</span>'}
                         </td>
                         <td rowspan="${rowCount}" class="text-center bg-white">${dispatchBadge}</td>
                         <td rowspan="${rowCount}" class="text-center bg-white">
@@ -1519,12 +1724,30 @@
         const ids = getSelectedOrderIds();
         if (ids.length === 0) { alert('송장을 발급할 주문을 선택하세요.'); return; }
         if (!confirm(`선택한 ${ids.length}건에 대해 송장번호를 발급하시겠습니까?`)) return;
-        const res = await fetch('/api/shipping/issue-tracking', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_ids: ids })
-        });
-        const data = await res.json();
-        if (data.status === 'success') { alert('발급되었습니다!'); refreshAllData(); }
+
+        try {
+            const res = await fetch('/api/shipping/issue-tracking', {
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: ids })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                let msg = `✅ 총 ${data.success_count || (data.updated ? data.updated.length : 0)}건 송장 발급 완료!`;
+                if (data.failed && data.failed.length > 0) {
+                    msg += `\n\n⚠️ ${data.failed.length}건 API 전송 실패:`;
+                    data.failed.forEach(f => {
+                        msg += `\n- [${f.order_no}]: ${f.error}`;
+                    });
+                }
+                alert(msg);
+                refreshAllData();
+            } else {
+                alert('발급 실패: ' + (data.error || '오류 발생'));
+            }
+        } catch (e) {
+            alert('통신 오류: ' + e.message);
+        }
     }
 
     async function dispatchSelected() {
@@ -1554,6 +1777,326 @@
             body: JSON.stringify({ order_ids: ids })
         });
         refreshAllData();
+    }
+
+    // ==========================================
+    // 1-2. 개인통관고유부호 확인 목록 기능
+    // ==========================================
+    async function loadCustomsErrorOrders() {
+        const search = document.getElementById('customsErrorSearchInput')?.value || '';
+        try {
+            const res = await fetch(`/api/orders?status=통관오류&search=${encodeURIComponent(search)}`);
+            customsErrorOrdersList = await res.json();
+            renderCustomsErrorTable(customsErrorOrdersList);
+            const totalEl = document.getElementById('totalCustomsErrorCount');
+            const badgeEl = document.getElementById('customsErrorCountBadge');
+            if (totalEl) totalEl.textContent = customsErrorOrdersList.length.toLocaleString();
+            if (badgeEl) badgeEl.textContent = customsErrorOrdersList.length.toLocaleString();
+        } catch (e) {
+            console.error('Customs error orders load error', e);
+        }
+    }
+
+    function renderCustomsErrorTable(orders) {
+        const tbody = document.getElementById('customsErrorTableBody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+
+        if (!orders || orders.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="10" class="text-center py-5 text-muted">통관부호 확인 대상 주문이 없습니다.</td></tr>`;
+            updateCustomsErrorSelectionCount();
+            return;
+        }
+
+        orders.forEach(o => {
+            let customsBadge = '<span class="badge bg-light text-muted border">미검증</span>';
+            if (o.customs_validation_status === '정상') {
+                customsBadge = '<span class="badge bg-success-subtle text-success border border-success"><i class="fa-solid fa-circle-check me-1"></i>정상</span>';
+            } else if (o.customs_validation_status === '오류') {
+                customsBadge = `<span class="badge bg-danger-subtle text-danger border border-danger"><i class="fa-solid fa-circle-xmark me-1"></i>오류</span>
+                <div class="text-danger mt-1 fw-bold" style="font-size: 11px; max-width: 150px; word-break: break-all;">${escapeHtml(o.customs_validation_msg || '불일치')}</div>`;
+            }
+
+            const items = (o.items && o.items.length > 0) ? o.items : [{
+                item_product_name: o.original_product_name,
+                item_option_name: o.original_option_name,
+                sku: '미지정',
+                option_quantity: 1,
+                quantity: o.original_quantity || 1
+            }];
+            const rowCount = items.length;
+
+            items.forEach((it, idx) => {
+                const tr = document.createElement('tr');
+                let rowHtml = '';
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <input type="checkbox" class="form-check-input customs-error-row-check" value="${o.id}" onchange="updateCustomsErrorSelectionCount()">
+                        </td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <input type="number" step="0.01" min="0" class="form-control form-control-sm text-end px-1" 
+                                   value="${o.weight && o.weight > 0 ? o.weight : ''}" placeholder="0.00" 
+                                   onchange="saveOrderWeight(${o.id}, this.value)" title="무게(kg)">
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${escapeHtml(o.order_no)}</div>
+                            <small class="text-muted">${o.created_at || ''}</small>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${escapeHtml(o.recipient_name)}</div>
+                            <small class="text-muted">${escapeHtml(o.recipient_phone1 || '')}</small>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="mb-1"><code class="fs-6">${escapeHtml(o.customs_id || '-')}</code></div>
+                            <div>${customsBadge}</div>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="small mb-1"><span class="badge bg-light text-dark border">${escapeHtml(o.postal_code || '-')}</span></div>
+                            <small class="text-secondary text-truncate d-inline-block" style="max-width: 180px;" title="${escapeHtml(o.address)}">${escapeHtml(o.address || '-')}</small>
+                            ${o.shipping_memo ? `<div class="small text-muted fst-italic">📝 ${escapeHtml(o.shipping_memo)}</div>` : ''}
+                        </td>
+                    `;
+                }
+
+                const optName = (it.item_option_name && it.item_option_name !== '단일옵션') ? it.item_option_name : '';
+                const combinedName = optName ? `${it.item_product_name} ${optName}` : it.item_product_name;
+                const optQty = it.option_quantity || 1;
+                const buyQty = it.quantity || o.original_quantity || 1;
+
+                rowHtml += `
+                    <td>
+                        <div class="fw-bold text-dark">${escapeHtml(combinedName)}</div>
+                        <code class="text-muted small">${escapeHtml(it.sku || '-')}</code>
+                    </td>
+                    <td class="text-center fw-bold text-secondary">${optQty}개</td>
+                    <td class="text-center fs-6 fw-bold text-primary">${buyQty}개</td>
+                `;
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary py-1 px-2" onclick="openEditOrderModal(${o.id})" title="수정">
+                                    <i class="fa-solid fa-pen-to-square me-1"></i>수정
+                                </button>
+                                <button class="btn btn-outline-info py-1 px-2" onclick="validateSingleOrderInCustomsTab(${o.id})" title="즉시 재검증">
+                                    <i class="fa-solid fa-shield-halved"></i>
+                                </button>
+                            </div>
+                        </td>
+                    `;
+                }
+
+                tr.innerHTML = rowHtml;
+                tbody.appendChild(tr);
+            });
+        });
+
+        updateCustomsErrorSelectionCount();
+    }
+
+    function updateCustomsErrorSelectionCount() {
+        const selected = document.querySelectorAll('.customs-error-row-check:checked').length;
+        const total = document.querySelectorAll('.customs-error-row-check').length;
+        const selSpan = document.getElementById('selectedCustomsErrorCount');
+        if (selSpan) selSpan.textContent = selected;
+        const masterCheck = document.getElementById('checkAllCustomsError');
+        if (masterCheck && total > 0) {
+            masterCheck.checked = (selected === total);
+        } else if (masterCheck) {
+            masterCheck.checked = false;
+        }
+    }
+
+    function toggleSelectAllCustomsError(master) {
+        document.querySelectorAll('.customs-error-row-check').forEach(ck => ck.checked = master.checked);
+        updateCustomsErrorSelectionCount();
+    }
+
+    function getSelectedCustomsErrorIds() {
+        return Array.from(document.querySelectorAll('.customs-error-row-check:checked')).map(ck => parseInt(ck.value));
+    }
+
+    async function moveCustomsErrorOrders() {
+        const checked = getSelectedOrderIds();
+        let targetIds = [];
+
+        if (checked.length > 0) {
+            if (!confirm(`선택한 ${checked.length}건의 주문을 [개인통관고유부호 확인 목록]으로 이동하시겠습니까?`)) {
+                return;
+            }
+            targetIds = checked;
+        } else {
+            const errorOrders = ordersList.filter(o => o.customs_validation_status === '오류');
+            if (errorOrders.length === 0) {
+                alert('통관부호 검증 결과 [오류]로 표시된 주문이 없습니다.\n먼저 [통관부호 검증]을 진행하거나 이동할 주문을 체크해주세요.');
+                return;
+            }
+            if (!confirm(`통관부호 검증에서 오류로 확인된 ${errorOrders.length}건을 [개인통관고유부호 확인 목록]으로 이동하시겠습니까?`)) {
+                return;
+            }
+            targetIds = errorOrders.map(o => o.id);
+        }
+
+        try {
+            const res = await fetch('/api/orders/move-status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    order_ids: targetIds,
+                    target_status: '통관오류'
+                })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(`${data.moved_count}건의 주문이 [개인통관고유부호 확인 목록]으로 이동되었습니다.`);
+                refreshAllData();
+            } else {
+                alert('이동 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+
+    async function validateCustomsCodesInErrorTab() {
+        const checked = getSelectedCustomsErrorIds();
+        let targetIds = checked;
+        if (targetIds.length === 0) {
+            if (!confirm(`선택된 주문이 없습니다.\n확인 목록의 모든 주문(${customsErrorOrdersList.length}건)에 대해 통관부호 재검증을 진행하시겠습니까?`)) {
+                return;
+            }
+            targetIds = customsErrorOrdersList.map(o => o.id);
+        }
+        if (targetIds.length === 0) return;
+
+        const btn = document.getElementById('btnValidateCustomsInErrorTab');
+        const originalHtml = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> 재검증 중...';
+        }
+
+        try {
+            const chunkSize = 50;
+            let totalChecked = 0;
+            let normalCount = 0;
+            let errorCount = 0;
+
+            for (let i = 0; i < targetIds.length; i += chunkSize) {
+                const chunk = targetIds.slice(i, i + chunkSize);
+                const currentEnd = Math.min(i + chunkSize, targetIds.length);
+                if (btn) {
+                    btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin me-1"></i> 검증 중 (${currentEnd} / ${targetIds.length}건)...`;
+                }
+
+                const res = await fetch('/api/orders/validate-customs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order_ids: chunk })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    totalChecked += (data.total_checked || 0);
+                    if (data.results) {
+                        normalCount += data.results.filter(r => r.status === '정상').length;
+                        errorCount += data.results.filter(r => r.status === '오류').length;
+                    }
+                }
+            }
+
+            alert(`통관부호 재검증 완료!\n총 검증: ${totalChecked}건\n정상: ${normalCount}건\n오류: ${errorCount}건\n\n정상으로 확인된 주문은 [선택 정상건 주문관리로 복귀]를 눌러 주문관리로 이동할 수 있습니다.`);
+            loadCustomsErrorOrders();
+        } catch (e) {
+            alert('검증 오류: ' + e.message);
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+    }
+
+    async function validateSingleOrderInCustomsTab(orderId) {
+        try {
+            const res = await fetch('/api/orders/validate-customs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: [orderId] })
+            });
+            const data = await res.json();
+            if (data.status === 'success' && data.results && data.results.length > 0) {
+                const r = data.results[0];
+                alert(`관세청 검증 결과: [${r.status}]\n${r.message || (r.status === '정상' ? '성명, 통관부호, 전화번호가 일치합니다.' : '검증 오류')}`);
+                loadCustomsErrorOrders();
+            } else {
+                alert('검증 실패: ' + (data.message || '오류'));
+            }
+        } catch (e) {
+            alert('검증 오류: ' + e.message);
+        }
+    }
+
+    async function moveBackToOrdersList() {
+        const checked = getSelectedCustomsErrorIds();
+        let targetOrders = [];
+        if (checked.length > 0) {
+            targetOrders = customsErrorOrdersList.filter(o => checked.includes(o.id));
+        } else {
+            targetOrders = customsErrorOrdersList;
+        }
+
+        const normalOrders = targetOrders.filter(o => o.customs_validation_status === '정상');
+        if (normalOrders.length === 0) {
+            alert('정상으로 검증된 주문이 없습니다.\n주문 정보를 수정한 후 [통관부호 재검증]을 먼저 실행하여 [정상] 상태로 만들어주세요.');
+            return;
+        }
+
+        const orderIds = normalOrders.map(o => o.id);
+        if (!confirm(`[정상]으로 확인된 ${orderIds.length}건의 주문을 주문 관리 목록(출고대기)으로 복귀시키겠습니까?`)) {
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/orders/move-status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    order_ids: orderIds,
+                    target_status: '출고대기'
+                })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(`${data.moved_count}건의 주문이 주문 관리(출고대기) 목록으로 정상 복귀되었습니다.`);
+                refreshAllData();
+            } else {
+                alert('이동 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
+    }
+
+    async function deleteSelectedCustomsErrorOrders() {
+        const ids = getSelectedCustomsErrorIds();
+        if (ids.length === 0) {
+            alert('삭제할 주문을 선택하세요.');
+            return;
+        }
+        if (!confirm(`선택한 ${ids.length}건을 삭제하시겠습니까?`)) return;
+        try {
+            await fetch('/api/orders/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: ids })
+            });
+            refreshAllData();
+        } catch (e) {
+            alert('삭제 오류: ' + e.message);
+        }
     }
 
     // ==========================================
@@ -1651,7 +2194,10 @@
                     rowHtml += `
                         <td rowspan="${rowCount}" class="bg-white">
                             <div>${courierBadge}</div>
-                            ${o.tracking_no ? `<code class="text-primary fw-bold">${o.tracking_no}</code>` : '<span class="text-muted small">미발급</span>'}
+                            ${o.tracking_no ? `
+                                <div><code class="text-primary fw-bold">${o.tracking_no}</code></div>
+                                ${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}
+                            ` : '<span class="text-muted small">미발급</span>'}
                         </td>
                         <td rowspan="${rowCount}" class="text-center bg-white">
                             <span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span>
@@ -1924,8 +2470,77 @@
             (p.sku && p.sku.toLowerCase().includes(search)) ||
             (p.product_name && p.product_name.toLowerCase().includes(search)) ||
             (p.english_name && p.english_name.toLowerCase().includes(search)) ||
-            (p.hs_code && p.hs_code.toLowerCase().includes(search))
+            (p.hs_code && p.hs_code.toLowerCase().includes(search)) ||
+            (p.options && p.options.some(opt => opt.option_name && opt.option_name.toLowerCase().includes(search)))
         );
+    }
+
+    function updateProductSelectionCount() {
+        const selected = document.querySelectorAll('.product-row-check:checked').length;
+        const total = document.querySelectorAll('.product-row-check').length;
+        const countEl = document.getElementById('selectedProductCount');
+        if (countEl) countEl.textContent = selected.toLocaleString();
+        const masterCheck = document.getElementById('checkAllProducts');
+        if (masterCheck && total > 0) {
+            masterCheck.checked = (selected === total);
+        } else if (masterCheck) {
+            masterCheck.checked = false;
+        }
+    }
+
+    function toggleSelectAllProducts(master) {
+        document.querySelectorAll('.product-row-check').forEach(ck => ck.checked = master.checked);
+        updateProductSelectionCount();
+    }
+
+    function getSelectedProductIds() {
+        return Array.from(document.querySelectorAll('.product-row-check:checked')).map(ck => parseInt(ck.value));
+    }
+
+    async function deleteSelectedProducts() {
+        const ids = getSelectedProductIds();
+        if (ids.length === 0) {
+            alert('삭제할 상품을 선택하세요.');
+            return;
+        }
+        if (!confirm(`선택한 ${ids.length}개 상품을 재고 관리에서 삭제하시겠습니까?\n(삭제 시 연관된 입출고 이력도 함께 정리됩니다)`)) {
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/inventory/products/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_ids: ids })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert(`${data.deleted_count || ids.length}개 상품이 성공적으로 삭제되었습니다.`);
+                refreshAllData();
+            } else {
+                alert('삭제 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('통신 오류: ' + e.message);
+        }
+    }
+
+    async function deleteSingleProduct(id, name) {
+        if (!confirm(`[${name}] 상품을 재고 관리에서 삭제하시겠습니까?\n(삭제 시 연관된 입출고 이력도 함께 정리됩니다)`)) return;
+        try {
+            const res = await fetch(`/api/inventory/product/${id}`, {
+                method: 'DELETE'
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                alert('삭제되었습니다.');
+                refreshAllData();
+            } else {
+                alert('삭제 실패: ' + (data.error || '오류'));
+            }
+        } catch (e) {
+            alert('오류: ' + e.message);
+        }
     }
 
     function renderInventoryTable(products) {
@@ -1933,32 +2548,83 @@
         tbody.innerHTML = '';
 
         if (!products || products.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="8" class="text-center py-5 text-muted">등록된 상품이 없습니다. 엑셀을 업로드하거나 새 상품을 등록하세요.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" class="text-center py-5 text-muted">등록된 상품이 없습니다. 엑셀을 업로드하거나 새 상품을 등록하세요.</td></tr>`;
+            updateProductSelectionCount();
             return;
         }
 
         products.forEach(p => {
-            const tr = document.createElement('tr');
             const urlHtml = p.product_url ? 
-                `<a href="${p.product_url}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary py-0 px-2" title="${p.product_url}"><i class="fa-solid fa-arrow-up-right-from-square me-1"></i>열기</a>` : 
+                `<a href="${p.product_url}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-secondary py-0 px-2" title="${escapeHtml(p.product_url)}"><i class="fa-solid fa-arrow-up-right-from-square me-1"></i>열기</a>` : 
                 `<span class="text-muted">-</span>`;
 
-            tr.innerHTML = `
-                <td><code>${p.sku}</code></td>
-                <td class="fw-bold">${p.product_name}</td>
-                <td><small class="text-secondary">${p.english_name || '-'}</small></td>
-                <td><code>${p.hs_code || '-'}</code></td>
-                <td class="text-center fs-6 fw-bold text-primary">${p.stock_quantity.toLocaleString()}개</td>
-                <td class="text-end fw-bold">$${(p.unit_price || 0).toFixed(2)}</td>
-                <td class="text-center">${urlHtml}</td>
-                <td class="text-center">
-                    <button class="btn btn-sm btn-outline-primary" onclick="openEditProductModal(${p.id})">
-                        <i class="fa-solid fa-pen-to-square me-1"></i>편집
-                    </button>
-                </td>
-            `;
-            tbody.appendChild(tr);
+            const safeName = (p.product_name || '').replace(/['"\\]/g, ' ');
+            const options = (p.options && p.options.length > 0) ? p.options : [{
+                option_name: p.product_name,
+                unit_price: p.unit_price || 0.0,
+                dispatched_quantity: p.dispatched_quantity || 1
+            }];
+            const rowCount = options.length;
+
+            options.forEach((opt, idx) => {
+                const tr = document.createElement('tr');
+                let rowHtml = '';
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <input type="checkbox" class="form-check-input product-row-check" value="${p.id}" onchange="updateProductSelectionCount()">
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <code class="fw-bold fs-6 text-dark">${escapeHtml(p.sku)}</code>
+                        </td>
+                    `;
+                }
+
+                const optPrice = parseFloat(opt.unit_price) || 0.0;
+                const optQty = parseInt(opt.dispatched_quantity) || 1;
+
+                rowHtml += `
+                    <td>
+                        <div class="fw-bold text-dark">${escapeHtml(opt.option_name || p.product_name)}</div>
+                    </td>
+                `;
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="bg-white"><small class="text-secondary">${escapeHtml(p.english_name || '-')}</small></td>
+                        <td rowspan="${rowCount}" class="bg-white"><code>${escapeHtml(p.hs_code || '-')}</code></td>
+                    `;
+                }
+
+                rowHtml += `
+                    <td class="text-end fw-bold">$${optPrice.toFixed(2)}</td>
+                    <td class="text-center fw-bold text-success">${optQty}개</td>
+                `;
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="text-center bg-white fs-6 fw-bold text-primary">${p.stock_quantity.toLocaleString()}개</td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">${urlHtml}</td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary" onclick="openEditProductModal(${p.id})" title="수정">
+                                    <i class="fa-solid fa-pen-to-square"></i>
+                                </button>
+                                <button class="btn btn-outline-danger" onclick="deleteSingleProduct(${p.id}, '${safeName}')" title="삭제">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    `;
+                }
+
+                tr.innerHTML = rowHtml;
+                tbody.appendChild(tr);
+            });
         });
+
+        updateProductSelectionCount();
     }
 
     // 엑셀 상품 일괄 업로드
@@ -1990,12 +2656,47 @@
         window.location.href = '/api/inventory/template';
     }
 
+    // 옵션 상품 행 추가/삭제
+    function addModalOptionRow(name = '', price = 0.0, qty = 1) {
+        const tbody = document.getElementById('modalOptionsTableBody');
+        if (!tbody) return;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>
+                <input type="text" class="form-control form-control-sm opt-row-name" value="${escapeHtml(name)}" placeholder="옵션 상품명 (예: 캔디 1, 캔디 2)">
+            </td>
+            <td>
+                <input type="number" class="form-control form-control-sm text-end opt-row-price" step="0.01" value="${price || 0.0}">
+            </td>
+            <td>
+                <input type="number" class="form-control form-control-sm text-center opt-row-qty" min="1" value="${qty || 1}">
+            </td>
+            <td class="text-center">
+                <button type="button" class="btn btn-sm text-danger p-0" onclick="removeModalOptionRow(this)">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    }
+
+    function removeModalOptionRow(btn) {
+        const tr = btn.closest('tr');
+        if (tr) tr.remove();
+    }
+
     // 상품 등록 & 편집 모달
     function openNewProductModal() {
         document.getElementById('productForm').reset();
         document.getElementById('prodId').value = '';
+        document.getElementById('prodStock').value = '0';
+        document.getElementById('prodDispatchedQty').value = '1';
+        document.getElementById('prodUnitPrice').value = '0.00';
         document.getElementById('prodUrl').value = '';
         document.getElementById('productModalTitle').innerHTML = `<i class="fa-solid fa-plus text-primary me-2"></i>새 상품 등록`;
+        const tbody = document.getElementById('modalOptionsTableBody');
+        if (tbody) tbody.innerHTML = '';
+        addModalOptionRow('', 0.0, 1);
         new bootstrap.Modal(document.getElementById('productModal')).show();
     }
 
@@ -2009,8 +2710,21 @@
         document.getElementById('prodHsCode').value = p.hs_code || '';
         document.getElementById('prodUnitPrice').value = p.unit_price || 0.0;
         document.getElementById('prodStock').value = p.stock_quantity;
+        document.getElementById('prodDispatchedQty').value = p.dispatched_quantity || 1;
         document.getElementById('prodUrl').value = p.product_url || '';
         document.getElementById('productModalTitle').innerHTML = `<i class="fa-solid fa-pen-to-square text-primary me-2"></i>상품 정보 편집`;
+        
+        const tbody = document.getElementById('modalOptionsTableBody');
+        if (tbody) {
+            tbody.innerHTML = '';
+            if (p.options && p.options.length > 0) {
+                p.options.forEach(opt => {
+                    addModalOptionRow(opt.option_name, opt.unit_price, opt.dispatched_quantity);
+                });
+            } else {
+                addModalOptionRow(p.product_name, p.unit_price, p.dispatched_quantity || 1);
+            }
+        }
         new bootstrap.Modal(document.getElementById('productModal')).show();
     }
 
@@ -2022,9 +2736,33 @@
         const hs = document.getElementById('prodHsCode').value.trim();
         const price = parseFloat(document.getElementById('prodUnitPrice').value) || 0.0;
         const stock = parseInt(document.getElementById('prodStock').value) || 0;
+        const dispatched = parseInt(document.getElementById('prodDispatchedQty').value) || 1;
         const url = document.getElementById('prodUrl').value.trim();
 
         if (!sku || !name) { alert('SKU(바코드)와 상품명은 필수입니다.'); return; }
+
+        const optionRows = document.querySelectorAll('#modalOptionsTableBody tr');
+        const options = [];
+        optionRows.forEach(tr => {
+            const optName = tr.querySelector('.opt-row-name')?.value.trim();
+            const optPrice = parseFloat(tr.querySelector('.opt-row-price')?.value) || 0.0;
+            const optQty = parseInt(tr.querySelector('.opt-row-qty')?.value) || 1;
+            if (optName) {
+                options.push({
+                    option_name: optName,
+                    unit_price: optPrice,
+                    dispatched_quantity: optQty
+                });
+            }
+        });
+
+        if (options.length === 0) {
+            options.push({
+                option_name: name,
+                unit_price: price,
+                dispatched_quantity: dispatched
+            });
+        }
 
         try {
             const res = await fetch('/api/inventory/product', {
@@ -2038,7 +2776,9 @@
                     hs_code: hs,
                     unit_price: price,
                     stock_quantity: stock,
-                    product_url: url
+                    dispatched_quantity: dispatched,
+                    product_url: url,
+                    options: options
                 })
             });
             const data = await res.json();
@@ -2046,10 +2786,74 @@
                 bootstrap.Modal.getInstance(document.getElementById('productModal')).hide();
                 refreshAllData();
             } else {
-                alert('저장 실패: ' + data.error);
+                alert('저장 실패: ' + (data.error || '오류'));
             }
         } catch (e) {
             alert('오류: ' + e.message);
+        }
+    }
+
+    // ==========================================
+    // 3-1. 미등록 상품 알림 및 등록 관리
+    // ==========================================
+    async function loadUnregisteredProducts() {
+        try {
+            const res = await fetch('/api/inventory/unregistered-products');
+            const items = await res.json();
+            const banner = document.getElementById('unregisteredProductsBanner');
+            const countSpan = document.getElementById('unregisteredCount');
+            const listDiv = document.getElementById('unregisteredProductsList');
+
+            if (!banner || !listDiv) return;
+
+            if (items && items.length > 0) {
+                banner.style.display = 'block';
+                if (countSpan) countSpan.textContent = items.length;
+                listDiv.innerHTML = items.map(it => `
+                    <div class="d-inline-flex align-items-center bg-white border border-warning rounded px-2 py-1 shadow-sm gap-2">
+                        <span class="fw-bold text-dark" style="font-size: 13px;">${escapeHtml(it.combined_name || it.product_name)}</span>
+                        <span class="badge bg-secondary">${it.order_count || 1}건 주문</span>
+                        <button type="button" class="btn btn-xs btn-primary py-0 px-2" style="font-size: 11px;" onclick="registerUnregisteredProduct('${escapeJs(it.combined_name || it.product_name)}', '${escapeJs(it.option_name || '')}')">
+                            <i class="fa-solid fa-plus me-1"></i>재고 등록
+                        </button>
+                        <button type="button" class="btn btn-xs btn-outline-secondary py-0 px-1" style="font-size: 11px;" onclick="ignoreUnregisteredProduct(${it.id})" title="무시">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                `).join('');
+            } else {
+                banner.style.display = 'none';
+            }
+        } catch (e) {
+            console.error('Unregistered products load error', e);
+        }
+    }
+
+    function registerUnregisteredProduct(combName, optName) {
+        const tabEl = document.getElementById('tab-inventory');
+        if (tabEl) {
+            new bootstrap.Tab(tabEl).show();
+        }
+        openNewProductModal();
+        document.getElementById('prodName').value = combName;
+        const tbody = document.getElementById('modalOptionsTableBody');
+        if (tbody) {
+            tbody.innerHTML = '';
+            addModalOptionRow(optName || combName, 0.0, 1);
+        }
+        setTimeout(() => {
+            document.getElementById('prodSku').focus();
+        }, 300);
+    }
+
+    async function ignoreUnregisteredProduct(id) {
+        try {
+            await fetch(`/api/inventory/unregistered-products/${id}/ignore`, {
+                method: 'POST'
+            });
+            loadUnregisteredProducts();
+        } catch (e) {
+            alert('무시 처리 오류: ' + e.message);
         }
     }
 
@@ -2230,6 +3034,7 @@
                 document.getElementById('settingCourierName').value = s.courier_name;
                 document.getElementById('settingCustomerCode').value = s.customer_code || '';
                 document.getElementById('settingApiKey').value = s.api_key || '';
+                document.getElementById('settingNardaId').value = s.narda_id || 'calroid';
                 document.getElementById('settingSenderName').value = s.sender_name || '';
                 document.getElementById('settingSenderPhone').value = s.sender_phone || '';
                 document.getElementById('settingSenderAddress').value = s.sender_address || '';
@@ -2271,6 +3076,7 @@
             courier_name: document.getElementById('settingCourierName').value,
             customer_code: document.getElementById('settingCustomerCode').value,
             api_key: document.getElementById('settingApiKey').value,
+            narda_id: document.getElementById('settingNardaId').value,
             sender_name: document.getElementById('settingSenderName').value,
             sender_phone: document.getElementById('settingSenderPhone').value,
             sender_address: document.getElementById('settingSenderAddress').value,

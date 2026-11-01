@@ -45,8 +45,39 @@ def init_db():
         cur.execute("ALTER TABLE products ADD COLUMN unit_price REAL DEFAULT 0.0")
     if 'product_url' not in existing_cols:
         cur.execute("ALTER TABLE products ADD COLUMN product_url TEXT DEFAULT ''")
+    if 'dispatched_quantity' not in existing_cols:
+        cur.execute("ALTER TABLE products ADD COLUMN dispatched_quantity INTEGER DEFAULT 0")
 
 
+
+    # 1-1. 상품 하위 옵션별 출고/단가 마스터 (Product Options)
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS product_options (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER,
+        sku TEXT NOT NULL,
+        option_name TEXT NOT NULL,
+        unit_price REAL DEFAULT 0.0,
+        dispatched_quantity INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    )
+    ''')
+
+    # 1-2. 주문 엑셀에서 발견된 미등록 신규 상품 (Unregistered Products)
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS unregistered_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_name TEXT NOT NULL,
+        option_name TEXT DEFAULT '',
+        combined_name TEXT NOT NULL,
+        order_count INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(combined_name)
+    )
+    ''')
 
     # 2. 세트/옵션 분할 규칙 (Bundle Rules)
     cur.execute('''
@@ -102,6 +133,8 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN customs_validation_status TEXT DEFAULT ''")
     if 'customs_validation_msg' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN customs_validation_msg TEXT DEFAULT ''")
+    if 'invoice_pdf_url' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN invoice_pdf_url TEXT DEFAULT ''")
 
 
     # 4. 분할된 출고 아이템 (Order Items)
@@ -159,13 +192,19 @@ def init_db():
     )
     ''')
 
+    # courier_settings 테이블 컬럼 마이그레이션 (narda_id 추가)
+    cur.execute("PRAGMA table_info(courier_settings)")
+    settings_cols = [row[1] for row in cur.fetchall()]
+    if 'narda_id' not in settings_cols:
+        cur.execute("ALTER TABLE courier_settings ADD COLUMN narda_id TEXT DEFAULT 'calroid'")
+
     # 초기 기본 택배사 설정 확인 및 삽입
     cur.execute('SELECT COUNT(*) as cnt FROM courier_settings')
     if cur.fetchone()['cnt'] == 0:
         cur.execute('''
-        INSERT INTO courier_settings (courier_name, customer_code, api_key, sender_name, sender_phone, sender_address, is_mock)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', ('CJ대한통운', '12345678', 'MOCK_API_KEY_CJ', '프리비 물류센터', '02-1234-5678', '서울특별시 강남구 테헤란로 123 물류센터', 1))
+        INSERT INTO courier_settings (courier_name, customer_code, api_key, narda_id, sender_name, sender_phone, sender_address, is_mock)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', ('나르다', 'TOA', '5a65132fee9b4780c350b1942db432afd3232b30', 'calroid', 'TOA', '02-1234-5678', '서울특별시 강남구 테헤란로 123 물류센터', 1))
 
     conn.commit()
     conn.close()

@@ -1,5 +1,8 @@
 import random
 import time
+import re
+import requests
+import json
 from datetime import datetime
 import openpyxl
 from io import BytesIO
@@ -23,17 +26,128 @@ def generate_mock_tracking_number(courier_name='CJ대한통운'):
     check_digit = sum(int(c) for c in base_no) % 7
     return f"{base_no}{check_digit}"
 
+def call_narda_regist_order(ord_row, items, settings):
+    """
+    나르다(NARDA JP) 주문 등록 및 송장 발급 API 호출
+    http://api.narda-jp.com/api/registOrder
+    """
+    url = "http://api.narda-jp.com/api/registOrder"
+
+    # 전화번호 하이픈 제거
+    tel = re.sub(r'[^0-9]', '', str(ord_row.get('recipient_phone1') or ''))
+    htel = re.sub(r'[^0-9]', '', str(ord_row.get('recipient_phone2') or '')) or tel
+    weight = float(ord_row['weight']) if (ord_row.get('weight') and ord_row['weight'] > 0) else 0.5
+
+    api_items = []
+    for it in items:
+        # 옵션수량 * 구매수량
+        opt_qty = int(it.get('option_quantity') or 1)
+        buy_qty = int(it.get('quantity') or 1)
+        qty = opt_qty * buy_qty
+
+        price = float(it.get('unit_price') or 10.0)
+        hs = str(it.get('hs_code') or '630690').replace('.', '').strip() or '630690'
+        eng_name = (it.get('english_name') or '').strip() or it.get('item_product_name') or 'Product'
+        item_url = it.get('product_url') or ''
+
+        api_items.append({
+            "hs_code": hs,
+            "item_name": eng_name,
+            "item_price": price,
+            "item_cnt": qty,
+            "item_total_price": round(price * qty, 2),
+            "item_detail": None,
+            "item_url": item_url,
+            "item_origin": "JP"
+        })
+
+    if not api_items:
+        api_items.append({
+            "hs_code": "630690",
+            "item_name": ord_row.get('original_product_name') or "Item",
+            "item_price": 10.0,
+            "item_cnt": ord_row.get('original_quantity') or 1,
+            "item_total_price": 10.0 * (ord_row.get('original_quantity') or 1),
+            "item_detail": None,
+            "item_url": "",
+            "item_origin": "JP"
+        })
+
+    # 송하인은 택배설정의 고객사 코드(customer_code) 값으로 전송
+    sender = (settings.get('customer_code') or '').strip() or "TOA"
+    narda_id = (settings.get('narda_id') or '').strip() or "calroid"
+    narda_api_key = (settings.get('api_key') or '').strip() or "5a65132fee9b4780c350b1942db432afd3232b30"
+
+    payload = {
+        "order_no": ord_row['order_no'],
+        "sender": sender,
+        "order_email": "",
+        "recipient": ord_row['recipient_name'],
+        "customs_no": (ord_row.get('customs_id') or '').strip().upper(),
+        "customs_type": "p",
+        "tel": tel,
+        "recipient_htel": htel,
+        "zip_no": ord_row.get('postal_code') or "",
+        "address1": ord_row.get('address') or "",
+        "address2": ord_row.get('shipping_memo') or "문앞에 두고 가세요",
+        "ctns": 1,
+        "service": "NARDA AIR",
+        "volume_list": [
+            {
+                "weight": weight,
+                "volume_width": 0,
+                "volume_height": 0,
+                "volume_length": 0
+            }
+        ],
+        "items": api_items,
+        "narda_id": narda_id,
+        "narda_api_key": narda_api_key
+    }
+
+    try:
+        resp = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=30
+        )
+        res = resp.json()
+        if res.get("resultCode") == 0 and res.get("result"):
+            r = res["result"][0]
+            if r.get("result") == "success":
+                deli_invoice = r.get("deli_invoice")
+                pdf_urls = r.get("url", [])
+                pdf_url = pdf_urls[0] if pdf_urls else ""
+                return {"success": True, "tracking_no": deli_invoice, "pdf_url": pdf_url}
+            else:
+                return {"success": False, "error": r.get("error_msg") or r.get("errorMsg") or "나르다 등록 실패"}
+        else:
+            return {"success": False, "error": res.get("errorMsg") or res.get("error_msg") or "나르다 API 오류"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 def issue_tracking_numbers(order_ids, courier_name=None):
     conn = get_connection()
     cur = conn.cursor()
 
     # 택배사 설정 조회
     cur.execute('SELECT * FROM courier_settings LIMIT 1')
-    settings = cur.fetchone()
-    if not courier_name:
-        courier_name = settings['courier_name'] if settings else 'CJ대한통운'
+    settings_row = cur.fetchone()
+    settings = dict(settings_row) if settings_row else {}
 
+    if not courier_name:
+        courier_name = settings.get('courier_name') or '나르다'
+
+    is_mock = settings.get('is_mock', 1)
     updated_orders = []
+    failed_orders = []
+
+    # 전체 상품 마스터 캐시 (SKU 및 상품명 매칭용)
+    cur.execute('SELECT sku, product_name, option_name, english_name, hs_code, unit_price, product_url FROM products')
+    prod_rows = [dict(r) for r in cur.fetchall()]
+    prod_by_sku = {r['sku']: r for r in prod_rows if r['sku']}
+    prod_by_name = {r['product_name']: r for r in prod_rows if r['product_name']}
 
     for oid in order_ids:
         cur.execute('SELECT * FROM orders WHERE id = ?', (oid,))
@@ -41,30 +155,73 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         if not ord_row:
             continue
 
-        # 이미 송장번호가 있으면 유지하거나 새로 갱신
-        tracking_no = ord_row['tracking_no']
+        ord_dict = dict(ord_row)
+        target_courier = ord_dict.get('courier') or courier_name
+        tracking_no = ord_dict.get('tracking_no')
+        pdf_url = ord_dict.get('invoice_pdf_url') or ''
+
         if not tracking_no:
-            # 실제 API 연동 시 여기서 requests.post(courier_api_url, ...) 호출
-            # settings['is_mock'] == 1 이면 가상 채번
-            tracking_no = generate_mock_tracking_number(courier_name)
+            # 나르다 실 API 연동 호출
+            if target_courier == '나르다' and is_mock == 0:
+                cur.execute('''
+                    SELECT * FROM order_items WHERE order_id = ?
+                ''', (oid,))
+                raw_items = [dict(r) for r in cur.fetchall()]
+                
+                # 재고 마스터의 영문명, HS코드, 단가 매칭 보완
+                items = []
+                for it in raw_items:
+                    matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
+                    if matched_prod:
+                        it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
+                        it['hs_code'] = matched_prod.get('hs_code') or '630690'
+                        it['unit_price'] = matched_prod.get('unit_price') or 10.0
+                        it['product_url'] = matched_prod.get('product_url') or ''
+                    else:
+                        it['english_name'] = it.get('item_product_name') or 'Product'
+                        it['hs_code'] = '630690'
+                        it['unit_price'] = 10.0
+                        it['product_url'] = ''
+                    items.append(it)
+
+                api_res = call_narda_regist_order(ord_dict, items, settings)
+                if api_res.get('success'):
+                    tracking_no = api_res.get('tracking_no')
+                    pdf_url = api_res.get('pdf_url', '')
+                else:
+                    err_msg = api_res.get('error') or '등록 실패'
+                    print(f"나르다 API 발급 실패 (주문번호 {ord_dict['order_no']}): {err_msg}")
+                    failed_orders.append({
+                        'order_id': oid,
+                        'order_no': ord_dict['order_no'],
+                        'recipient_name': ord_dict['recipient_name'],
+                        'error': err_msg
+                    })
+                    continue
+            else:
+                tracking_no = generate_mock_tracking_number(target_courier)
 
         cur.execute('''
             UPDATE orders
-            SET tracking_no = ?, courier = ?, status = '송장발급'
+            SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '송장발급'
             WHERE id = ?
-        ''', (tracking_no, courier_name, oid))
+        ''', (tracking_no, target_courier, pdf_url, oid))
 
         updated_orders.append({
             'order_id': oid,
-            'order_no': ord_row['order_no'],
-            'recipient_name': ord_row['recipient_name'],
-            'courier': courier_name,
-            'tracking_no': tracking_no
+            'order_no': ord_dict['order_no'],
+            'recipient_name': ord_dict['recipient_name'],
+            'courier': target_courier,
+            'tracking_no': tracking_no,
+            'invoice_pdf_url': pdf_url
         })
 
     conn.commit()
     conn.close()
-    return updated_orders
+    return {
+        'updated_orders': updated_orders,
+        'failed_orders': failed_orders
+    }
 
 def complete_dispatch(order_ids):
     """
