@@ -45,6 +45,86 @@ def generate_sku(product_name, option_name):
         sku = f"SKU-{abs(hash(product_name + option_name)) % 100000:05d}"
     return sku
 
+def find_matching_barcode(product_name, option_name, conn=None):
+    """
+    재고관리(products) 테이블에서 상품명/옵션명 또는 합친 명칭과 일치하는 바코드(SKU)를 조회합니다.
+    """
+    combined = f"{product_name} {option_name}".strip() if (option_name and option_name != '단일옵션') else product_name
+    clean_combined = re.sub(r'\s+', '', combined)
+    clean_p = re.sub(r'\s+', '', product_name)
+    clean_o = re.sub(r'\s+', '', option_name) if option_name != '단일옵션' else ''
+
+    close_after = False
+    if not conn:
+        from database import get_connection
+        conn = get_connection()
+        close_after = True
+
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT sku, product_name, option_name FROM products')
+        rows = [dict(r) for r in cur.fetchall()]
+
+        # 1. 완전 일치 (합친 명칭 or 상품명)
+        for r in rows:
+            p_name = r['product_name'] or ''
+            p_opt = r['option_name'] or ''
+            p_combined = f"{p_name} {p_opt}".strip() if p_opt else p_name
+            if p_combined == combined or p_name == combined:
+                return r['sku']
+
+        # 2. product_name + option_name 일치
+        for r in rows:
+            p_name = r['product_name'] or ''
+            p_opt = r['option_name'] or ''
+            if p_name == product_name and (p_opt == option_name or not p_opt):
+                return r['sku']
+
+        # 3. 공백 제거 후 일치
+        for r in rows:
+            p_name = re.sub(r'\s+', '', r['product_name'] or '')
+            p_opt = re.sub(r'\s+', '', r['option_name'] or '')
+            p_comb = (p_name + p_opt) if p_opt else p_name
+            if p_comb == clean_combined or p_name == clean_combined:
+                return r['sku']
+
+        # 4. 키워드 부분 일치
+        for r in rows:
+            p_name = re.sub(r'\s+', '', r['product_name'] or '')
+            if len(p_name) >= 3 and (p_name in clean_combined or clean_combined in p_name):
+                if clean_o:
+                    if clean_o in p_name or (r['option_name'] and re.sub(r'\s+', '', r['option_name']) in clean_o):
+                        return r['sku']
+                else:
+                    return r['sku']
+
+    finally:
+        if close_after:
+            conn.close()
+
+    return None
+
+def sync_order_items_sku(conn=None):
+    """모든 order_items의 상품명/옵션명에 맞추어 재고관리(products)의 바코드(SKU)로 최신 동기화"""
+    close_after = False
+    if not conn:
+        from database import get_connection
+        conn = get_connection()
+        close_after = True
+
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT id, item_product_name, item_option_name, sku FROM order_items')
+        items = cur.fetchall()
+        for it in items:
+            matched_sku = find_matching_barcode(it['item_product_name'], it['item_option_name'], conn)
+            if matched_sku and matched_sku != it['sku']:
+                cur.execute('UPDATE order_items SET sku = ? WHERE id = ?', (matched_sku, it['id']))
+        conn.commit()
+    finally:
+        if close_after:
+            conn.close()
+
 def split_order_items(product_name, option_name, quantity, conn=None):
     product_name = str(product_name).strip() if pd.notna(product_name) else '상품명미상'
     option_name = str(option_name).strip() if pd.notna(option_name) else '단일옵션'
@@ -69,7 +149,8 @@ def split_order_items(product_name, option_name, quantity, conn=None):
             for r in rules:
                 sub_p = r['target_product_name'] or product_name
                 sub_o = r['target_option_name'] or option_name
-                sub_sku = r['target_sku'] or generate_sku(sub_p, sub_o)
+                matched_sku = r['target_sku'] or find_matching_barcode(sub_p, sub_o, conn)
+                sub_sku = matched_sku or generate_sku(sub_p, sub_o)
                 sub_qty = qty * (r['multiplier'] or 1)
                 items.append({
                     'item_product_name': sub_p,
@@ -85,7 +166,8 @@ def split_order_items(product_name, option_name, quantity, conn=None):
     if '+' in option_name:
         parts = [p.strip() for p in option_name.split('+') if p.strip()]
         for p in parts:
-            sku = generate_sku(product_name, p)
+            matched_sku = find_matching_barcode(product_name, p, conn)
+            sku = matched_sku or generate_sku(product_name, p)
             items.append({
                 'item_product_name': product_name,
                 'item_option_name': p,
@@ -104,7 +186,8 @@ def split_order_items(product_name, option_name, quantity, conn=None):
             except:
                 opt_qty = 1
 
-        sku = generate_sku(product_name, option_name)
+        matched_sku = find_matching_barcode(product_name, option_name, conn)
+        sku = matched_sku or generate_sku(product_name, option_name)
         items.append({
             'item_product_name': product_name,
             'item_option_name': option_name,

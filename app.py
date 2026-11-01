@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template, send_file
 
@@ -130,7 +131,9 @@ def get_orders():
     status = request.args.get('status', '').strip()
     courier = request.args.get('courier', '').strip()
     search = request.args.get('search', '').strip()
-    limit = int(request.args.get('limit', 300))
+    search_field = request.args.get('search_field', 'all').strip()
+    sort_by = request.args.get('sort_by', 'single_barcode_asc').strip()
+    limit_param = request.args.get('limit', '').strip()
 
     conn = get_connection()
     cur = conn.cursor()
@@ -149,16 +152,44 @@ def get_orders():
         params.append(courier)
 
     if search:
-        query += ''' AND (
-            order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ? 
-            OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ?
-            OR original_product_name LIKE ? OR original_option_name LIKE ?
-        )'''
         wild = f'%{search}%'
-        params.extend([wild, wild, wild, wild, wild, wild, wild, wild])
+        if search_field == 'product_name':
+            query += ''' AND (
+                original_product_name LIKE ? OR original_option_name LIKE ? 
+                OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ?)
+            )'''
+            params.extend([wild, wild, wild, wild])
+        elif search_field == 'sku':
+            query += ' AND (id IN (SELECT order_id FROM order_items WHERE sku LIKE ?))'
+            params.append(wild)
+        elif search_field == 'recipient_name':
+            query += ' AND recipient_name LIKE ?'
+            params.append(wild)
+        elif search_field == 'order_no':
+            query += ' AND order_no LIKE ?'
+            params.append(wild)
+        elif search_field == 'phone':
+            query += ' AND (recipient_phone1 LIKE ? OR recipient_phone2 LIKE ?)'
+            params.extend([wild, wild])
+        elif search_field == 'customs_id':
+            query += ' AND customs_id LIKE ?'
+            params.append(wild)
+        elif search_field == 'address':
+            query += ' AND (address LIKE ? OR postal_code LIKE ?)'
+            params.extend([wild, wild])
+        else: # all
+            query += ''' AND (
+                order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ? 
+                OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ? OR postal_code LIKE ?
+                OR original_product_name LIKE ? OR original_option_name LIKE ?
+                OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?)
+            )'''
+            params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
 
-    query += ' ORDER BY id DESC LIMIT ?'
-    params.append(limit)
+    query += ' ORDER BY id DESC'
+    if limit_param and limit_param.isdigit():
+        query += ' LIMIT ?'
+        params.append(int(limit_param))
 
     cur.execute(query, params)
     orders = [dict(row) for row in cur.fetchall()]
@@ -169,13 +200,35 @@ def get_orders():
         o['items'] = [dict(it) for it in cur.fetchall()]
 
     conn.close()
+
+    # 정렬: 단일 상품 주문(items 개수 1개)의 바코드(SKU) 숫자 오름차순 우선 정렬
+    if sort_by == 'single_barcode_asc':
+        def extract_sku_sort_key(sku_str):
+            if not sku_str:
+                return (2, 999999999999, '')
+            digits = re.findall(r'\d+', str(sku_str))
+            if digits:
+                return (0, int(digits[0]), str(sku_str))
+            return (1, 0, str(sku_str))
+
+        def order_sort_key(o):
+            items = o.get('items', [])
+            item_cnt = len(items)
+            is_single = 0 if item_cnt == 1 else 1
+            primary_sku = items[0]['sku'] if items else ''
+            sku_type, sku_num, sku_raw = extract_sku_sort_key(primary_sku)
+            # 단일 품목 우선 -> 바코드 숫자 오름차순 -> 바코드 문자열 오름차순 -> 주문 ID 역순
+            return (is_single, sku_type, sku_num, sku_raw, -o['id'])
+
+        orders.sort(key=order_sort_key)
+
     return jsonify(orders)
 
 @app.route('/api/dispatched-orders', methods=['GET'])
 def get_dispatched_orders():
     courier = request.args.get('courier', '').strip()
     search = request.args.get('search', '').strip()
-    limit = int(request.args.get('limit', 300))
+    limit_param = request.args.get('limit', '').strip()
 
     conn = get_connection()
     cur = conn.cursor()
@@ -192,12 +245,15 @@ def get_dispatched_orders():
             order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ? 
             OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ?
             OR original_product_name LIKE ? OR original_option_name LIKE ?
+            OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?)
         )'''
         wild = f'%{search}%'
-        params.extend([wild, wild, wild, wild, wild, wild, wild, wild])
+        params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
 
-    query += ' ORDER BY COALESCE(dispatched_at, created_at) DESC, id DESC LIMIT ?'
-    params.append(limit)
+    query += ' ORDER BY COALESCE(dispatched_at, created_at) DESC, id DESC'
+    if limit_param and limit_param.isdigit():
+        query += ' LIMIT ?'
+        params.append(int(limit_param))
 
     cur.execute(query, params)
     orders = [dict(row) for row in cur.fetchall()]
@@ -223,6 +279,244 @@ def update_order_weight(order_id):
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'weight': weight})
+
+@app.route('/api/orders/<int:order_id>/edit', methods=['POST'])
+def edit_order(order_id):
+    data = request.get_json() or {}
+    recipient_name = data.get('recipient_name', '').strip()
+    recipient_phone1 = data.get('recipient_phone1', '').strip()
+    recipient_phone2 = data.get('recipient_phone2', '').strip()
+    customs_id = data.get('customs_id', '').strip().upper()
+    postal_code = data.get('postal_code', '').strip()
+    address = data.get('address', '').strip()
+    shipping_memo = data.get('shipping_memo', '').strip()
+    try:
+        weight = float(data.get('weight', 0.0) or 0.0)
+    except:
+        weight = 0.0
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        UPDATE orders 
+        SET recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?,
+            customs_id = ?, postal_code = ?, address = ?, shipping_memo = ?, weight = ?
+        WHERE id = ?
+    ''', (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code, address, shipping_memo, weight, order_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success', 'message': '주문 정보가 성공적으로 수정되었습니다.'})
+
+@app.route('/api/orders/check-dispatch-availability', methods=['POST'])
+def check_dispatch_availability():
+    """
+    재고관리 테이블(products)의 현재 재고를 기준으로 목록 상단부터 순차 가상 차감하여
+    각 주문별 출고 가능 여부('출고가능', '부분부족', '재고부족')를 판별합니다.
+    """
+    data = request.get_json() or {}
+    order_ids = data.get('order_ids', [])
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute('SELECT sku, stock_quantity FROM products')
+    stock_map = {r['sku']: (r['stock_quantity'] or 0) for r in cur.fetchall() if r['sku']}
+
+    if order_ids:
+        placeholders = ','.join('?' for _ in order_ids)
+        cur.execute(f"SELECT * FROM orders WHERE id IN ({placeholders})", order_ids)
+        raw_orders = {r['id']: dict(r) for r in cur.fetchall()}
+        orders = [raw_orders[oid] for oid in order_ids if oid in raw_orders]
+    else:
+        cur.execute("SELECT * FROM orders WHERE status IN ('주문접수', '송장발급') ORDER BY id DESC")
+        orders = [dict(r) for r in cur.fetchall()]
+
+    availability_results = {}
+    for o in orders:
+        cur.execute('SELECT * FROM order_items WHERE order_id = ?', (o['id'],))
+        items = [dict(it) for it in cur.fetchall()]
+
+        all_available = True
+        any_available = False
+        item_details = []
+
+        for it in items:
+            sku = it['sku']
+            opt_qty = it.get('option_quantity') or 1
+            buy_qty = it.get('quantity') or 1
+            needed = opt_qty * buy_qty
+
+            current_stock = stock_map.get(sku, 0)
+            if current_stock >= needed:
+                stock_map[sku] -= needed
+                any_available = True
+                item_details.append({
+                    'sku': sku,
+                    'needed': needed,
+                    'available': True,
+                    'remaining': stock_map[sku]
+                })
+            else:
+                all_available = False
+                item_details.append({
+                    'sku': sku,
+                    'needed': needed,
+                    'available': False,
+                    'remaining': current_stock
+                })
+
+        if not items:
+            disp_status = '출고불가'
+        elif all_available:
+            disp_status = '출고가능'
+        elif any_available:
+            disp_status = '부분부족'
+        else:
+            disp_status = '재고부족'
+
+        availability_results[o['id']] = {
+            'status': disp_status,
+            'items': item_details
+        }
+
+    conn.close()
+    return jsonify({'status': 'success', 'results': availability_results})
+
+@app.route('/api/orders/validate-customs', methods=['POST'])
+def validate_customs_batch():
+    """
+    gsiexpress.com/pcc_chk.php 관세청 연동 서비스를 통해 
+    개인통관고유부호 유효성(성명, 부호, 연락처, 우편번호 일치 여부)을 일괄 검증합니다.
+    """
+    import requests
+    import bs4
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    data = request.get_json() or {}
+    order_ids = data.get('order_ids', [])
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    if order_ids:
+        placeholders = ','.join('?' for _ in order_ids)
+        cur.execute(f'''
+            SELECT id, order_no, recipient_name, customs_id, recipient_phone1, postal_code
+            FROM orders WHERE id IN ({placeholders})
+        ''', order_ids)
+    else:
+        cur.execute('''
+            SELECT id, order_no, recipient_name, customs_id, recipient_phone1, postal_code
+            FROM orders WHERE status IN ('주문접수', '송장발급')
+        ''')
+
+    target_orders = [dict(r) for r in cur.fetchall()]
+    if not target_orders:
+        conn.close()
+        return jsonify({'status': 'success', 'message': '검증할 주문이 없습니다.', 'results': []})
+
+    results = []
+    batch_size = 50
+
+    for i in range(0, len(target_orders), batch_size):
+        batch = target_orders[i:i + batch_size]
+        lines = []
+        order_map = {}
+
+        for o in batch:
+            name = (o['recipient_name'] or '').strip()
+            cid = (o['customs_id'] or '').strip().upper()
+            phone = (o['recipient_phone1'] or '').strip()
+            pcode = (o['postal_code'] or '').strip()
+
+            line = f"{name}/{cid}/{phone}/{pcode}"
+            lines.append(line)
+
+            key = (name, cid)
+            if key not in order_map:
+                order_map[key] = []
+            order_map[key].append(o['id'])
+
+        payload = {
+            'action_type': 'query',
+            'chk_data': '\n'.join(lines)
+        }
+
+        try:
+            resp = requests.post('https://www.gsiexpress.com/pcc_chk.php', data=payload, timeout=25, verify=False)
+            soup = bs4.BeautifulSoup(resp.content.decode('utf-8', 'ignore'), 'html.parser')
+            rows = soup.find_all('tr')
+
+            found_ids = set()
+            for tr in rows:
+                tds = [td.text.strip() for td in tr.find_all('td')]
+                if len(tds) >= 6:
+                    res_name = tds[0]
+                    res_cid = tds[1].upper()
+                    res_status = tds[4] # '정상', '오류', '장애'
+                    res_msg = tds[5] if len(tds) > 5 else ''
+
+                    matched_ids = order_map.get((res_name, res_cid), [])
+                    for oid in matched_ids:
+                        cur.execute('''
+                            UPDATE orders 
+                            SET customs_validation_status = ?, customs_validation_msg = ?
+                            WHERE id = ?
+                        ''', (res_status, res_msg, oid))
+                        results.append({
+                            'order_id': oid,
+                            'recipient_name': res_name,
+                            'customs_id': res_cid,
+                            'status': res_status,
+                            'message': res_msg
+                        })
+                        found_ids.add(oid)
+
+            for o in batch:
+                if o['id'] not in found_ids:
+                    cid = (o['customs_id'] or '').strip().upper()
+                    if not cid.startswith('P') or len(cid) != 13:
+                        fail_status = '오류'
+                        fail_msg = '13자리수 오류 또는 P시작 형식 오류' if len(cid) != 13 else 'P시작 형식 오류'
+                    else:
+                        fail_status = '장애'
+                        fail_msg = '검증 서버 응답 없음'
+
+                    cur.execute('''
+                        UPDATE orders 
+                        SET customs_validation_status = ?, customs_validation_msg = ?
+                        WHERE id = ?
+                    ''', (fail_status, fail_msg, o['id']))
+                    results.append({
+                        'order_id': o['id'],
+                        'recipient_name': o['recipient_name'],
+                        'customs_id': o['customs_id'],
+                        'status': fail_status,
+                        'message': fail_msg
+                    })
+
+        except Exception as e:
+            for o in batch:
+                cur.execute('''
+                    UPDATE orders 
+                    SET customs_validation_status = ?, customs_validation_msg = ?
+                    WHERE id = ?
+                ''', ('장애', f'통신 오류: {str(e)}', o['id']))
+                results.append({
+                    'order_id': o['id'],
+                    'status': '장애',
+                    'message': str(e)
+                })
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        'status': 'success',
+        'total_checked': len(results),
+        'results': results
+    })
 
 @app.route('/api/orders/delete', methods=['POST'])
 def delete_orders():
@@ -576,6 +870,9 @@ def upload_products_excel():
 
             saved_count += 1
 
+        from excel_processor import sync_order_items_sku
+        sync_order_items_sku(conn)
+
         conn.commit()
         conn.close()
         return jsonify({'status': 'success', 'message': f"{saved_count}개 상품이 엑셀에서 성공적으로 등록/반영되었습니다."})
@@ -610,6 +907,10 @@ def save_product():
             INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, product_url)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (sku, product_name, '', english_name, hs_code, unit_price, stock_quantity, product_url))
+
+    # 주문 품목들의 바코드 동기화
+    from excel_processor import sync_order_items_sku
+    sync_order_items_sku(conn)
 
     conn.commit()
     conn.close()

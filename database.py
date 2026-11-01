@@ -86,6 +86,8 @@ def init_db():
         upload_batch TEXT,
         dispatched_at TEXT DEFAULT '',
         weight REAL DEFAULT 0.0,
+        customs_validation_status TEXT DEFAULT '',
+        customs_validation_msg TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -96,6 +98,10 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN dispatched_at TEXT DEFAULT ''")
     if 'weight' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN weight REAL DEFAULT 0.0")
+    if 'customs_validation_status' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN customs_validation_status TEXT DEFAULT ''")
+    if 'customs_validation_msg' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN customs_validation_msg TEXT DEFAULT ''")
 
 
     # 4. 분할된 출고 아이템 (Order Items)
