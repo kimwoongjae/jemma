@@ -3,10 +3,19 @@ import time
 import re
 import requests
 import json
+import concurrent.futures
 from datetime import datetime
 import openpyxl
 from io import BytesIO
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from database import get_connection
+
+# 고속 HTTP 세션 및 연결 풀 설정 (Keep-Alive 및 재시도)
+_narda_session = requests.Session()
+_narda_adapter = HTTPAdapter(pool_connections=30, pool_maxsize=50, max_retries=Retry(total=2, backoff_factor=0.3))
+_narda_session.mount("http://", _narda_adapter)
+_narda_session.mount("https://", _narda_adapter)
 
 COURIER_PREFIX = {
     '나르다': '3054',
@@ -112,11 +121,11 @@ def call_narda_regist_order(ord_row, items, settings):
     }
 
     try:
-        resp = requests.post(
+        resp = _narda_session.post(
             url,
             headers={"Content-Type": "application/json"},
             json=payload,
-            timeout=30
+            timeout=25
         )
         res = resp.json()
         if res.get("resultCode") == 0 and res.get("result"):
@@ -154,6 +163,8 @@ def issue_tracking_numbers(order_ids, courier_name=None):
     prod_by_sku = {r['sku']: r for r in prod_rows if r['sku']}
     prod_by_name = {r['product_name']: r for r in prod_rows if r['product_name']}
 
+    # 1. 대상 주문 및 품목 사전 조회
+    orders_data = []
     for oid in order_ids:
         cur.execute('SELECT * FROM orders WHERE id = ?', (oid,))
         ord_row = cur.fetchone()
@@ -163,54 +174,88 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         ord_dict = dict(ord_row)
         existing_tracking = ord_dict.get('tracking_no') or ''
         existing_pdf = ord_dict.get('invoice_pdf_url') or ''
-        tracking_no = None
-        pdf_url = ''
 
-        # 나르다 실 API 연동 호출
         if target_courier == '나르다' and is_mock == 0:
             if existing_tracking and existing_pdf and existing_tracking.startswith('30'):
-                tracking_no = existing_tracking
-                pdf_url = existing_pdf
-            else:
-                cur.execute('SELECT * FROM order_items WHERE order_id = ?', (oid,))
-                raw_items = [dict(r) for r in cur.fetchall()]
+                orders_data.append({
+                    'oid': oid,
+                    'ord_dict': ord_dict,
+                    'items': [],
+                    'is_cached': True,
+                    'tracking_no': existing_tracking,
+                    'pdf_url': existing_pdf
+                })
+                continue
 
-                # 재고 마스터의 영문명, HS코드, 단가 매칭 보완
-                items = []
-                for it in raw_items:
-                    matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
-                    if matched_prod:
-                        it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
-                        it['hs_code'] = matched_prod.get('hs_code') or '630690'
-                        it['unit_price'] = matched_prod.get('unit_price') or 10.0
-                        it['product_url'] = matched_prod.get('product_url') or ''
-                    else:
-                        it['english_name'] = it.get('item_product_name') or 'Product'
-                        it['hs_code'] = '630690'
-                        it['unit_price'] = 10.0
-                        it['product_url'] = ''
-                    items.append(it)
+            cur.execute('SELECT * FROM order_items WHERE order_id = ?', (oid,))
+            raw_items = [dict(r) for r in cur.fetchall()]
 
-                api_res = call_narda_regist_order(ord_dict, items, settings)
-                if api_res.get('success'):
-                    tracking_no = api_res.get('tracking_no')
-                    pdf_url = api_res.get('pdf_url', '')
+            items = []
+            for it in raw_items:
+                matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
+                if matched_prod:
+                    it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
+                    it['hs_code'] = matched_prod.get('hs_code') or '630690'
+                    it['unit_price'] = matched_prod.get('unit_price') or 10.0
+                    it['product_url'] = matched_prod.get('product_url') or ''
                 else:
-                    err_msg = api_res.get('error') or '등록 실패'
-                    print(f"나르다 API 발급 실패 (주문번호 {ord_dict['order_no']}): {err_msg}")
-                    failed_orders.append({
-                        'order_id': oid,
-                        'order_no': ord_dict['order_no'],
-                        'recipient_name': ord_dict['recipient_name'],
-                        'error': err_msg
-                    })
-                    continue
-        else:
-            # 모의 발급 모드
-            tracking_no = generate_mock_tracking_number(target_courier)
-            pdf_url = ''
+                    it['english_name'] = it.get('item_product_name') or 'Product'
+                    it['hs_code'] = '630690'
+                    it['unit_price'] = 10.0
+                    it['product_url'] = ''
+                items.append(it)
 
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+            orders_data.append({
+                'oid': oid,
+                'ord_dict': ord_dict,
+                'items': items,
+                'is_cached': False
+            })
+        else:
+            orders_data.append({
+                'oid': oid,
+                'ord_dict': ord_dict,
+                'items': [],
+                'is_cached': False,
+                'is_mock': True
+            })
+
+    # 2. 나르다 실 API 병렬 동시 호출 (최대 10개 스레드로 초고속 전송)
+    def call_api_single(item):
+        if item.get('is_cached'):
+            return (item['oid'], item['ord_dict'], {
+                'success': True,
+                'tracking_no': item['tracking_no'],
+                'pdf_url': item['pdf_url']
+            })
+        if item.get('is_mock'):
+            mock_no = generate_mock_tracking_number(target_courier)
+            return (item['oid'], item['ord_dict'], {'success': True, 'tracking_no': mock_no, 'pdf_url': ''})
+
+        api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
+        return (item['oid'], item['ord_dict'], api_res)
+
+    workers_count = min(10, len(orders_data)) if orders_data else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers_count) as executor:
+        api_results = list(executor.map(call_api_single, orders_data))
+
+    # 3. 결과 DB 일괄 반영 및 재고 차감 처리 (메인 스레드 안전 트랜잭션)
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    for oid, ord_dict, api_res in api_results:
+        if not api_res.get('success'):
+            err_msg = api_res.get('error') or '등록 실패'
+            print(f"나르다 API 발급 실패 (주문번호 {ord_dict['order_no']}): {err_msg}")
+            failed_orders.append({
+                'order_id': oid,
+                'order_no': ord_dict['order_no'],
+                'recipient_name': ord_dict['recipient_name'],
+                'error': err_msg
+            })
+            continue
+
+        tracking_no = api_res.get('tracking_no')
+        pdf_url = api_res.get('pdf_url', '')
+
         cur.execute('''
             UPDATE orders
             SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '출고완료', dispatched_at = ?
