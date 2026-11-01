@@ -209,6 +209,21 @@ def get_dispatched_orders():
     conn.close()
     return jsonify(orders)
 
+@app.route('/api/orders/<int:order_id>/weight', methods=['POST'])
+def update_order_weight(order_id):
+    data = request.get_json() or {}
+    try:
+        weight = float(data.get('weight', 0.0) or 0.0)
+    except:
+        weight = 0.0
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('UPDATE orders SET weight = ? WHERE id = ?', (weight, order_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success', 'weight': weight})
+
 @app.route('/api/orders/delete', methods=['POST'])
 def delete_orders():
     data = request.get_json() or {}

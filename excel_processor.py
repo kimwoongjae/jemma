@@ -75,6 +75,7 @@ def split_order_items(product_name, option_name, quantity, conn=None):
                     'item_product_name': sub_p,
                     'item_option_name': sub_o,
                     'sku': sub_sku,
+                    'option_quantity': r['multiplier'] or 1,
                     'quantity': sub_qty
                 })
             return items
@@ -89,15 +90,26 @@ def split_order_items(product_name, option_name, quantity, conn=None):
                 'item_product_name': product_name,
                 'item_option_name': p,
                 'sku': sku,
+                'option_quantity': 1,
                 'quantity': qty
             })
     else:
-        # 단일 품목
+        # 단일 품목 (옵션명에 숫자가 있는 경우 옵션 수량 인식, 예: '4', '4봉', '4개')
+        import re
+        opt_qty = 1
+        num_match = re.match(r'^(\d+)\s*(개|봉|입|세트|box|박스)?$', option_name)
+        if num_match:
+            try:
+                opt_qty = int(num_match.group(1))
+            except:
+                opt_qty = 1
+
         sku = generate_sku(product_name, option_name)
         items.append({
             'item_product_name': product_name,
             'item_option_name': option_name,
             'sku': sku,
+            'option_quantity': opt_qty,
             'quantity': qty
         })
 
@@ -217,10 +229,10 @@ def save_orders_to_db(parsed_data, batch_name):
 
             cur.execute('''
                 INSERT INTO order_items (
-                    order_id, order_no, sku, item_product_name, item_option_name, quantity, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    order_id, order_no, sku, item_product_name, item_option_name, option_quantity, quantity, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                order_id, ord_data['order_no'], it['sku'], it['item_product_name'], it['item_option_name'], it['quantity'], '준비중'
+                order_id, ord_data['order_no'], it['sku'], it['item_product_name'], it['item_option_name'], it.get('option_quantity', 1), it['quantity'], '준비중'
             ))
             item_count += 1
 

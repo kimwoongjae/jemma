@@ -137,7 +137,7 @@ def export_shipping_excel(order_ids=None):
     ws.title = "발송처리결과"
 
     headers = [
-        "주문번호", "발송일시", "택배사", "송장번호", "배송방법", "상품명", "옵션이름", "상품수량",
+        "주문번호", "발송일시", "택배사", "송장번호", "무게(kg)", "배송방법", "상품명", "옵션이름", "상품수량",
         "수취인이름", "수취인전화번호1", "수취인전화번호2", "개인통관부호", "수취인우편번호", "수취인주소", "배송메세지", "처리상태"
     ]
     ws.append(headers)
@@ -148,6 +148,7 @@ def export_shipping_excel(order_ids=None):
             o['dispatched_at'] or '',
             o['courier'] or 'CJ대한통운',
             o['tracking_no'] or '',
+            o['weight'] if ('weight' in o.keys() and o['weight']) else 0.0,
             o['shipping_method'] or '택배',
             o['original_product_name'] or '',
             o['original_option_name'] or '',

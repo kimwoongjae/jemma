@@ -343,25 +343,27 @@
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
                     <div class="table-responsive">
-                        <table class="table table-hover table-custom align-middle mb-0" id="ordersTable">
-                            <thead>
+                        <table class="table table-bordered table-hover align-middle mb-0" id="ordersTable">
+                            <thead class="table-light">
                                 <tr>
                                     <th style="width: 40px;" class="text-center">
                                         <input type="checkbox" class="form-check-input" id="checkAllOrders" onchange="toggleSelectAllOrders(this)">
                                     </th>
+                                    <th style="width: 85px;" class="text-center">무게 (kg)</th>
                                     <th>주문번호</th>
                                     <th>수취인 / 연락처</th>
                                     <th>통관부호</th>
                                     <th>배송지 주소</th>
-                                    <th>주문 원본 (상품/옵션/수량)</th>
-                                    <th>분할 출고 품목 (SKU)</th>
+                                    <th>상품명 + 옵션명 (출고 품목)</th>
+                                    <th class="text-center" style="width: 80px;">옵션 수량</th>
+                                    <th class="text-center" style="width: 80px;">구매 수량</th>
                                     <th>택배사 / 송장번호</th>
-                                    <th>상태</th>
+                                    <th class="text-center" style="width: 85px;">상태</th>
                                 </tr>
                             </thead>
                             <tbody id="ordersTableBody">
                                 <tr>
-                                    <td colspan="9" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
+                                    <td colspan="11" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -425,26 +427,28 @@
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
                     <div class="table-responsive">
-                        <table class="table table-hover table-custom align-middle mb-0" id="dispatchedTable">
-                            <thead>
+                        <table class="table table-bordered table-hover align-middle mb-0" id="dispatchedTable">
+                            <thead class="table-light">
                                 <tr>
                                     <th style="width: 40px;" class="text-center">
                                         <input type="checkbox" class="form-check-input" id="checkAllDispatched" onchange="toggleSelectAllDispatched(this)">
                                     </th>
+                                    <th style="width: 85px;" class="text-center">무게 (kg)</th>
                                     <th>주문번호</th>
                                     <th>발송 일시</th>
                                     <th>수취인 / 연락처</th>
                                     <th>통관부호</th>
                                     <th>배송지 주소</th>
-                                    <th>택배사</th>
-                                    <th>송장번호</th>
-                                    <th>출고 완료 품목 (SKU)</th>
-                                    <th class="text-center">상태</th>
+                                    <th>상품명 + 옵션명 (출고 품목)</th>
+                                    <th class="text-center" style="width: 80px;">옵션 수량</th>
+                                    <th class="text-center" style="width: 80px;">구매 수량</th>
+                                    <th>택배사 / 송장번호</th>
+                                    <th class="text-center" style="width: 85px;">상태</th>
                                 </tr>
                             </thead>
                             <tbody id="dispatchedTableBody">
                                 <tr>
-                                    <td colspan="10" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
+                                    <td colspan="12" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -612,8 +616,8 @@
                                     <th>상품명</th>
                                     <th>영문명</th>
                                     <th>HS코드</th>
+                                    <th class="text-center">재고 수량</th>
                                     <th class="text-end">단가 ($)</th>
-                                    <th class="text-center">현재 재고</th>
                                     <th class="text-center">상품 URL</th>
                                     <th class="text-center" style="width: 100px;">관리</th>
 
@@ -1128,17 +1132,29 @@
         }
     }
 
+    async function saveOrderWeight(orderId, val) {
+        const weight = parseFloat(val) || 0.0;
+        try {
+            await fetch(`/api/orders/${orderId}/weight`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ weight: weight })
+            });
+        } catch (e) {
+            console.error('Weight save error', e);
+        }
+    }
+
     function renderOrdersTable(orders) {
         const tbody = document.getElementById('ordersTableBody');
         tbody.innerHTML = '';
         if (!orders || orders.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="9" class="text-center py-5 text-muted">조건에 일치하는 주문 데이터가 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="11" class="text-center py-5 text-muted">조건에 일치하는 주문 데이터가 없습니다.</td></tr>`;
             updateOrderSelectionCount();
             return;
         }
 
         orders.forEach(o => {
-            const tr = document.createElement('tr');
             let statusBadge = '<span class="badge bg-secondary">주문접수</span>';
             if (o.status === '송장발급') statusBadge = '<span class="badge bg-info text-dark">송장발급</span>';
             else if (o.status === '출고완료') statusBadge = '<span class="badge bg-success">출고완료</span>';
@@ -1152,44 +1168,78 @@
                 courierBadge = `<span class="badge bg-danger text-white">우체국택배</span>`;
             }
 
-            const splitItemsHtml = (o.items || []).map(it => `
-                <div class="small py-0.5">
-                    <i class="fa-solid fa-angle-right text-muted me-1"></i>
-                    <strong>${it.item_option_name}</strong> : ${it.quantity}개
-                    ${it.stock_deducted ? '<span class="badge bg-success-subtle text-success py-0 px-1">차감됨</span>' : '<span class="badge bg-secondary-subtle text-muted py-0 px-1">대기</span>'}
-                </div>
-            `).join('');
+            const items = (o.items && o.items.length > 0) ? o.items : [{
+                item_product_name: o.original_product_name,
+                item_option_name: o.original_option_name,
+                sku: '미지정',
+                option_quantity: 1,
+                quantity: o.original_quantity || 1,
+                stock_deducted: 0
+            }];
+            const rowCount = items.length;
 
-            tr.innerHTML = `
-                <td class="text-center">
-                    <input type="checkbox" class="form-check-input order-row-check" value="${o.id}" onchange="updateOrderSelectionCount()">
-                </td>
-                <td>
-                    <div class="fw-bold">${o.order_no}</div>
-                    <small class="text-muted">${o.created_at || ''}</small>
-                </td>
-                <td>
-                    <div class="fw-bold">${o.recipient_name}</div>
-                    <small class="text-muted">${o.recipient_phone1 || ''}</small>
-                </td>
-                <td><code>${o.customs_id || '-'}</code></td>
-                <td><small class="text-secondary text-truncate d-inline-block" style="max-width: 200px;" title="${o.address}">${o.address || '-'}</small></td>
-                <td>
-                    <div class="fw-bold text-truncate" style="max-width: 170px;" title="${o.original_product_name}">${o.original_product_name}</div>
-                    <small class="text-muted">[${o.original_option_name}] x ${o.original_quantity}</small>
-                </td>
-                <td>
-                    <div class="bg-light p-2 rounded" style="min-width: 180px;">
-                        ${splitItemsHtml}
-                    </div>
-                </td>
-                <td>
-                    <div>${courierBadge}</div>
-                    ${o.tracking_no ? `<code class="text-primary fw-bold">${o.tracking_no}</code>` : '<span class="text-muted small">미발급</span>'}
-                </td>
-                <td>${statusBadge}</td>
-            `;
-            tbody.appendChild(tr);
+            items.forEach((it, idx) => {
+                const tr = document.createElement('tr');
+                let rowHtml = '';
+
+                // 주문 공통 정보는 첫 번째 품목 행에만 rowspan으로 묶어 렌더링
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <input type="checkbox" class="form-check-input order-row-check" value="${o.id}" onchange="updateOrderSelectionCount()">
+                        </td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <div class="input-group input-group-sm">
+                                <input type="number" step="0.01" min="0" class="form-control form-control-sm text-end px-1" 
+                                       value="${o.weight && o.weight > 0 ? o.weight : ''}" placeholder="0.00" 
+                                       onchange="saveOrderWeight(${o.id}, this.value)" title="무게(kg) 입력 시 자동 저장됩니다">
+                            </div>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${o.order_no}</div>
+                            <small class="text-muted">${o.created_at || ''}</small>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${o.recipient_name}</div>
+                            <small class="text-muted">${o.recipient_phone1 || ''}</small>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white"><code>${o.customs_id || '-'}</code></td>
+                        <td rowspan="${rowCount}" class="bg-white"><small class="text-secondary text-truncate d-inline-block" style="max-width: 170px;" title="${o.address}">${o.address || '-'}</small></td>
+                    `;
+                }
+
+                // 상품명 + 나눈 옵션명 합친 명칭
+                const optName = (it.item_option_name && it.item_option_name !== '단일옵션') ? it.item_option_name : '';
+                const combinedName = optName ? `${it.item_product_name} ${optName}` : it.item_product_name;
+                const optQty = it.option_quantity || 1;
+                const buyQty = it.quantity || o.original_quantity || 1;
+
+                rowHtml += `
+                    <td>
+                        <div class="fw-bold text-dark">${combinedName}</div>
+                        <div class="small text-muted">
+                            <code>${it.sku}</code> 
+                            ${it.stock_deducted ? '<span class="badge bg-success-subtle text-success py-0 px-1">차감됨</span>' : '<span class="badge bg-secondary-subtle text-muted py-0 px-1">대기</span>'}
+                            ${rowCount > 1 ? `<span class="badge bg-light text-primary border ms-1">품목 ${idx + 1}/${rowCount}</span>` : ''}
+                        </div>
+                    </td>
+                    <td class="text-center fw-bold text-secondary">${optQty}개</td>
+                    <td class="text-center fs-6 fw-bold text-primary">${buyQty}개</td>
+                `;
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div>${courierBadge}</div>
+                            ${o.tracking_no ? `<code class="text-primary fw-bold">${o.tracking_no}</code>` : '<span class="text-muted small">미발급</span>'}
+                        </td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">${statusBadge}</td>
+                    `;
+                }
+
+                tr.innerHTML = rowHtml;
+                tbody.appendChild(tr);
+            });
         });
         updateOrderSelectionCount();
     }
@@ -1278,13 +1328,12 @@
         tbody.innerHTML = '';
 
         if (!orders || orders.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="10" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="12" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
             updateDispatchedSelectionCount();
             return;
         }
 
         orders.forEach(o => {
-            const tr = document.createElement('tr');
             let courierBadge = `<span class="badge bg-secondary">${o.courier}</span>`;
             if (o.courier === '나르다') {
                 courierBadge = `<span class="badge text-white" style="background-color: #6f42c1;"><i class="fa-solid fa-plane-departure me-1"></i>나르다</span>`;
@@ -1294,47 +1343,76 @@
                 courierBadge = `<span class="badge bg-danger text-white">우체국택배</span>`;
             }
 
-            const splitItemsHtml = (o.items || []).map(it => `
-                <div class="small py-0.5">
-                    <i class="fa-solid fa-angle-right text-muted me-1"></i>
-                    <strong>${it.item_option_name}</strong> : ${it.quantity}개
-                    <span class="badge bg-success-subtle text-success py-0 px-1">차감완료</span>
-                </div>
-            `).join('');
-
             const dispatchDate = o.dispatched_at || o.created_at || '-';
+            const items = (o.items && o.items.length > 0) ? o.items : [{
+                item_product_name: o.original_product_name,
+                item_option_name: o.original_option_name,
+                sku: '미지정',
+                option_quantity: 1,
+                quantity: o.original_quantity || 1
+            }];
+            const rowCount = items.length;
 
-            tr.innerHTML = `
-                <td class="text-center">
-                    <input type="checkbox" class="form-check-input dispatched-row-check" value="${o.id}" onchange="updateDispatchedSelectionCount()">
-                </td>
-                <td>
-                    <div class="fw-bold">${o.order_no}</div>
-                    <small class="text-muted">접수: ${o.created_at || ''}</small>
-                </td>
-                <td>
-                    <div class="fw-bold text-success"><i class="fa-regular fa-clock me-1"></i>${dispatchDate}</div>
-                </td>
-                <td>
-                    <div class="fw-bold">${o.recipient_name}</div>
-                    <small class="text-muted">${o.recipient_phone1 || ''}</small>
-                </td>
-                <td><code>${o.customs_id || '-'}</code></td>
-                <td><small class="text-secondary text-truncate d-inline-block" style="max-width: 220px;" title="${o.address}">${o.address || '-'}</small></td>
-                <td>${courierBadge}</td>
-                <td>
-                    ${o.tracking_no ? `<code class="text-primary fw-bold">${o.tracking_no}</code>` : '<span class="text-muted small">미발급</span>'}
-                </td>
-                <td>
-                    <div class="bg-light p-2 rounded" style="min-width: 170px;">
-                        ${splitItemsHtml}
-                    </div>
-                </td>
-                <td class="text-center">
-                    <span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span>
-                </td>
-            `;
-            tbody.appendChild(tr);
+            items.forEach((it, idx) => {
+                const tr = document.createElement('tr');
+                let rowHtml = '';
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <input type="checkbox" class="form-check-input dispatched-row-check" value="${o.id}" onchange="updateDispatchedSelectionCount()">
+                        </td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <span class="badge bg-light text-dark border">${o.weight && o.weight > 0 ? o.weight + ' kg' : '-'}</span>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${o.order_no}</div>
+                            <small class="text-muted">접수: ${o.created_at || ''}</small>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold text-success"><i class="fa-regular fa-clock me-1"></i>${dispatchDate}</div>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${o.recipient_name}</div>
+                            <small class="text-muted">${o.recipient_phone1 || ''}</small>
+                        </td>
+                        <td rowspan="${rowCount}" class="bg-white"><code>${o.customs_id || '-'}</code></td>
+                        <td rowspan="${rowCount}" class="bg-white"><small class="text-secondary text-truncate d-inline-block" style="max-width: 170px;" title="${o.address}">${o.address || '-'}</small></td>
+                    `;
+                }
+
+                const optName = (it.item_option_name && it.item_option_name !== '단일옵션') ? it.item_option_name : '';
+                const combinedName = optName ? `${it.item_product_name} ${optName}` : it.item_product_name;
+                const optQty = it.option_quantity || 1;
+                const buyQty = it.quantity || o.original_quantity || 1;
+
+                rowHtml += `
+                    <td>
+                        <div class="fw-bold text-dark">${combinedName}</div>
+                        <div class="small text-muted">
+                            <code>${it.sku}</code>
+                            <span class="badge bg-success-subtle text-success py-0 px-1">차감완료</span>
+                        </div>
+                    </td>
+                    <td class="text-center fw-bold text-secondary">${optQty}개</td>
+                    <td class="text-center fs-6 fw-bold text-primary">${buyQty}개</td>
+                `;
+
+                if (idx === 0) {
+                    rowHtml += `
+                        <td rowspan="${rowCount}" class="bg-white">
+                            <div>${courierBadge}</div>
+                            ${o.tracking_no ? `<code class="text-primary fw-bold">${o.tracking_no}</code>` : '<span class="text-muted small">미발급</span>'}
+                        </td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">
+                            <span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span>
+                        </td>
+                    `;
+                }
+
+                tr.innerHTML = rowHtml;
+                tbody.appendChild(tr);
+            });
         });
         updateDispatchedSelectionCount();
     }
@@ -1621,8 +1699,8 @@
                 <td class="fw-bold">${p.product_name}</td>
                 <td><small class="text-secondary">${p.english_name || '-'}</small></td>
                 <td><code>${p.hs_code || '-'}</code></td>
-                <td class="text-end fw-bold">$${(p.unit_price || 0).toFixed(2)}</td>
                 <td class="text-center fs-6 fw-bold text-primary">${p.stock_quantity.toLocaleString()}개</td>
+                <td class="text-end fw-bold">$${(p.unit_price || 0).toFixed(2)}</td>
                 <td class="text-center">${urlHtml}</td>
                 <td class="text-center">
                     <button class="btn btn-sm btn-outline-primary" onclick="openEditProductModal(${p.id})">

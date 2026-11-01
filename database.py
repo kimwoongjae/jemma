@@ -85,6 +85,7 @@ def init_db():
         status TEXT DEFAULT '주문접수',
         upload_batch TEXT,
         dispatched_at TEXT DEFAULT '',
+        weight REAL DEFAULT 0.0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -93,6 +94,8 @@ def init_db():
     order_cols = [row[1] for row in cur.fetchall()]
     if 'dispatched_at' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN dispatched_at TEXT DEFAULT ''")
+    if 'weight' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN weight REAL DEFAULT 0.0")
 
 
     # 4. 분할된 출고 아이템 (Order Items)
@@ -104,6 +107,7 @@ def init_db():
         sku TEXT,
         item_product_name TEXT NOT NULL,
         item_option_name TEXT NOT NULL,
+        option_quantity INTEGER DEFAULT 1,
         quantity INTEGER DEFAULT 1,
         stock_deducted INTEGER DEFAULT 0,
         status TEXT DEFAULT '준비중',
@@ -111,6 +115,11 @@ def init_db():
         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
     )
     ''')
+
+    cur.execute("PRAGMA table_info(order_items)")
+    item_cols = [row[1] for row in cur.fetchall()]
+    if 'option_quantity' not in item_cols:
+        cur.execute("ALTER TABLE order_items ADD COLUMN option_quantity INTEGER DEFAULT 1")
 
     # 5. 입출고 재고 이력 로그 (Inventory Logs)
     cur.execute('''
