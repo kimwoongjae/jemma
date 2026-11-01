@@ -1,10 +1,12 @@
 import random
 import time
+from datetime import datetime
 import openpyxl
 from io import BytesIO
 from database import get_connection
 
 COURIER_PREFIX = {
+    '나르다': '7788',
     'CJ대한통운': '6892',
     '우체국택배': '6098',
     '한진택배': '5081',
@@ -82,8 +84,9 @@ def complete_dispatch(order_ids):
         if not ord_row:
             continue
 
-        # 주문 상태 업데이트
-        cur.execute("UPDATE orders SET status = '출고완료' WHERE id = ?", (oid,))
+        # 주문 상태 업데이트 및 발송일시 기록
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        cur.execute("UPDATE orders SET status = '출고완료', dispatched_at = ? WHERE id = ?", (now_str, oid))
         dispatched_count += 1
 
         # 품목별 재고 차감
@@ -134,7 +137,7 @@ def export_shipping_excel(order_ids=None):
     ws.title = "발송처리결과"
 
     headers = [
-        "주문번호", "택배사", "송장번호", "배송방법", "상품명", "옵션이름", "상품수량",
+        "주문번호", "발송일시", "택배사", "송장번호", "배송방법", "상품명", "옵션이름", "상품수량",
         "수취인이름", "수취인전화번호1", "수취인전화번호2", "개인통관부호", "수취인우편번호", "수취인주소", "배송메세지", "처리상태"
     ]
     ws.append(headers)
@@ -142,6 +145,7 @@ def export_shipping_excel(order_ids=None):
     for o in orders:
         ws.append([
             o['order_no'],
+            o['dispatched_at'] or '',
             o['courier'] or 'CJ대한통운',
             o['tracking_no'] or '',
             o['shipping_method'] or '택배',

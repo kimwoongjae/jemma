@@ -26,6 +26,7 @@ def init_db():
         hs_code TEXT DEFAULT '',
         unit_price REAL DEFAULT 0.0,
         stock_quantity INTEGER DEFAULT 0,
+        product_url TEXT DEFAULT '',
         safety_stock INTEGER DEFAULT 10,
         location TEXT DEFAULT 'A-01',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -42,6 +43,9 @@ def init_db():
         cur.execute("ALTER TABLE products ADD COLUMN hs_code TEXT DEFAULT ''")
     if 'unit_price' not in existing_cols:
         cur.execute("ALTER TABLE products ADD COLUMN unit_price REAL DEFAULT 0.0")
+    if 'product_url' not in existing_cols:
+        cur.execute("ALTER TABLE products ADD COLUMN product_url TEXT DEFAULT ''")
+
 
 
     # 2. 세트/옵션 분할 규칙 (Bundle Rules)
@@ -80,9 +84,16 @@ def init_db():
         shipping_memo TEXT,
         status TEXT DEFAULT '주문접수',
         upload_batch TEXT,
+        dispatched_at TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+
+    cur.execute("PRAGMA table_info(orders)")
+    order_cols = [row[1] for row in cur.fetchall()]
+    if 'dispatched_at' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN dispatched_at TEXT DEFAULT ''")
+
 
     # 4. 분할된 출고 아이템 (Order Items)
     cur.execute('''

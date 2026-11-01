@@ -127,9 +127,10 @@ def upload_confirm():
 # ----------------- 3. 주문 관리 API -----------------
 @app.route('/api/orders', methods=['GET'])
 def get_orders():
-    status = request.args.get('status')
+    status = request.args.get('status', '').strip()
+    courier = request.args.get('courier', '').strip()
     search = request.args.get('search', '').strip()
-    limit = int(request.args.get('limit', 200))
+    limit = int(request.args.get('limit', 300))
 
     conn = get_connection()
     cur = conn.cursor()
@@ -137,17 +138,24 @@ def get_orders():
     query = 'SELECT * FROM orders WHERE 1=1'
     params = []
 
-    if status and status != '전체':
+    if status == '출고대기':
+        query += " AND status IN ('주문접수', '송장발급')"
+    elif status and status != '전체':
         query += ' AND status = ?'
         params.append(status)
+
+    if courier and courier != '전체':
+        query += ' AND courier = ?'
+        params.append(courier)
 
     if search:
         query += ''' AND (
             order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ? 
             OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ?
+            OR original_product_name LIKE ? OR original_option_name LIKE ?
         )'''
         wild = f'%{search}%'
-        params.extend([wild, wild, wild, wild, wild, wild])
+        params.extend([wild, wild, wild, wild, wild, wild, wild, wild])
 
     query += ' ORDER BY id DESC LIMIT ?'
     params.append(limit)
@@ -156,6 +164,44 @@ def get_orders():
     orders = [dict(row) for row in cur.fetchall()]
 
     # 각 주문의 분할 품목(order_items) 조회
+    for o in orders:
+        cur.execute('SELECT * FROM order_items WHERE order_id = ?', (o['id'],))
+        o['items'] = [dict(it) for it in cur.fetchall()]
+
+    conn.close()
+    return jsonify(orders)
+
+@app.route('/api/dispatched-orders', methods=['GET'])
+def get_dispatched_orders():
+    courier = request.args.get('courier', '').strip()
+    search = request.args.get('search', '').strip()
+    limit = int(request.args.get('limit', 300))
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    query = "SELECT * FROM orders WHERE status = '출고완료'"
+    params = []
+
+    if courier and courier != '전체':
+        query += ' AND courier = ?'
+        params.append(courier)
+
+    if search:
+        query += ''' AND (
+            order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ? 
+            OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ?
+            OR original_product_name LIKE ? OR original_option_name LIKE ?
+        )'''
+        wild = f'%{search}%'
+        params.extend([wild, wild, wild, wild, wild, wild, wild, wild])
+
+    query += ' ORDER BY COALESCE(dispatched_at, created_at) DESC, id DESC LIMIT ?'
+    params.append(limit)
+
+    cur.execute(query, params)
+    orders = [dict(row) for row in cur.fetchall()]
+
     for o in orders:
         cur.execute('SELECT * FROM order_items WHERE order_id = ?', (o['id'],))
         o['items'] = [dict(it) for it in cur.fetchall()]
@@ -284,6 +330,7 @@ def barcode_stock_in():
     english_name = data.get('english_name', '').strip()
     hs_code = data.get('hs_code', '').strip()
     unit_price = float(data.get('unit_price', 0.0) or 0.0)
+    product_url = data.get('product_url', '').strip()
     qty = int(data.get('quantity', 0) or 0)
     memo = data.get('memo', '바코드 개별 입고')
 
@@ -305,10 +352,11 @@ def barcode_stock_in():
                 product_name = CASE WHEN ? != '' THEN ? ELSE product_name END,
                 english_name = CASE WHEN ? != '' THEN ? ELSE english_name END,
                 hs_code = CASE WHEN ? != '' THEN ? ELSE hs_code END,
+                product_url = CASE WHEN ? != '' THEN ? ELSE product_url END,
                 unit_price = CASE WHEN ? > 0 THEN ? ELSE unit_price END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        ''', (new_stock, product_name, product_name, english_name, english_name, hs_code, hs_code, unit_price, unit_price, prod['id']))
+        ''', (new_stock, product_name, product_name, english_name, english_name, hs_code, hs_code, product_url, product_url, unit_price, unit_price, prod['id']))
         prod_id = prod['id']
         p_name = product_name or prod['product_name']
     else:
@@ -316,11 +364,12 @@ def barcode_stock_in():
             product_name = f"상품_{sku}"
         new_stock = qty
         cur.execute('''
-            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (sku, product_name, '', english_name, hs_code, unit_price, new_stock))
+            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, product_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (sku, product_name, '', english_name, hs_code, unit_price, new_stock, product_url))
         prod_id = cur.lastrowid
         p_name = product_name
+
 
 
     # 입고 이력 로그
@@ -393,6 +442,42 @@ def batch_stock_in():
     conn.close()
     return jsonify({'status': 'success', 'processed_items': success_count, 'total_quantity': total_qty})
 
+@app.route('/api/inventory/template', methods=['GET'])
+def download_product_template():
+    import openpyxl
+    from io import BytesIO
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "상품등록양식"
+
+    headers = ["바코드", "상품명", "영문명", "HS코드", "단가", "재고수량", "상품URL"]
+    ws.append(headers)
+
+    samples = [
+        ["8801234567890", "[프리비] 엘모사 기미스틱", "ELMOSA BLEMISH STICK", "3304.99.1000", 12.50, 100, "https://smartstore.naver.com/example"],
+        ["8809876543210", "[일본] 브라질산 그린프로폴리스 캔디", "GREEN PROPOLIS CANDY", "2106.90.9099", 8.00, 50, "https://smartstore.naver.com/example2"]
+    ]
+    for s in samples:
+        ws.append(s)
+
+    ws.column_dimensions['A'].width = 18
+    ws.column_dimensions['B'].width = 30
+    ws.column_dimensions['C'].width = 25
+    ws.column_dimensions['D'].width = 15
+    ws.column_dimensions['E'].width = 12
+    ws.column_dimensions['F'].width = 12
+    ws.column_dimensions['G'].width = 35
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='상품등록양식.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
 @app.route('/api/inventory/upload-excel', methods=['POST'])
 def upload_products_excel():
     if 'file' not in request.files:
@@ -415,6 +500,7 @@ def upload_products_excel():
             elif 'hs' in cs: col_map['hs_code'] = c
             elif '단가' in cs or 'price' in cs: col_map['unit_price'] = c
             elif '재고' in cs or '수량' in cs: col_map['stock_quantity'] = c
+            elif 'url' in cs or '링크' in cs: col_map['product_url'] = c
 
         if 'sku' not in col_map and 'product_name' not in col_map:
             return jsonify({'error': '엑셀에 [바코드(SKU)] 또는 [상품명] 컬럼이 필요합니다.'}), 400
@@ -429,6 +515,8 @@ def upload_products_excel():
             name = str(row.get(col_map.get('product_name', ''), '')).strip()
             eng = str(row.get(col_map.get('english_name', ''), '')).strip()
             hs = str(row.get(col_map.get('hs_code', ''), '')).strip()
+            url = str(row.get(col_map.get('product_url', ''), '')).strip()
+            if url.lower() == 'nan': url = ''
             
             try:
                 price = float(row.get(col_map.get('unit_price', ''), 0.0) or 0.0)
@@ -453,16 +541,17 @@ def upload_products_excel():
                     SET product_name = CASE WHEN ? != '' THEN ? ELSE product_name END,
                         english_name = CASE WHEN ? != '' THEN ? ELSE english_name END,
                         hs_code = CASE WHEN ? != '' THEN ? ELSE hs_code END,
+                        product_url = CASE WHEN ? != '' THEN ? ELSE product_url END,
                         unit_price = ?,
                         stock_quantity = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
-                ''', (name, name, eng, eng, hs, hs, price, stock, existing['id']))
+                ''', (name, name, eng, eng, hs, hs, url, url, price, stock, existing['id']))
             else:
                 cur.execute('''
-                    INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (sku, name or sku, '', eng, hs, price, stock))
+                    INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, product_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (sku, name or sku, '', eng, hs, price, stock, url))
                 prod_id = cur.lastrowid
 
                 cur.execute('''
@@ -487,6 +576,7 @@ def save_product():
     hs_code = data.get('hs_code', '').strip()
     unit_price = float(data.get('unit_price', 0.0) or 0.0)
     stock_quantity = int(data.get('stock_quantity', 0) or 0)
+    product_url = data.get('product_url', '').strip()
     prod_id = data.get('id')
 
     if not sku or not product_name:
@@ -497,15 +587,14 @@ def save_product():
     if prod_id:
         cur.execute('''
             UPDATE products
-            SET sku = ?, product_name = ?, english_name = ?, hs_code = ?, unit_price = ?, stock_quantity = ?, updated_at = CURRENT_TIMESTAMP
+            SET sku = ?, product_name = ?, english_name = ?, hs_code = ?, unit_price = ?, stock_quantity = ?, product_url = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        ''', (sku, product_name, english_name, hs_code, unit_price, stock_quantity, prod_id))
+        ''', (sku, product_name, english_name, hs_code, unit_price, stock_quantity, product_url, prod_id))
     else:
         cur.execute('''
-            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (sku, product_name, '', english_name, hs_code, unit_price, stock_quantity))
-
+            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, product_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (sku, product_name, '', english_name, hs_code, unit_price, stock_quantity, product_url))
 
     conn.commit()
     conn.close()
@@ -519,6 +608,7 @@ def delete_product(prod_id):
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
+
 
 @app.route('/api/inventory/logs', methods=['GET'])
 def get_inventory_logs():
