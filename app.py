@@ -62,6 +62,41 @@ def get_dashboard_stats():
     })
 
 # ----------------- 2. 엑셀 업로드 및 주문 분할 -----------------
+def extract_sku_sort_key(sku_str):
+    if not sku_str or sku_str == '미지정':
+        return (2, 999999999999, '')
+    digits = re.findall(r'\d+', str(sku_str))
+    if digits:
+        return (0, int(digits[0]), str(sku_str))
+    return (1, 0, str(sku_str))
+
+def get_order_sort_key(o):
+    items = o.get('items') or o.get('split_items') or []
+    item_cnt = len(items) if items else 1
+    # 1. 단품 주문(품목 1개) 우선 (0), 그 밑에 2개부터 합포장 주문 (1)
+    is_multi = 0 if item_cnt == 1 else 1
+    # 2. 대표 바코드(SKU) 숫자/문자 오름차순
+    primary_sku = items[0]['sku'] if items and items[0].get('sku') else ''
+    sku_type, sku_num, sku_raw = extract_sku_sort_key(primary_sku)
+    # 3. 출고수량 (옵션수량 * 구매수량) 오름차순
+    if items:
+        dispatch_qty = sum(
+            (int(it.get('option_quantity') or 1)) * (int(it.get('quantity') or o.get('original_quantity') or 1))
+            for it in items
+        )
+    else:
+        dispatch_qty = int(o.get('original_quantity') or 1)
+    return (
+        is_multi,
+        item_cnt,
+        sku_type,
+        sku_num,
+        sku_raw,
+        dispatch_qty,
+        str(o.get('order_no') or ''),
+        -o.get('id', 0)
+    )
+
 @app.route('/api/upload/preview', methods=['POST'])
 def upload_preview():
     # 단일 또는 복수 파일 지원 ('files' 또는 'file')
@@ -71,7 +106,7 @@ def upload_preview():
     if not uploaded_files and 'file' in request.files:
         uploaded_files = [request.files['file']]
 
-    # 빈 파일 제거
+    # 빈 파일 제외
     valid_files = [f for f in uploaded_files if f.filename != '']
     if not valid_files:
         return jsonify({'error': '업로드할 파일이 없습니다.'}), 400
@@ -113,6 +148,9 @@ def upload_preview():
                         os.remove(filepath)
                     except Exception:
                         pass
+
+        # 단품 우선 -> 2개부터 -> 바코드 오름차순 -> 출고수량 오름차순 정렬
+        merged_orders.sort(key=get_order_sort_key)
 
         preview_data = {
             'batch_name': ', '.join(batch_names) if len(batch_names) <= 2 else f"{batch_names[0]} 외 {len(batch_names)-1}개 파일",
@@ -244,26 +282,9 @@ def get_orders():
 
     conn.close()
 
-    # 정렬: 단일 상품 주문(items 개수 1개)의 바코드(SKU) 숫자 오름차순 우선 정렬
+    # 정렬: 1) 주문번호 한개씩(품목 1개 단품) 우선 -> 2) 2개부터 합포장 정렬 -> 3) 바코드 오름차순 -> 4) 출고수량 오름차순
     if sort_by == 'single_barcode_asc':
-        def extract_sku_sort_key(sku_str):
-            if not sku_str:
-                return (2, 999999999999, '')
-            digits = re.findall(r'\d+', str(sku_str))
-            if digits:
-                return (0, int(digits[0]), str(sku_str))
-            return (1, 0, str(sku_str))
-
-        def order_sort_key(o):
-            items = o.get('items', [])
-            item_cnt = len(items)
-            is_single = 0 if item_cnt == 1 else 1
-            primary_sku = items[0]['sku'] if items else ''
-            sku_type, sku_num, sku_raw = extract_sku_sort_key(primary_sku)
-            # 단일 품목 우선 -> 바코드 숫자 오름차순 -> 바코드 문자열 오름차순 -> 주문 ID 역순
-            return (is_single, sku_type, sku_num, sku_raw, -o['id'])
-
-        orders.sort(key=order_sort_key)
+        orders.sort(key=get_order_sort_key)
 
     return jsonify(orders)
 
@@ -493,8 +514,9 @@ def validate_customs_batch():
             for o in batch:
                 name = (o['recipient_name'] or '').strip()
                 cid = (o['customs_id'] or '').strip().upper()
-                phone = (o['recipient_phone1'] or '').strip()
                 pcode = (o['postal_code'] or '').strip()
+                if pcode.isdigit() and len(pcode) < 5:
+                    pcode = pcode.zfill(5)
 
                 line = f"{name}/{cid}/{phone}/{pcode}"
                 lines.append(line)

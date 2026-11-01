@@ -256,7 +256,7 @@ def process_excel_file(file_path, batch_name=None):
     if not batch_name:
         batch_name = os.path.basename(file_path)
 
-    df = pd.read_excel(file_path)
+    df = pd.read_excel(file_path, dtype=str)
     col_map = detect_columns(df.columns)
 
     conn = get_connection()
@@ -289,7 +289,8 @@ def process_excel_file(file_path, batch_name=None):
         def val(k):
             col = col_map.get(k)
             if col and col in row and pd.notna(row[col]):
-                return str(row[col]).strip()
+                v = str(row[col]).strip()
+                return '' if v.lower() == 'nan' else v
             return ''
 
         order_no = val('order_no') or f"ORD-{batch_name[:4]}-{idx+1:04d}"
@@ -307,8 +308,20 @@ def process_excel_file(file_path, batch_name=None):
         recipient_name = val('recipient_name')
         recipient_phone1 = val('recipient_phone1')
         recipient_phone2 = val('recipient_phone2')
+        if recipient_phone1.endswith('.0'):
+            recipient_phone1 = recipient_phone1[:-2].strip()
+        if recipient_phone2.endswith('.0'):
+            recipient_phone2 = recipient_phone2[:-2].strip()
+
         customs_id = val('customs_id')
         postal_code = val('postal_code')
+        if postal_code:
+            if postal_code.endswith('.0'):
+                postal_code = postal_code[:-2].strip()
+            # 5자리 한국 새우편번호(0xxxx)에서 앞자리 0이 누락된 경우 0 채움 복원 (예: 7668 -> 07668)
+            if postal_code.isdigit() and len(postal_code) < 5:
+                postal_code = postal_code.zfill(5)
+
         address = val('address')
         shipping_memo = val('shipping_memo')
 

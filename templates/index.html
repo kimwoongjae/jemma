@@ -1675,7 +1675,49 @@
         }
     }
 
+    function sortOrdersInPlace(list) {
+        if (!list || !Array.isArray(list)) return list;
+        return list.sort((a, b) => {
+            const aItems = (a.items && a.items.length > 0) ? a.items : [];
+            const bItems = (b.items && b.items.length > 0) ? b.items : [];
+            const aCnt = aItems.length || 1;
+            const bCnt = bItems.length || 1;
+
+            // 1. 단품 주문(품목 1개) 우선, 합포장(2개부터)은 그 밑에
+            const aMulti = aCnt === 1 ? 0 : 1;
+            const bMulti = bCnt === 1 ? 0 : 1;
+            if (aMulti !== bMulti) return aMulti - bMulti;
+
+            // 2. 2개 이상인 경우 품목 개수 오름차순 (2개 -> 3개 -> 4개 ...)
+            if (aCnt !== bCnt) return aCnt - bCnt;
+
+            // 3. 바코드(SKU) 오름차순
+            const aSku = String((aItems[0] && aItems[0].sku) || '');
+            const bSku = String((bItems[0] && bItems[0].sku) || '');
+            const aDigits = aSku.match(/\d+/);
+            const bDigits = bSku.match(/\d+/);
+            if (aDigits && bDigits) {
+                const aNum = parseInt(aDigits[0], 10);
+                const bNum = parseInt(bDigits[0], 10);
+                if (aNum !== bNum) return aNum - bNum;
+            }
+            if (aSku !== bSku) return aSku.localeCompare(bSku);
+
+            // 4. 출고수량 (옵션수량 * 주문수량의 합) 오름차순
+            const aQty = aItems.reduce((acc, it) => acc + ((parseInt(it.option_quantity) || 1) * (parseInt(it.quantity) || parseInt(a.original_quantity) || 1)), 0);
+            const bQty = bItems.reduce((acc, it) => acc + ((parseInt(it.option_quantity) || 1) * (parseInt(it.quantity) || parseInt(b.original_quantity) || 1)), 0);
+            if (aQty !== bQty) return aQty - bQty;
+
+            // 5. 주문번호 오름차순
+            return String(a.order_no || '').localeCompare(String(b.order_no || ''));
+        });
+    }
+
     function renderOrdersTable(orders) {
+        lastCheckedOrderIndex = -1;
+        if (orders && Array.isArray(orders)) {
+            sortOrdersInPlace(orders);
+        }
         const tbody = document.getElementById('ordersTableBody');
         tbody.innerHTML = '';
         if (!orders || orders.length === 0) {
@@ -1732,8 +1774,8 @@
                 // 주문 공통 정보는 첫 번째 품목 행에만 rowspan으로 묶어 렌더링
                 if (idx === 0) {
                     rowHtml += `
-                        <td rowspan="${rowCount}" class="text-center bg-white">
-                            <input type="checkbox" class="form-check-input order-row-check" value="${o.id}" onchange="updateOrderSelectionCount()">
+                        <td rowspan="${rowCount}" class="text-center bg-white" style="cursor: pointer;" onclick="handleOrderCellClick(event, this)">
+                            <input type="checkbox" class="form-check-input order-row-check" value="${o.id}" onclick="event.stopPropagation(); handleOrderCheckClick(event, this);" onchange="updateOrderSelectionCount()">
                         </td>
                         <td rowspan="${rowCount}" class="text-center bg-white">
                             <div class="input-group input-group-sm">
@@ -1809,6 +1851,40 @@
         updateOrderSelectionCount();
     }
 
+    let lastCheckedOrderIndex = -1;
+
+    function handleOrderCheckClick(event, checkbox) {
+        const checkboxes = Array.from(document.querySelectorAll('.order-row-check'));
+        const currentIndex = checkboxes.indexOf(checkbox);
+
+        if (event.shiftKey && lastCheckedOrderIndex !== -1 && lastCheckedOrderIndex !== currentIndex) {
+            const start = Math.min(lastCheckedOrderIndex, currentIndex);
+            const end = Math.max(lastCheckedOrderIndex, currentIndex);
+            const targetState = checkbox.checked;
+
+            for (let i = start; i <= end; i++) {
+                checkboxes[i].checked = targetState;
+            }
+
+            if (window.getSelection) {
+                window.getSelection().removeAllRanges();
+            }
+        }
+
+        lastCheckedOrderIndex = currentIndex;
+        updateOrderSelectionCount();
+    }
+
+    function handleOrderCellClick(event, td) {
+        if (event.target && event.target.classList.contains('order-row-check')) {
+            return;
+        }
+        const checkbox = td.querySelector('.order-row-check');
+        if (!checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        handleOrderCheckClick(event, checkbox);
+    }
+
     function updateOrderSelectionCount() {
         const selected = document.querySelectorAll('.order-row-check:checked').length;
         const total = document.querySelectorAll('.order-row-check').length;
@@ -1824,6 +1900,7 @@
 
     function toggleSelectAllOrders(master) {
         document.querySelectorAll('.order-row-check').forEach(ck => ck.checked = master.checked);
+        lastCheckedOrderIndex = -1;
         updateOrderSelectionCount();
     }
 
