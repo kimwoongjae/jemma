@@ -372,7 +372,7 @@ def process_excel_file(file_path, batch_name=None):
             return ''
 
         order_no = val('order_no') or f"ORD-{batch_name[:4]}-{idx+1:04d}"
-        courier = val('courier') or 'CJ대한통운'
+        courier = val('courier') or '나르다'
         tracking_no = val('tracking_no')
         shipping_method = val('shipping_method') or '택배'
         product_name = val('product_name')

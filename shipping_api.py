@@ -9,7 +9,7 @@ from io import BytesIO
 from database import get_connection
 
 COURIER_PREFIX = {
-    '나르다': '7788',
+    '나르다': '3054',
     'CJ대한통운': '6892',
     '우체국택배': '6098',
     '한진택배': '5081',
@@ -17,8 +17,8 @@ COURIER_PREFIX = {
     '로젠택배': '9012'
 }
 
-def generate_mock_tracking_number(courier_name='CJ대한통운'):
-    prefix = COURIER_PREFIX.get(courier_name, '6892')
+def generate_mock_tracking_number(courier_name='나르다'):
+    prefix = COURIER_PREFIX.get(courier_name, '3054')
     # 12자리 유효 형태의 송장번호 생성
     rand_mid = f"{random.randint(1000000, 9999999):07d}"
     base_no = prefix + rand_mid
@@ -74,9 +74,9 @@ def call_narda_regist_order(ord_row, items, settings):
         })
 
     # 송하인은 택배설정의 고객사 코드(customer_code) 값으로 전송
-    sender = (settings.get('customer_code') or '').strip() or "TOA"
-    narda_id = (settings.get('narda_id') or '').strip() or "calroid"
-    narda_api_key = (settings.get('api_key') or '').strip() or "5a65132fee9b4780c350b1942db432afd3232b30"
+    sender = (settings.get('customer_code') or '').strip() or "정마무역"
+    narda_id = (settings.get('narda_id') or '').strip() or "feelcoach33"
+    narda_api_key = (settings.get('api_key') or '').strip() or "e1df1b2a432106cd6f4c886dfb9c3ca24fbf27e9"
 
     payload = {
         "order_no": ord_row['order_no'],
@@ -136,15 +136,13 @@ def issue_tracking_numbers(order_ids, courier_name=None):
     settings_row = cur.fetchone()
     settings = dict(settings_row) if settings_row else {}
 
-    if not courier_name:
-        courier_name = settings.get('courier_name') or '나르다'
-
-    is_mock = settings.get('is_mock', 1)
+    target_courier = courier_name or settings.get('courier_name') or '나르다'
+    is_mock = settings.get('is_mock', 0)
     updated_orders = []
     failed_orders = []
 
     # 전체 상품 마스터 캐시 (SKU 및 상품명 매칭용)
-    cur.execute('SELECT sku, product_name, option_name, english_name, hs_code, unit_price, product_url FROM products')
+    cur.execute('SELECT id, sku, product_name, option_name, english_name, hs_code, unit_price, product_url, stock_quantity FROM products')
     prod_rows = [dict(r) for r in cur.fetchall()]
     prod_by_sku = {r['sku']: r for r in prod_rows if r['sku']}
     prod_by_name = {r['product_name']: r for r in prod_rows if r['product_name']}
@@ -156,18 +154,20 @@ def issue_tracking_numbers(order_ids, courier_name=None):
             continue
 
         ord_dict = dict(ord_row)
-        target_courier = ord_dict.get('courier') or courier_name
-        tracking_no = ord_dict.get('tracking_no')
-        pdf_url = ord_dict.get('invoice_pdf_url') or ''
+        existing_tracking = ord_dict.get('tracking_no') or ''
+        existing_pdf = ord_dict.get('invoice_pdf_url') or ''
+        tracking_no = None
+        pdf_url = ''
 
-        if not tracking_no:
-            # 나르다 실 API 연동 호출
-            if target_courier == '나르다' and is_mock == 0:
-                cur.execute('''
-                    SELECT * FROM order_items WHERE order_id = ?
-                ''', (oid,))
+        # 나르다 실 API 연동 호출
+        if target_courier == '나르다' and is_mock == 0:
+            if existing_tracking and existing_pdf and existing_tracking.startswith('30'):
+                tracking_no = existing_tracking
+                pdf_url = existing_pdf
+            else:
+                cur.execute('SELECT * FROM order_items WHERE order_id = ?', (oid,))
                 raw_items = [dict(r) for r in cur.fetchall()]
-                
+
                 # 재고 마스터의 영문명, HS코드, 단가 매칭 보완
                 items = []
                 for it in raw_items:
@@ -198,14 +198,53 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                         'error': err_msg
                     })
                     continue
-            else:
-                tracking_no = generate_mock_tracking_number(target_courier)
+        else:
+            # 모의 발급 모드
+            tracking_no = generate_mock_tracking_number(target_courier)
+            pdf_url = ''
 
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
         cur.execute('''
             UPDATE orders
-            SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '송장발급'
+            SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '송장발급', dispatched_at = ?
             WHERE id = ?
-        ''', (tracking_no, target_courier, pdf_url, oid))
+        ''', (tracking_no, target_courier, pdf_url, now_str, oid))
+
+        # ==========================================
+        # 품목별 재고 자동 차감 및 입출고 내역 기록 (중복 차감 방지)
+        # ==========================================
+        cur.execute('SELECT * FROM order_items WHERE order_id = ? AND stock_deducted = 0', (oid,))
+        items_to_deduct = [dict(r) for r in cur.fetchall()]
+
+        for it in items_to_deduct:
+            item_sku = it.get('sku')
+            matched_prod = prod_by_sku.get(item_sku) or prod_by_name.get(it.get('item_product_name'))
+            if not matched_prod and item_sku:
+                cur.execute('SELECT id, sku, product_name, option_name, stock_quantity FROM products WHERE sku = ?', (item_sku,))
+                pr = cur.fetchone()
+                if pr:
+                    matched_prod = dict(pr)
+
+            if matched_prod:
+                deduct_qty = int(it.get('quantity') or 1)
+                cur_stock = matched_prod.get('stock_quantity') or 0
+                new_stock = cur_stock - deduct_qty
+
+                cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, matched_prod['id']))
+                matched_prod['stock_quantity'] = new_stock
+
+                memo_text = f"나르다 송장: {tracking_no} / 수취인: {ord_dict['recipient_name']}"
+                cur.execute('''
+                    INSERT INTO inventory_logs (
+                        product_id, sku, product_name, option_name,
+                        change_type, change_qty, resulting_stock, reference_no, memo
+                    ) VALUES (?, ?, ?, ?, '주문출고', ?, ?, ?, ?)
+                ''', (
+                    matched_prod['id'], matched_prod['sku'], matched_prod['product_name'], matched_prod['option_name'],
+                    -deduct_qty, new_stock, ord_dict['order_no'], memo_text
+                ))
+
+            cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ?", (it['id'],))
 
         updated_orders.append({
             'order_id': oid,

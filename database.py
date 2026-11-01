@@ -219,7 +219,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_no TEXT NOT NULL,
-        courier TEXT DEFAULT 'CJ대한통운',
+        courier TEXT DEFAULT '나르다',
         tracking_no TEXT DEFAULT '',
         shipping_method TEXT DEFAULT '택배',
         original_product_name TEXT,
@@ -303,13 +303,13 @@ def init_db():
     cur.execute('''
     CREATE TABLE IF NOT EXISTS courier_settings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        courier_name TEXT DEFAULT 'CJ대한통운',
-        customer_code TEXT DEFAULT '12345678',
-        api_key TEXT DEFAULT 'MOCK_API_KEY_SECURE_2026',
-        sender_name TEXT DEFAULT '프리비 물류센터',
+        courier_name TEXT DEFAULT '나르다',
+        customer_code TEXT DEFAULT '정마무역',
+        api_key TEXT DEFAULT 'e1df1b2a432106cd6f4c886dfb9c3ca24fbf27e9',
+        sender_name TEXT DEFAULT 'TOA',
         sender_phone TEXT DEFAULT '02-1234-5678',
         sender_address TEXT DEFAULT '서울특별시 강남구 테헤란로 123 물류빌딩 3층',
-        is_mock INTEGER DEFAULT 1,
+        is_mock INTEGER DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')

@@ -717,49 +717,109 @@ def api_export_excel():
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
+@app.route('/api/shipping/batches', methods=['GET'])
+def api_shipping_batches():
+    """
+    송장이 발급된 주문들을 날짜 및 발급 묶음별로 그룹핑하여 반환합니다.
+    [송장 라벨 인쇄 센터] 좌측 목록 구성용
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT id, order_no, courier, tracking_no, invoice_pdf_url, recipient_name,
+                   created_at, dispatched_at, status
+            FROM orders
+            WHERE (tracking_no IS NOT NULL AND tracking_no != '')
+               OR invoice_pdf_url != ''
+               OR status IN ('송장발급', '출고완료')
+            ORDER BY id DESC
+        ''')
+        orders = [dict(r) for r in cur.fetchall()]
+        if not orders:
+            return jsonify([])
+
+        groups = {}
+        for o in orders:
+            dt_str = o.get('dispatched_at') or ''
+            if dt_str and len(dt_str) >= 10:
+                d_key = dt_str[:10]
+            else:
+                c_str = str(o.get('created_at') or '')
+                d_key = c_str[:10] if len(c_str) >= 10 else datetime.now().strftime('%Y-%m-%d')
+
+            courier = o.get('courier') or '나르다'
+            group_key = f"{d_key}_{courier}"
+
+            if group_key not in groups:
+                groups[group_key] = {
+                    'group_key': group_key,
+                    'date': d_key,
+                    'courier': courier,
+                    'title': f"{d_key} {courier} 송장",
+                    'order_ids': [],
+                    'has_pdf_count': 0,
+                    'orders_count': 0
+                }
+            groups[group_key]['order_ids'].append(o['id'])
+            groups[group_key]['orders_count'] += 1
+            if o.get('invoice_pdf_url'):
+                groups[group_key]['has_pdf_count'] += 1
+
+        batch_list = list(groups.values())
+        return jsonify(batch_list)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
 @app.route('/api/shipping/labels', methods=['GET'])
 def api_shipping_labels():
     order_ids_str = request.args.get('order_ids', '')
-    if not order_ids_str:
-        return jsonify([])
-
     order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
     conn = get_connection()
     cur = conn.cursor()
 
-    # 발송자 정보
-    cur.execute('SELECT * FROM courier_settings LIMIT 1')
-    sender = cur.fetchone()
-    sender_info = dict(sender) if sender else {
-        'sender_name': '프리비 물류센터',
-        'sender_phone': '02-1234-5678',
-        'sender_address': '서울특별시 강남구 테헤란로 123 물류빌딩 3층'
-    }
+    try:
+        # 발송자 정보
+        cur.execute('SELECT * FROM courier_settings LIMIT 1')
+        sender = cur.fetchone()
+        sender_info = dict(sender) if sender else {
+            'sender_name': 'TOA',
+            'sender_phone': '02-1234-5678',
+            'sender_address': '서울특별시 강남구 테헤란로 123 물류빌딩 3층'
+        }
 
-    placeholders = ','.join(['?'] * len(order_ids))
-    cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
-    orders = [dict(row) for row in cur.fetchall()]
+        if order_ids:
+            placeholders = ','.join(['?'] * len(order_ids))
+            cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        else:
+            cur.execute('''
+                SELECT * FROM orders
+                WHERE (tracking_no IS NOT NULL AND tracking_no != '')
+                   OR invoice_pdf_url != ''
+                   OR status IN ('송장발급', '출고완료')
+                ORDER BY id DESC LIMIT 150
+            ''')
 
-    if orders:
-        order_ids = [o['id'] for o in orders]
-        placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
-        items_by_order = {}
-        for it in cur.fetchall():
-            oid = it['order_id']
-            if oid not in items_by_order:
-                items_by_order[oid] = []
-            items_by_order[oid].append(dict(it))
-        for o in orders:
-            o['items'] = items_by_order.get(o['id'], [])
-            o['sender'] = sender_info
-    else:
-        for o in orders:
-            o['items'] = []
-            o['sender'] = sender_info
+        orders = [dict(row) for row in cur.fetchall()]
 
-    conn.close()
-    return jsonify(orders)
+        if orders:
+            oids = [o['id'] for o in orders]
+            placeholders = ','.join(['?'] * len(oids))
+            cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', oids)
+            items_by_order = {}
+            for it in cur.fetchall():
+                oid = it['order_id']
+                if oid not in items_by_order:
+                    items_by_order[oid] = []
+                items_by_order[oid].append(dict(it))
+            for o in orders:
+                o['items'] = items_by_order.get(o['id'], [])
+                o['sender'] = sender_info
+        return jsonify(orders)
+    finally:
+        conn.close()
 
 @app.route('/api/shipping/narda-pdf-bundle', methods=['GET'])
 def api_narda_pdf_bundle():
