@@ -514,6 +514,7 @@ def validate_customs_batch():
             for o in batch:
                 name = (o['recipient_name'] or '').strip()
                 cid = (o['customs_id'] or '').strip().upper()
+                phone = (o['recipient_phone1'] or '').strip()
                 pcode = (o['postal_code'] or '').strip()
                 if pcode.isdigit() and len(pcode) < 5:
                     pcode = pcode.zfill(5)
