@@ -1027,8 +1027,8 @@ def upload_products_excel():
             else:
                 cur.execute('''
                     INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url)
-                    VALUES (?, ?, '', ?, ?, ?, ?, ?, ?)
-                ''', (sku, name or f"상품_{sku}", eng, hs, price, stock, dispatched, url))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (sku, name or f"상품_{sku}", '', eng, hs, price, stock, dispatched, url))
                 prod_id = cur.lastrowid
 
                 cur.execute('''
@@ -1053,7 +1053,7 @@ def upload_products_excel():
                     ''', (prod_id, sku, name, price, dispatched))
 
                 # 미등록 상품 목록에 있으면 등록 완료 처리
-                cur.execute('UPDATE unregistered_products SET status = "registered" WHERE combined_name = ? OR product_name = ?', (name, name))
+                cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE combined_name = ? OR product_name = ?", (name, name))
 
             saved_count += 1
 
@@ -1068,69 +1068,72 @@ def upload_products_excel():
 
 @app.route('/api/inventory/product', methods=['POST'])
 def save_product():
-    data = request.get_json() or {}
-    sku = data.get('sku', '').strip()
-    product_name = data.get('product_name', '').strip()
-    english_name = data.get('english_name', '').strip()
-    hs_code = data.get('hs_code', '').strip()
-    unit_price = float(data.get('unit_price', 0.0) or 0.0)
-    stock_quantity = int(data.get('stock_quantity', 0) or 0)
-    dispatched_quantity = int(data.get('dispatched_quantity', 0) or 0)
-    product_url = data.get('product_url', '').strip()
-    prod_id = data.get('id')
-    options = data.get('options', [])
+    try:
+        data = request.get_json() or {}
+        sku = data.get('sku', '').strip()
+        product_name = data.get('product_name', '').strip()
+        english_name = data.get('english_name', '').strip()
+        hs_code = data.get('hs_code', '').strip()
+        unit_price = float(data.get('unit_price', 0.0) or 0.0)
+        stock_quantity = int(data.get('stock_quantity', 0) or 0)
+        dispatched_quantity = int(data.get('dispatched_quantity', 0) or 0)
+        product_url = data.get('product_url', '').strip()
+        prod_id = data.get('id')
+        options = data.get('options', [])
 
-    if not sku or not product_name:
-        return jsonify({'error': 'SKU(바코드)와 상품명은 필수입니다.'}), 400
+        if not sku or not product_name:
+            return jsonify({'error': 'SKU(바코드)와 상품명은 필수입니다.'}), 400
 
-    conn = get_connection()
-    cur = conn.cursor()
-    if prod_id:
-        cur.execute('''
-            UPDATE products
-            SET sku = ?, product_name = ?, english_name = ?, hs_code = ?, unit_price = ?, stock_quantity = ?, dispatched_quantity = ?, product_url = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        ''', (sku, product_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url, prod_id))
-    else:
-        cur.execute('''
-            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url)
-            VALUES (?, ?, '', ?, ?, ?, ?, ?, ?)
-        ''', (sku, product_name, '', english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url))
-        prod_id = cur.lastrowid
-
-    # 옵션 목록 갱신 (전달된 옵션이 있는 경우)
-    if options is not None:
-        cur.execute('DELETE FROM product_options WHERE sku = ? OR product_id = ?', (sku, prod_id))
-        for opt in options:
-            opt_name = str(opt.get('option_name', '')).strip()
-            if not opt_name:
-                continue
-            try:
-                opt_price = float(opt.get('unit_price', 0.0) or 0.0)
-            except:
-                opt_price = 0.0
-            try:
-                opt_qty = int(opt.get('dispatched_quantity', 1) or 1)
-            except:
-                opt_qty = 1
-
+        conn = get_connection()
+        cur = conn.cursor()
+        if prod_id:
             cur.execute('''
-                INSERT INTO product_options (product_id, sku, option_name, unit_price, dispatched_quantity)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (prod_id, sku, opt_name, opt_price, opt_qty))
+                UPDATE products
+                SET sku = ?, product_name = ?, english_name = ?, hs_code = ?, unit_price = ?, stock_quantity = ?, dispatched_quantity = ?, product_url = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (sku, product_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url, prod_id))
+        else:
+            cur.execute('''
+                INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (sku, product_name, '', english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url))
+            prod_id = cur.lastrowid
 
-            cur.execute('UPDATE unregistered_products SET status = "registered" WHERE combined_name = ? OR product_name = ?', (opt_name, opt_name))
+        # 옵션 목록 갱신 (전달된 옵션이 있는 경우)
+        if options is not None:
+            cur.execute('DELETE FROM product_options WHERE sku = ? OR product_id = ?', (sku, prod_id))
+            for opt in options:
+                opt_name = str(opt.get('option_name', '')).strip()
+                if not opt_name:
+                    continue
+                try:
+                    opt_price = float(opt.get('unit_price', 0.0) or 0.0)
+                except:
+                    opt_price = 0.0
+                try:
+                    opt_qty = int(opt.get('dispatched_quantity', 1) or 1)
+                except:
+                    opt_qty = 1
 
-    # 미등록 상품 테이블 상태 업데이트
-    cur.execute('UPDATE unregistered_products SET status = "registered" WHERE combined_name = ? OR product_name = ?', (product_name, product_name))
+                cur.execute('''
+                    INSERT INTO product_options (product_id, sku, option_name, unit_price, dispatched_quantity)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (prod_id, sku, opt_name, opt_price, opt_qty))
 
-    # 주문 품목들의 바코드 동기화
-    from excel_processor import sync_order_items_sku
-    sync_order_items_sku(conn)
+                cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE combined_name = ? OR product_name = ?", (opt_name, opt_name))
 
-    conn.commit()
-    conn.close()
-    return jsonify({'status': 'success'})
+        # 미등록 상품 테이블 상태 업데이트
+        cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE combined_name = ? OR product_name = ?", (product_name, product_name))
+
+        # 주문 품목들의 바코드 동기화
+        from excel_processor import sync_order_items_sku
+        sync_order_items_sku(conn)
+
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'error': f'상품 저장 중 오류: {str(e)}'}), 500
 
 @app.route('/api/inventory/products/delete', methods=['POST'])
 def delete_products_batch():
@@ -1165,7 +1168,7 @@ def delete_product(prod_id):
 def get_unregistered_products():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM unregistered_products WHERE status = "pending" ORDER BY order_count DESC, id DESC')
+    cur.execute("SELECT * FROM unregistered_products WHERE status = 'pending' ORDER BY order_count DESC, id DESC")
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return jsonify(rows)
@@ -1174,7 +1177,7 @@ def get_unregistered_products():
 def ignore_unregistered_product(item_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('UPDATE unregistered_products SET status = "ignored" WHERE id = ?', (item_id,))
+    cur.execute("UPDATE unregistered_products SET status = 'ignored' WHERE id = ?", (item_id,))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
