@@ -192,6 +192,7 @@ def get_orders():
     customs_status = request.args.get('customs_status', '').strip()
     search = request.args.get('search', '').strip()
     search_field = request.args.get('search_field', 'all').strip()
+    dispatch_filter = request.args.get('dispatch_filter', '').strip()
     sort_by = request.args.get('sort_by', 'single_barcode_asc').strip()
     limit_param = request.args.get('limit', '').strip()
 
@@ -281,11 +282,53 @@ def get_orders():
         for o in orders:
             o['items'] = []
 
-    conn.close()
-
     # 정렬: 1) 주문번호 한개씩(품목 1개 단품) 우선 -> 2) 2개부터 합포장 정렬 -> 3) 바코드 오름차순 -> 4) 출고수량 오름차순
     if sort_by == 'single_barcode_asc':
         orders.sort(key=get_order_sort_key)
+
+    # 재고 필터는 같은 요청에서 계산해 브라우저와 DB 왕복을 줄입니다.
+    if dispatch_filter in ('출고가능', '재고부족') and orders:
+        cur.execute("SELECT sku, stock_quantity FROM products WHERE sku IS NOT NULL AND sku != ''")
+        stock_map = {row['sku']: (row['stock_quantity'] or 0) for row in cur.fetchall()}
+
+        for order in orders:
+            all_available = True
+            any_available = False
+            item_details = []
+            items = order.get('items') or []
+
+            for item in items:
+                sku = item.get('sku')
+                option_qty = int(item.get('option_quantity') or 1)
+                product_qty = int(item.get('product_quantity') or order.get('original_quantity') or 1)
+                needed = option_qty * product_qty
+                current_stock = stock_map.get(sku, 0)
+                if current_stock >= needed:
+                    stock_map[sku] = current_stock - needed
+                    any_available = True
+                    item_details.append({'sku': sku, 'needed': needed, 'available': True, 'remaining': stock_map[sku]})
+                else:
+                    all_available = False
+                    item_details.append({'sku': sku, 'needed': needed, 'available': False, 'remaining': current_stock})
+
+            if not items:
+                availability_status = '출고불가'
+            elif all_available:
+                availability_status = '출고가능'
+            elif any_available:
+                availability_status = '부분부족'
+            else:
+                availability_status = '재고부족'
+
+            order['_dispatchStatus'] = availability_status
+            order['_dispatchDetails'] = item_details
+
+        if dispatch_filter == '출고가능':
+            orders = [order for order in orders if order['_dispatchStatus'] == '출고가능']
+        else:
+            orders = [order for order in orders if order['_dispatchStatus'] != '출고가능']
+
+    conn.close()
 
     return jsonify(orders)
 

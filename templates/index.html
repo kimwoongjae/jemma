@@ -140,7 +140,7 @@
             <span class="badge bg-primary px-3 py-2 rounded-pill">
                 <i class="fa-solid fa-truck-fast me-1"></i> 택배 API 연동 가동 중
             </span>
-            <button class="btn btn-outline-light btn-sm" onclick="refreshAllData()">
+            <button class="btn btn-outline-light btn-sm" onclick="refreshAllData(true)">
                 <i class="fa-solid fa-arrows-rotate me-1"></i> 새로고침
             </button>
         </div>
@@ -348,12 +348,6 @@
                             </button>
                             <button class="btn btn-primary" onclick="issueTrackingSelected()">
                                 <i class="fa-solid fa-barcode me-1"></i> 선택 송장발급
-                            </button>
-                            <button class="btn btn-outline-dark" onclick="openPrintModalForSelected()">
-                                <i class="fa-solid fa-print me-1"></i> 선택 송장출력
-                            </button>
-                            <button class="btn btn-secondary" onclick="exportExcel()">
-                                <i class="fa-solid fa-file-excel me-1"></i> 송장 엑셀
                             </button>
                             <button class="btn btn-outline-danger" onclick="deleteSelectedOrders()" title="선택한 주문을 삭제합니다">
                                 <i class="fa-solid fa-trash me-1"></i> 선택 삭제
@@ -1376,15 +1370,32 @@
         initBatchScanRows();
     });
 
-    function refreshAllData() {
+    function refreshAllData(refreshEveryTab = false) {
         loadStats();
-        loadOrders();
-        loadCustomsErrorOrders();
-        loadDispatchedOrders();
-        loadInventory();
-        loadUnregisteredProducts();
-        loadInventoryLogs();
-        loadSettingsAndBundles();
+        if (refreshEveryTab) {
+            loadOrders();
+            loadCustomsErrorOrders();
+            loadDispatchedOrders();
+            loadInventory();
+            loadUnregisteredProducts();
+            loadInventoryLogs();
+            loadSettingsAndBundles();
+            return;
+        }
+
+        // 시작 및 저장 후에는 현재 열려 있는 탭만 갱신하고, 나머지는 탭 진입 시 불러옵니다.
+        const activeTabId = document.querySelector('#mainTabs .nav-link.active')?.id || 'tab-orders';
+        const refreshCurrentTab = {
+            'tab-orders': () => { loadOrders(); loadCustomsErrorOrders(); },
+            'tab-customs-error': loadCustomsErrorOrders,
+            'tab-dispatched': loadDispatchedOrders,
+            'tab-stockin': initStockInTab,
+            'tab-inventory': () => { loadInventory(); loadUnregisteredProducts(); },
+            'tab-logs': loadInventoryLogs,
+            'tab-labels': () => loadShippingBatches(true),
+            'tab-settings': loadSettingsAndBundles
+        }[activeTabId] || loadOrders;
+        refreshCurrentTab();
     }
 
     // 통계 요약
@@ -1556,31 +1567,8 @@
         const search = document.getElementById('orderSearchInput')?.value || '';
         const searchField = document.getElementById('orderSearchField')?.value || 'all';
         try {
-            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&customs_status=${encodeURIComponent(customs)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
+            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&customs_status=${encodeURIComponent(customs)}&dispatch_filter=${encodeURIComponent(dispatchFilter)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
             ordersList = await res.json();
-
-            if (dispatchFilter !== '전체' && ordersList.length > 0) {
-                // 화면 정렬 순서와 동일하게 재고를 가상 차감하여 출고 가능 여부를 계산합니다.
-                sortOrdersInPlace(ordersList);
-                const availabilityRes = await fetch('/api/orders/check-dispatch-availability', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ order_ids: ordersList.map(order => order.id) })
-                });
-                if (!availabilityRes.ok) throw new Error('출고 가능 여부를 확인하지 못했습니다.');
-                const availabilityData = await availabilityRes.json();
-                if (availabilityData.status !== 'success') throw new Error(availabilityData.error || '출고 가능 여부 확인 실패');
-
-                ordersList.forEach(order => {
-                    const result = availabilityData.results?.[order.id];
-                    if (!result) throw new Error(`주문 ${order.order_no}의 재고 판정 결과가 없습니다.`);
-                    order._dispatchStatus = result.status;
-                    order._dispatchDetails = result.items;
-                });
-                ordersList = ordersList.filter(order => dispatchFilter === '출고가능'
-                    ? order._dispatchStatus === '출고가능'
-                    : order._dispatchStatus !== '출고가능');
-            }
             renderOrdersTable(ordersList);
         } catch (e) {
             console.error('Order load error', e);
@@ -1613,11 +1601,11 @@
         if (!checked || checked.length === 0) {
             return;
         }
-        const weightVal = document.getElementById('bulkWeightInput')?.value;
-        if (!weightVal || isNaN(parseFloat(weightVal)) || parseFloat(weightVal) < 0) {
+        const weightVal = document.getElementById('bulkWeightInput')?.value ?? '';
+        const weight = Number(weightVal);
+        if (String(weightVal).trim() === '' || !Number.isFinite(weight) || weight < 0) {
             return;
         }
-        const weight = parseFloat(weightVal);
         try {
             const res = await fetch('/api/orders/bulk-weight', {
                 method: 'POST',
@@ -1628,15 +1616,15 @@
                 })
             });
             const data = await res.json();
-            if (data.status === 'success') {
+            if (res.ok && data.status === 'success') {
                 const selectedIds = new Set(checked);
                 ordersList.forEach(order => {
                     if (selectedIds.has(Number(order.id))) order.weight = weight;
                 });
-                document.querySelectorAll('.order-row-check:checked').forEach(checkbox => {
-                    const row = checkbox.closest('tr');
-                    const weightInput = row?.querySelector('input[type="number"]');
-                    if (weightInput) weightInput.value = String(weight);
+                document.querySelectorAll('#ordersTableBody .order-weight-input').forEach(weightInput => {
+                    if (!selectedIds.has(Number(weightInput.dataset.orderId))) return;
+                    weightInput.value = String(weight);
+                    weightInput.dataset.savedWeight = String(weight);
                 });
             } else {
                 alert('무게 일괄 적용 실패: ' + (data.error || '오류'));

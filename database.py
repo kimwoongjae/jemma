@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import threading
 from datetime import datetime
 
 # Supabase PostgreSQL 연결 설정
@@ -17,10 +18,14 @@ USE_POSTGRES = True
 try:
     import psycopg2
     import psycopg2.extras
+    from psycopg2.pool import ThreadedConnectionPool
 except ImportError:
     USE_POSTGRES = False
+    ThreadedConnectionPool = None
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orders.db')
+_pg_pool = None
+_pg_pool_lock = threading.Lock()
 
 class PgCursorWrapper:
     def __init__(self, raw_cursor):
@@ -87,8 +92,9 @@ class PgCursorWrapper:
         self._cur.close()
 
 class PgConnectionWrapper:
-    def __init__(self, pg_conn):
+    def __init__(self, pg_conn, pool=None):
         self._conn = pg_conn
+        self._pool = pool
 
     def cursor(self):
         return PgCursorWrapper(self._conn.cursor(cursor_factory=psycopg2.extras.DictCursor))
@@ -100,28 +106,49 @@ class PgConnectionWrapper:
         self._conn.rollback()
 
     def close(self):
-        self._conn.close()
+        if self._pool:
+            self._pool.putconn(self._conn)
+        else:
+            self._conn.close()
+
+def _get_postgres_pool():
+    global _pg_pool
+    if _pg_pool is None:
+        with _pg_pool_lock:
+            if _pg_pool is None:
+                database_url = os.environ.get('DATABASE_URL')
+                try:
+                    if database_url:
+                        _pg_pool = ThreadedConnectionPool(1, 12, database_url, sslmode='require')
+                    else:
+                        _pg_pool = ThreadedConnectionPool(1, 12, **SUPABASE_CONFIG)
+                except Exception:
+                    if not database_url:
+                        raise
+                    _pg_pool = ThreadedConnectionPool(1, 12, **SUPABASE_CONFIG)
+    return _pg_pool
 
 def get_connection():
     if USE_POSTGRES:
         try:
-            db_url = os.environ.get('DATABASE_URL')
-            if db_url:
-                try:
-                    pg_conn = psycopg2.connect(db_url, sslmode='require')
-                    return PgConnectionWrapper(pg_conn)
-                except Exception:
-                    pass
-            # Default to Supabase kwargs
-            pg_conn = psycopg2.connect(**SUPABASE_CONFIG)
-            return PgConnectionWrapper(pg_conn)
+            pool = _get_postgres_pool()
+            try:
+                return PgConnectionWrapper(pool.getconn(), pool)
+            except Exception:
+                # 풀의 모든 연결이 사용 중일 때는 SQLite로 전환하지 않고 임시 연결을 사용합니다.
+                database_url = os.environ.get('DATABASE_URL')
+                if database_url:
+                    try:
+                        return PgConnectionWrapper(psycopg2.connect(database_url, sslmode='require'))
+                    except Exception:
+                        pass
+                return PgConnectionWrapper(psycopg2.connect(**SUPABASE_CONFIG))
         except Exception as e:
             print(f"[DB Warning] PostgreSQL connection failed ({e}), falling back to SQLite.")
 
     # SQLite fallback
     conn = sqlite3.connect(DB_PATH, timeout=20.0)
     conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL')
     return conn
 
 def init_db():
@@ -129,10 +156,16 @@ def init_db():
     cur = conn.cursor()
 
     if isinstance(conn, PgConnectionWrapper):
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_inventory_logs_created_at ON inventory_logs (created_at)')
         conn.commit()
         conn.close()
         print("Connected to Supabase PostgreSQL cloud database successfully.")
         return
+
+    conn.execute('PRAGMA journal_mode=WAL')
 
     # 1. 상품 및 재고 마스터 (Products / SKU)
     cur.execute('''
@@ -345,6 +378,11 @@ def init_db():
                     pass
     except Exception:
         pass
+
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_inventory_logs_created_at ON inventory_logs (created_at)')
 
     conn.commit()
     conn.close()
