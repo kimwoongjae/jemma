@@ -191,7 +191,11 @@
             #stockin-pane .stockin-quick-panel { flex: 0 0 100%; width: 100%; }
             #stockin-pane .stockin-batch-panel { display: none !important; }
             #stockin-pane .stockin-quick-panel .card { margin-bottom: 0 !important; }
-            #stockin-pane .stockin-camera-button { min-width: 54px; font-size: 22px; }
+            #stockin-pane .stockin-barcode-input-group { display: flex; flex-wrap: wrap; gap: 8px; }
+            #stockin-pane .stockin-barcode-input-group #scanBarcodeSingle { flex: 0 0 100%; width: 100%; border-radius: 8px !important; }
+            #stockin-pane .stockin-camera-button { flex: 0 0 100%; width: 100%; border-radius: 8px !important; font-size: 17px; font-weight: 700; }
+            #stockin-pane .stockin-search-button { display: none; }
+            #stockin-pane .scan-status-message { font-size: 18px; line-height: 1.3; }
         }
         .barcode-camera-panel { margin-top: 12px; }
         .barcode-camera-view { position: relative; overflow: hidden; border-radius: 12px; background: #111827; }
@@ -656,12 +660,12 @@
                             <!-- 바코드 입력 & 검색 -->
                             <div class="mb-3">
                                 <label class="form-label fw-bold">바코드 (SKU) 스캔</label>
-                                <div class="input-group input-group-lg">
-                                    <input type="text" id="scanBarcodeSingle" class="form-control" placeholder="바코드 스캔 또는 입력 후 Enter" autofocus onkeyup="if(event.key==='Enter') searchBarcodeSingle()">
+                                <div class="input-group input-group-lg stockin-barcode-input-group">
+                                    <input type="text" id="scanBarcodeSingle" class="form-control" placeholder="바코드 입력" autofocus oninput="scheduleBarcodeSingleSearch()" onkeyup="if(event.key==='Enter') searchBarcodeSingle()">
                                     <button type="button" class="btn btn-outline-success stockin-camera-button d-md-none" onclick="openBarcodeCamera()" aria-label="카메라로 바코드 스캔" title="카메라로 바코드 스캔">
-                                        📷
+                                        📷 카메라로 스캔
                                     </button>
-                                    <button class="btn btn-primary px-4" onclick="searchBarcodeSingle()">
+                                    <button class="btn btn-primary px-4 stockin-search-button" onclick="searchBarcodeSingle()">
                                         <i class="fa-solid fa-magnifying-glass me-1"></i> 검색
                                     </button>
                                 </div>
@@ -1443,6 +1447,7 @@
     let barcodeCameraDetector = null;
     let barcodeCameraTimer = null;
     let barcodeCameraHandled = false;
+    let barcodeSingleSearchTimer = null;
 
     function escapeHtml(str) {
         if (!str) return '';
@@ -3014,7 +3019,20 @@
     }
 
     // 빠른 개별 바코드 검색
+    function scheduleBarcodeSingleSearch() {
+        if (!window.matchMedia('(max-width: 767.98px)').matches) return;
+        clearTimeout(barcodeSingleSearchTimer);
+        const barcode = document.getElementById('scanBarcodeSingle').value.trim();
+        if (!barcode) return;
+        barcodeSingleSearchTimer = setTimeout(() => {
+            barcodeSingleSearchTimer = null;
+            searchBarcodeSingle();
+        }, 650);
+    }
+
     async function searchBarcodeSingle() {
+        clearTimeout(barcodeSingleSearchTimer);
+        barcodeSingleSearchTimer = null;
         const barcode = document.getElementById('scanBarcodeSingle').value.trim();
         if (!barcode) { alert('바코드를 입력하세요.'); return; }
 
@@ -3026,8 +3044,8 @@
 
             if (data.found) {
                 const p = data.product;
-                document.getElementById('scanProductStatusBadge').innerHTML = 
-                    `<span class="badge bg-success"><i class="fa-solid fa-check me-1"></i>등록된 상품</span>`;
+                document.getElementById('scanProductStatusBadge').innerHTML =
+                    `<div class="alert alert-success py-2 mb-2 fw-bold scan-status-message">✅ 등록된 상품</div>`;
                 document.getElementById('scanProductName').value = p.product_name;
                 document.getElementById('scanEnglishName').value = p.english_name || '';
                 document.getElementById('scanHsCode').value = p.hs_code || '';
@@ -3042,8 +3060,8 @@
                     linkBtn.style.display = 'none';
                 }
             } else {
-                document.getElementById('scanProductStatusBadge').innerHTML = 
-                    `<span class="badge bg-warning text-dark"><i class="fa-solid fa-triangle-exclamation me-1"></i>새로운 상품 (미등록 바코드) - 아래 정보 입력 후 입고 시 자동 등록됩니다</span>`;
+                document.getElementById('scanProductStatusBadge').innerHTML =
+                    `<div class="alert alert-warning py-2 mb-2 scan-status-message"><div class="fw-bold">⚠️ 미등록 상품</div><div class="small fw-normal">상품명을 입력하면 입고 시 자동 등록됩니다.</div></div>`;
                 document.getElementById('scanProductName').value = '';
                 document.getElementById('scanEnglishName').value = '';
                 document.getElementById('scanHsCode').value = '';
@@ -3052,8 +3070,9 @@
                 document.getElementById('scanProductUrl').value = '';
                 document.getElementById('scanProductUrlLink').style.display = 'none';
             }
-            document.getElementById('scanQuantity').focus();
-            document.getElementById('scanQuantity').select();
+            const nextInput = data.found ? document.getElementById('scanQuantity') : document.getElementById('scanProductName');
+            nextInput.focus();
+            nextInput.select();
         } catch (e) {
             alert('검색 오류: ' + e.message);
         }
