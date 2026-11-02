@@ -426,11 +426,12 @@ def export_shipping_excel(order_ids=None):
 
     if order_ids and len(order_ids) > 0:
         placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders})', order_ids)
+        rows_by_id = {int(row['id']): row for row in cur.fetchall()}
+        orders = [rows_by_id[order_id] for order_id in order_ids if order_id in rows_by_id]
     else:
         cur.execute('SELECT * FROM orders ORDER BY id DESC')
-
-    orders = cur.fetchall()
+        orders = cur.fetchall()
     conn.close()
 
     wb = openpyxl.Workbook()
