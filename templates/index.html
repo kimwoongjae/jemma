@@ -188,6 +188,11 @@
             .btn { min-height: 40px; }
             .btn-sm, .btn-xs { min-height: 34px; }
             #labels-pane .row > [class*="col-"] { width: 100%; }
+            #stockin-pane .stockin-quick-panel { flex: 0 0 100%; width: 100%; }
+            #stockin-pane .stockin-batch-panel { display: none !important; }
+            #stockin-pane .stockin-quick-panel .card { margin-bottom: 0 !important; }
+            #stockin-pane .stockin-camera-button { min-width: 54px; font-size: 22px; }
+            #stockin-pane #scanCameraVideo { width: 100%; max-height: 65dvh; object-fit: cover; background: #111827; border-radius: 12px; }
         }
     </style>
 </head>
@@ -636,7 +641,7 @@
         <div class="tab-pane fade" id="stockin-pane" role="tabpanel">
             <div class="row g-4">
                 <!-- 개별 빠른 바코드 스캔 & 입고 -->
-                <div class="col-lg-5">
+                <div class="col-lg-5 stockin-quick-panel">
                     <div class="card border-0 shadow-sm mb-4">
                         <div class="card-header bg-white py-3">
                             <h5 class="fw-bold mb-1"><i class="fa-solid fa-barcode text-success me-2"></i>바코드 스캔 빠른 입고</h5>
@@ -648,6 +653,9 @@
                                 <label class="form-label fw-bold">바코드 (SKU) 스캔</label>
                                 <div class="input-group input-group-lg">
                                     <input type="text" id="scanBarcodeSingle" class="form-control" placeholder="바코드 스캔 또는 입력 후 Enter" autofocus onkeyup="if(event.key==='Enter') searchBarcodeSingle()">
+                                    <button type="button" class="btn btn-outline-success stockin-camera-button d-md-none" onclick="openBarcodeCamera()" aria-label="카메라로 바코드 스캔" title="카메라로 바코드 스캔">
+                                        📷
+                                    </button>
                                     <button class="btn btn-primary px-4" onclick="searchBarcodeSingle()">
                                         <i class="fa-solid fa-magnifying-glass me-1"></i> 검색
                                     </button>
@@ -711,7 +719,7 @@
                 </div>
 
                 <!-- 일괄 바코드 스캔 (레퍼런스 이미지 스타일) -->
-                <div class="col-lg-7">
+                <div class="col-lg-7 stockin-batch-panel">
                     <div class="card border-0 shadow-sm">
                         <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
                             <div>
@@ -1403,8 +1411,25 @@
     </div>
 </div>
 
+<!-- 모바일 카메라 바코드 스캔 -->
+<div class="modal fade" id="barcodeCameraModal" tabindex="-1" aria-labelledby="barcodeCameraTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold" id="barcodeCameraTitle">📷 바코드 스캔</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+            </div>
+            <div class="modal-body">
+                <video id="scanCameraVideo" autoplay muted playsinline></video>
+                <div id="scanCameraStatus" class="small text-muted text-center mt-3">바코드를 화면 가운데에 맞춰주세요.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Bootstrap 5 JS -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
 
 <script>
     let currentPreviewData = null;
@@ -1413,6 +1438,11 @@
     let dispatchedOrdersList = [];
     let inventoryList = [];
     let inventoryLogsList = [];
+    let barcodeCameraStream = null;
+    let barcodeCameraControls = null;
+    let barcodeCameraDetector = null;
+    let barcodeCameraTimer = null;
+    let barcodeCameraHandled = false;
 
     function escapeHtml(str) {
         if (!str) return '';
@@ -1432,6 +1462,7 @@
         refreshAllData();
         setupDragAndDrop();
         initBatchScanRows();
+        document.getElementById('barcodeCameraModal')?.addEventListener('hidden.bs.modal', stopBarcodeCamera);
     });
 
     function refreshAllData(refreshEveryTab = false) {
@@ -2870,7 +2901,111 @@
     // 2. 신규 [입고 (바코드 스캔)] 기능
     // ==========================================
     function initStockInTab() {
-        setTimeout(() => document.getElementById('scanBarcodeSingle').focus(), 100);
+        if (!window.matchMedia('(max-width: 767.98px)').matches) {
+            setTimeout(() => document.getElementById('scanBarcodeSingle')?.focus(), 100);
+        }
+    }
+
+    function stopBarcodeCamera() {
+        if (barcodeCameraTimer) {
+            clearTimeout(barcodeCameraTimer);
+            barcodeCameraTimer = null;
+        }
+        if (barcodeCameraControls) {
+            barcodeCameraControls.stop();
+            barcodeCameraControls = null;
+        }
+        if (barcodeCameraStream) {
+            barcodeCameraStream.getTracks().forEach(track => track.stop());
+            barcodeCameraStream = null;
+        }
+        const video = document.getElementById('scanCameraVideo');
+        if (video) {
+            video.pause();
+            video.srcObject = null;
+        }
+    }
+
+    async function openBarcodeCamera() {
+        if (!navigator.mediaDevices?.getUserMedia) {
+            alert('카메라를 사용할 수 없습니다. HTTPS 주소로 접속하고 브라우저의 카메라 권한을 허용해주세요.');
+            return;
+        }
+
+        barcodeCameraHandled = false;
+        const modalEl = document.getElementById('barcodeCameraModal');
+        const status = document.getElementById('scanCameraStatus');
+        const video = document.getElementById('scanCameraVideo');
+        status.textContent = '카메라 연결 중...';
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+
+        try {
+            barcodeCameraStream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: { facingMode: { ideal: 'environment' } }
+            });
+            video.srcObject = barcodeCameraStream;
+            await video.play();
+            status.textContent = '바코드를 화면 가운데에 맞춰주세요.';
+
+            if ('BarcodeDetector' in window) {
+                let formats = ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39', 'itf', 'codabar'];
+                if (BarcodeDetector.getSupportedFormats) {
+                    const supported = await BarcodeDetector.getSupportedFormats();
+                    formats = formats.filter(format => supported.includes(format));
+                }
+                if (formats.length) {
+                    barcodeCameraDetector = new BarcodeDetector({ formats });
+                    scanCameraFrame(video, modalEl);
+                    return;
+                }
+            }
+
+            const zxing = window.ZXingBrowser;
+            if (zxing?.BrowserMultiFormatReader) {
+                const reader = new zxing.BrowserMultiFormatReader();
+                barcodeCameraControls = await reader.decodeFromVideoElement(video, (result) => {
+                    if (result) handleDetectedBarcode(result.getText(), modalEl);
+                });
+                return;
+            }
+
+            throw new Error('이 브라우저에서 바코드 인식을 지원하지 않습니다. Chrome을 최신 버전으로 업데이트해주세요.');
+        } catch (e) {
+            stopBarcodeCamera();
+            status.textContent = e.message || '카메라 연결에 실패했습니다.';
+            if (e.name === 'NotAllowedError') {
+                status.textContent = '카메라 권한이 차단되었습니다. 브라우저 사이트 설정에서 카메라를 허용해주세요.';
+            } else if (e.name === 'NotFoundError') {
+                status.textContent = '사용 가능한 카메라를 찾을 수 없습니다.';
+            }
+        }
+    }
+
+    function scanCameraFrame(video, modalEl) {
+        if (barcodeCameraHandled || !barcodeCameraStream || !barcodeCameraDetector) return;
+        barcodeCameraDetector.detect(video)
+            .then(codes => {
+                if (codes?.length) {
+                    handleDetectedBarcode(codes[0].rawValue, modalEl);
+                    return;
+                }
+                barcodeCameraTimer = setTimeout(() => scanCameraFrame(video, modalEl), 120);
+            })
+            .catch(() => {
+                barcodeCameraTimer = setTimeout(() => scanCameraFrame(video, modalEl), 250);
+            });
+    }
+
+    function handleDetectedBarcode(value, modalEl) {
+        const barcode = String(value || '').trim();
+        if (!barcode || barcodeCameraHandled) return;
+        barcodeCameraHandled = true;
+        const input = document.getElementById('scanBarcodeSingle');
+        input.value = barcode;
+        stopBarcodeCamera();
+        bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+        searchBarcodeSingle();
     }
 
     // 빠른 개별 바코드 검색
