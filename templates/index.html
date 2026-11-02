@@ -200,6 +200,8 @@
         .barcode-camera-panel { margin-top: 12px; }
         .barcode-camera-view { position: relative; overflow: hidden; border-radius: 12px; background: #111827; }
         #scanCameraVideo { display: block; width: 100%; max-height: 58dvh; min-height: 230px; object-fit: cover; }
+        .barcode-camera-zoom { position: absolute; z-index: 3; top: 10px; right: 10px; display: flex; gap: 6px; }
+        .barcode-camera-zoom .btn { min-width: 42px; padding: 4px 10px; background: rgba(15,23,42,.78); color: #fff; border: 1px solid rgba(255,255,255,.8); }
         .barcode-scan-line { position: absolute; z-index: 2; left: 6%; right: 6%; top: 50%; height: 3px; background: #ff2738; box-shadow: 0 0 8px 2px rgba(255,39,56,.8); animation: barcode-scan-sweep 2s ease-in-out infinite alternate; pointer-events: none; }
         @keyframes barcode-scan-sweep { from { transform: translateY(-75px); } to { transform: translateY(75px); } }
         .barcode-scan-frame { position: absolute; z-index: 1; inset: 25% 6%; border: 2px solid rgba(255,255,255,.75); border-radius: 10px; pointer-events: none; }
@@ -672,6 +674,11 @@
                                 <div id="barcodeCameraPanel" class="barcode-camera-panel" style="display:none;">
                                     <div class="barcode-camera-view" onclick="refocusBarcodeCamera()" title="화면을 누르면 초점을 다시 맞춥니다">
                                         <video id="scanCameraVideo" autoplay muted playsinline></video>
+                                        <div class="barcode-camera-zoom" id="barcodeCameraZoom" style="display:none;" onclick="event.stopPropagation()">
+                                            <button type="button" class="btn" onclick="adjustBarcodeCameraZoom(-1)" aria-label="카메라 줌 축소">−</button>
+                                            <span class="btn" id="barcodeCameraZoomLevel">2×</span>
+                                            <button type="button" class="btn" onclick="adjustBarcodeCameraZoom(1)" aria-label="카메라 줌 확대">＋</button>
+                                        </div>
                                         <div class="barcode-scan-frame"></div>
                                         <div class="barcode-scan-line"></div>
                                     </div>
@@ -1438,6 +1445,7 @@
 <script>
     let currentPreviewData = null;
     let ordersList = [];
+    const orderDispatchStatusCache = new Map();
     let customsErrorOrdersList = [];
     let dispatchedOrdersList = [];
     let inventoryList = [];
@@ -1447,6 +1455,11 @@
     let barcodeCameraDetector = null;
     let barcodeCameraTimer = null;
     let barcodeCameraHandled = false;
+    let barcodeCameraCandidate = '';
+    let barcodeCameraCandidateCount = 0;
+    let barcodeCameraZoomState = null;
+    const barcodeScanCanvas = document.createElement('canvas');
+    const barcodeScanContext = barcodeScanCanvas.getContext('2d', { willReadFrequently: true });
     let barcodeSingleSearchTimer = null;
 
     function escapeHtml(str) {
@@ -1668,6 +1681,19 @@
         try {
             const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&customs_status=${encodeURIComponent(customs)}&dispatch_filter=${encodeURIComponent(dispatchFilter)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
             ordersList = await res.json();
+            ordersList.forEach(order => {
+                const id = Number(order.id);
+                if (order._dispatchStatus) {
+                    const result = { status: order._dispatchStatus, items: order._dispatchDetails || [] };
+                    orderDispatchStatusCache.set(id, result);
+                } else {
+                    const cached = orderDispatchStatusCache.get(id);
+                    if (cached) {
+                        order._dispatchStatus = cached.status;
+                        order._dispatchDetails = cached.items;
+                    }
+                }
+            });
             renderOrdersTable(ordersList);
         } catch (e) {
             console.error('Order load error', e);
@@ -1751,6 +1777,10 @@
                     if (data.results && data.results[o.id]) {
                         o._dispatchStatus = data.results[o.id].status;
                         o._dispatchDetails = data.results[o.id].items;
+                        orderDispatchStatusCache.set(Number(o.id), {
+                            status: o._dispatchStatus,
+                            items: o._dispatchDetails
+                        });
                     }
                 });
                 renderOrdersTable(ordersList);
@@ -2929,6 +2959,11 @@
             barcodeCameraStream.getTracks().forEach(track => track.stop());
             barcodeCameraStream = null;
         }
+        barcodeCameraCandidate = '';
+        barcodeCameraCandidateCount = 0;
+        barcodeCameraZoomState = null;
+        const zoomControls = document.getElementById('barcodeCameraZoom');
+        if (zoomControls) zoomControls.style.display = 'none';
         const video = document.getElementById('scanCameraVideo');
         if (video) {
             video.pause();
@@ -2943,6 +2978,8 @@
         }
 
         barcodeCameraHandled = false;
+        barcodeCameraCandidate = '';
+        barcodeCameraCandidateCount = 0;
         const status = document.getElementById('scanCameraStatus');
         const video = document.getElementById('scanCameraVideo');
         const panel = document.getElementById('barcodeCameraPanel');
@@ -2962,9 +2999,10 @@
             await video.play();
             const cameraTrack = barcodeCameraStream.getVideoTracks()[0];
             const autoFocusEnabled = await enableContinuousAutofocus(cameraTrack);
+            await initializeBarcodeCameraZoom(cameraTrack);
             status.textContent = autoFocusEnabled
-                ? '자동 초점 사용 중 · 바코드를 빨간 선에 맞춰주세요.'
-                : '바코드를 빨간 선 가까이 대고 화면을 눌러 초점을 맞춰주세요.';
+                ? '자동 초점 사용 중 · 중앙 틀에 바코드를 맞춰주세요.'
+                : '바코드를 중앙 틀에 맞추세요. 화면을 누르면 초점을 다시 맞춥니다.';
 
             if ('BarcodeDetector' in window) {
                 let formats = ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39', 'itf', 'codabar'];
@@ -2983,7 +3021,7 @@
             if (zxing?.BrowserMultiFormatReader) {
                 const reader = new zxing.BrowserMultiFormatReader();
                 barcodeCameraControls = await reader.decodeFromVideoElement(video, (result) => {
-                    if (result) handleDetectedBarcode(result.getText());
+                    if (result) confirmDetectedBarcode(result.getText());
                 });
                 return;
             }
@@ -3019,6 +3057,40 @@
         return false;
     }
 
+    async function initializeBarcodeCameraZoom(track) {
+        const controls = document.getElementById('barcodeCameraZoom');
+        const level = document.getElementById('barcodeCameraZoomLevel');
+        if (!track?.getCapabilities || !track.applyConstraints) return;
+        try {
+            const zoom = track.getCapabilities().zoom;
+            if (!zoom || !Number.isFinite(zoom.max) || zoom.max <= zoom.min) return;
+            const step = Number(zoom.step) > 0 ? Number(zoom.step) : 0.1;
+            const target = Math.min(2, zoom.max);
+            const initial = Math.max(zoom.min, zoom.min + Math.round((target - zoom.min) / step) * step);
+            await track.applyConstraints({ advanced: [{ zoom: initial }] });
+            barcodeCameraZoomState = { min: zoom.min, max: zoom.max, step, current: initial };
+            level.textContent = `${initial.toFixed(1).replace(/\.0$/, '')}×`;
+            controls.style.display = 'flex';
+        } catch (e) {
+            console.debug('Camera zoom controls are not supported.', e);
+        }
+    }
+
+    async function adjustBarcodeCameraZoom(direction) {
+        if (!barcodeCameraZoomState || !barcodeCameraStream) return;
+        const track = barcodeCameraStream.getVideoTracks()[0];
+        const zoom = barcodeCameraZoomState;
+        const next = Math.min(zoom.max, Math.max(zoom.min, zoom.current + (zoom.step * direction)));
+        try {
+            await track.applyConstraints({ advanced: [{ zoom: next }] });
+            zoom.current = next;
+            document.getElementById('barcodeCameraZoomLevel').textContent = `${next.toFixed(1).replace(/\.0$/, '')}×`;
+            await enableContinuousAutofocus(track);
+        } catch (e) {
+            document.getElementById('scanCameraStatus').textContent = '이 카메라는 줌 조절을 지원하지 않습니다.';
+        }
+    }
+
     async function refocusBarcodeCamera() {
         const track = barcodeCameraStream?.getVideoTracks()[0];
         if (!track?.applyConstraints) return;
@@ -3038,17 +3110,46 @@
 
     function scanCameraFrame(video) {
         if (barcodeCameraHandled || !barcodeCameraStream || !barcodeCameraDetector) return;
-        barcodeCameraDetector.detect(video)
+        if (!video.videoWidth || !video.videoHeight) {
+            barcodeCameraTimer = setTimeout(() => scanCameraFrame(video), 150);
+            return;
+        }
+
+        // 화면의 중앙 스캔 사각형(가로 88%, 세로 50%)만 인식해 배경 바코드 오인을 줄입니다.
+        const sx = Math.round(video.videoWidth * 0.06);
+        const sy = Math.round(video.videoHeight * 0.25);
+        const sw = Math.round(video.videoWidth * 0.88);
+        const sh = Math.round(video.videoHeight * 0.50);
+        barcodeScanCanvas.width = sw;
+        barcodeScanCanvas.height = sh;
+        barcodeScanContext.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+
+        barcodeCameraDetector.detect(barcodeScanCanvas)
             .then(codes => {
                 if (codes?.length) {
-                    handleDetectedBarcode(codes[0].rawValue);
-                    return;
+                    confirmDetectedBarcode(codes[0].rawValue);
                 }
-                barcodeCameraTimer = setTimeout(() => scanCameraFrame(video), 120);
+                if (!barcodeCameraHandled) barcodeCameraTimer = setTimeout(() => scanCameraFrame(video), 160);
             })
             .catch(() => {
                 barcodeCameraTimer = setTimeout(() => scanCameraFrame(video), 250);
             });
+    }
+
+    function confirmDetectedBarcode(value) {
+        const barcode = String(value || '').trim();
+        if (!barcode || barcodeCameraHandled) return;
+        if (barcode === barcodeCameraCandidate) {
+            barcodeCameraCandidateCount += 1;
+        } else {
+            barcodeCameraCandidate = barcode;
+            barcodeCameraCandidateCount = 1;
+        }
+        if (barcodeCameraCandidateCount >= 3) {
+            handleDetectedBarcode(barcode);
+            return;
+        }
+        document.getElementById('scanCameraStatus').textContent = `바코드 확인 중 ${barcodeCameraCandidateCount}/3 · 중앙 틀 안에 고정해주세요.`;
     }
 
     function handleDetectedBarcode(value) {
