@@ -163,15 +163,26 @@ def issue_tracking_numbers(order_ids, courier_name=None):
     prod_by_sku = {r['sku']: r for r in prod_rows if r['sku']}
     prod_by_name = {r['product_name']: r for r in prod_rows if r['product_name']}
 
-    # 1. 대상 주문 및 품목 사전 조회
+    # 1. 선택 주문과 품목을 묶음 조회해 원격 DB 왕복을 줄입니다.
+    order_ids = list(dict.fromkeys(int(oid) for oid in order_ids if str(oid).isdigit()))
     orders_data = []
-    for oid in order_ids:
-        cur.execute('SELECT * FROM orders WHERE id = ?', (oid,))
-        ord_row = cur.fetchone()
-        if not ord_row:
-            continue
+    if not order_ids:
+        conn.close()
+        return {'updated_orders': [], 'failed_orders': []}
+    placeholders = ','.join(['?'] * len(order_ids))
+    cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders})', order_ids)
+    orders_by_id = {int(row['id']): dict(row) for row in cur.fetchall()}
+    cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
+    items_by_order = {}
+    for row in cur.fetchall():
+        row_dict = dict(row)
+        items_by_order.setdefault(int(row_dict['order_id']), []).append(row_dict)
 
-        ord_dict = dict(ord_row)
+    for oid in order_ids:
+        ord_dict = orders_by_id.get(oid)
+        if not ord_dict:
+            continue
+        raw_items = items_by_order.get(oid, [])
         existing_tracking = ord_dict.get('tracking_no') or ''
         existing_pdf = ord_dict.get('invoice_pdf_url') or ''
 
@@ -181,17 +192,16 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                     'oid': oid,
                     'ord_dict': ord_dict,
                     'items': [],
+                    'deduct_items': raw_items,
                     'is_cached': True,
                     'tracking_no': existing_tracking,
                     'pdf_url': existing_pdf
                 })
                 continue
 
-            cur.execute('SELECT * FROM order_items WHERE order_id = ?', (oid,))
-            raw_items = [dict(r) for r in cur.fetchall()]
-
             items = []
-            for it in raw_items:
+            for raw_item in raw_items:
+                it = dict(raw_item)
                 matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
                 if matched_prod:
                     it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
@@ -209,6 +219,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                 'oid': oid,
                 'ord_dict': ord_dict,
                 'items': items,
+                'deduct_items': raw_items,
                 'is_cached': False
             })
         else:
@@ -216,20 +227,23 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                 'oid': oid,
                 'ord_dict': ord_dict,
                 'items': [],
+                'deduct_items': raw_items,
                 'is_cached': False,
                 'is_mock': True
             })
 
     # 전송 중 상태를 먼저 저장합니다. API 실패가 나도 주문상태와 재고는 건드리지 않습니다.
-    for item in orders_data:
-        cur.execute('''
+    if orders_data:
+        active_ids = [item['oid'] for item in orders_data]
+        active_placeholders = ','.join(['?'] * len(active_ids))
+        cur.execute(f'''
             UPDATE orders
             SET api_dispatch_status = '전송중', api_dispatch_message = '나르다 API 응답 대기 중'
-            WHERE id = ?
-        ''', (item['oid'],))
+            WHERE id IN ({active_placeholders})
+        ''', active_ids)
     conn.commit()
 
-    # 2. 나르다 실 API 병렬 동시 호출 (최대 10개 스레드로 초고속 전송)
+    # 2. 나르다 실 API 병렬 호출. 최대 20건 동시 처리로 대량 발급 대기 시간을 줄입니다.
     def call_api_single(item):
         if item.get('is_cached'):
             return (item['oid'], item['ord_dict'], {
@@ -244,7 +258,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
         return (item['oid'], item['ord_dict'], api_res)
 
-    workers_count = min(10, len(orders_data)) if orders_data else 1
+    workers_count = min(20, len(orders_data)) if orders_data else 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers_count) as executor:
         api_results = list(executor.map(call_api_single, orders_data))
 
@@ -293,8 +307,10 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         # ==========================================
         # 품목별 재고 차감 및 바코드별 집계 (중복 차감 방지)
         # ==========================================
-        cur.execute('SELECT * FROM order_items WHERE order_id = ? AND stock_deducted = 0', (oid,))
-        items_to_deduct = [dict(r) for r in cur.fetchall()]
+        items_to_deduct = [
+            it for it in items_by_order.get(int(oid), [])
+            if not int(it.get('stock_deducted') or 0)
+        ]
 
         for it in items_to_deduct:
             item_sku = it.get('sku')

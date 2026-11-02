@@ -502,7 +502,7 @@
                     </div>
                     <button class="btn btn-outline-secondary" onclick="loadPickingList()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
                     <div class="d-flex flex-wrap gap-2 ms-lg-auto">
-                        <span class="badge bg-primary fs-6 px-3 py-2">바코드/품목 <strong id="pickingSkuCount">0</strong></span>
+                        <span class="badge bg-primary fs-6 px-3 py-2">피킹 순번 <strong id="pickingSkuCount">0</strong></span>
                         <span class="badge bg-secondary fs-6 px-3 py-2">주문 <strong id="pickingOrderCount">0</strong>건</span>
                         <span class="badge bg-success fs-6 px-3 py-2">총 피킹 수량 <strong id="pickingTotalQuantity">0</strong>개</span>
                     </div>
@@ -517,7 +517,7 @@
                                     <th class="text-center" style="width:60px">순번</th>
                                     <th>상품명 + 옵션명</th>
                                     <th style="width:190px">바코드 (SKU)</th>
-                                    <th style="min-width:300px">구매 수량별 합계</th>
+                                    <th style="min-width:260px">구매 수량별 합계</th>
                                     <th class="text-center" style="width:110px">주문 건수</th>
                                     <th class="text-center" style="width:130px">총 피킹 수량</th>
                                 </tr>
@@ -2033,7 +2033,7 @@
             if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
             const data = await res.json();
             const items = Array.isArray(data.items) ? data.items : [];
-            document.getElementById('pickingSkuCount').textContent = Number(data.sku_count || 0).toLocaleString();
+            document.getElementById('pickingSkuCount').textContent = Number(data.row_count || items.length).toLocaleString();
             document.getElementById('pickingOrderCount').textContent = Number(data.order_count || 0).toLocaleString();
             document.getElementById('pickingTotalQuantity').textContent = Number(data.total_quantity || 0).toLocaleString();
 
@@ -2042,16 +2042,16 @@
                 return;
             }
             tbody.innerHTML = items.map((item, index) => {
-                const breakdown = (item.quantity_breakdown || []).map(bucket =>
-                    `<span class="badge bg-light text-dark border me-1 mb-1">${Number(bucket.purchase_quantity).toLocaleString()}개 구매 ${Number(bucket.order_count).toLocaleString()}건 <strong class="text-success">(총 ${Number(bucket.total_quantity).toLocaleString()}개)</strong></span>`
-                ).join('');
+                const purchaseQuantity = Number(item.purchase_quantity || 0);
+                const orderCount = Number(item.order_count || 0);
+                const totalQuantity = Number(item.total_quantity || 0);
                 return `<tr>
                     <td class="text-center text-muted">${index + 1}</td>
                     <td class="fw-semibold">${escapeHtml(item.product_name || '(상품명 없음)')}</td>
                     <td>${item.sku ? `<code class="fs-6">${escapeHtml(item.sku)}</code>` : '<span class="text-muted">바코드 없음</span>'}</td>
-                    <td>${breakdown || '<span class="text-muted">수량 정보 없음</span>'}</td>
-                    <td class="text-center">${Number(item.order_count || 0).toLocaleString()}건</td>
-                    <td class="text-center fw-bold text-success fs-5">${Number(item.total_quantity || 0).toLocaleString()}개</td>
+                    <td><span class="badge bg-light text-dark border">${purchaseQuantity.toLocaleString()}개 구매 × ${orderCount.toLocaleString()}건 <strong class="text-success">= ${totalQuantity.toLocaleString()}개</strong></span></td>
+                    <td class="text-center">${orderCount.toLocaleString()}건</td>
+                    <td class="text-center fw-bold text-success fs-5">${totalQuantity.toLocaleString()}개</td>
                 </tr>`;
             }).join('');
         } catch (error) {
@@ -2363,7 +2363,8 @@
 
         modal.show();
 
-        const chunkSize = 15;
+        // 서버에서 20건을 동시에 처리하므로, 지나치게 작은 요청을 반복하지 않도록 묶음 크기를 확대합니다.
+        const chunkSize = 60;
         let processedCount = 0;
         let allUpdated = [];
         let allFailed = [];

@@ -339,8 +339,9 @@ def get_picking_list():
     cur = conn.cursor()
     try:
         cur.execute('''
-            SELECT o.id AS order_id, oi.sku, oi.item_product_name, oi.item_option_name,
-                   oi.quantity
+            SELECT o.id AS order_id, o.original_quantity, oi.sku,
+                   oi.item_product_name, oi.item_option_name,
+                   oi.option_quantity, oi.quantity
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
             WHERE o.status IN ('주문접수', '출고대기')
@@ -355,8 +356,16 @@ def get_picking_list():
             option = str(item.get('item_option_name') or '').strip()
             if option in ('단일옵션', 'nan', 'None'):
                 option = ''
-            combined_name = ' '.join(part for part in (product, option) if part).strip()
-            combined_name = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', combined_name).strip()
+            product = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', product).strip()
+            option = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', option).strip()
+            if not option or option == product:
+                combined_name = product or option
+            elif product and product in option:
+                combined_name = option
+            elif option and option in product:
+                combined_name = product
+            else:
+                combined_name = ' '.join(part for part in (product, option) if part).strip()
 
             # 바코드가 있으면 바코드를 기준으로 합산하고, 없으면 상품/옵션 조합으로 분리합니다.
             key = ('sku', sku) if sku else ('name', combined_name)
@@ -364,48 +373,49 @@ def get_picking_list():
                 'sku': sku,
                 'names': set(),
                 'order_ids': set(),
-                'total_quantity': 0,
-                'quantity_breakdown': {}
+                'buckets': {}
             })
             if combined_name:
                 entry['names'].add(combined_name)
             order_id = item.get('order_id')
             entry['order_ids'].add(order_id)
             try:
-                quantity = max(1, int(item.get('quantity') or 1))
+                product_quantity = max(1, int(float(item.get('original_quantity') or 1)))
             except (TypeError, ValueError):
-                quantity = 1
-            entry['total_quantity'] += quantity
-            bucket = entry['quantity_breakdown'].setdefault(str(quantity), {
-                'purchase_quantity': quantity,
+                product_quantity = 1
+            try:
+                option_quantity = max(1, int(float(item.get('option_quantity') or 1)))
+            except (TypeError, ValueError):
+                option_quantity = 1
+            # option_quantity가 나중에 동기화된 과거 주문은 quantity 값이 예전 수량일 수 있어
+            # 주문의 상품수량 × 현재 옵션의 실제 출고수량으로 피킹 수량을 계산합니다.
+            purchase_quantity = product_quantity * option_quantity
+            bucket = entry['buckets'].setdefault(str(purchase_quantity), {
+                'purchase_quantity': purchase_quantity,
                 'orders': set(),
                 'total_quantity': 0
             })
             bucket['orders'].add(order_id)
-            bucket['total_quantity'] += quantity
+            bucket['total_quantity'] += purchase_quantity
 
         rows = []
         for entry in grouped.values():
-            rows.append({
-                'sku': entry['sku'],
-                'product_name': ' / '.join(sorted(entry['names'])) or '(상품명 없음)',
-                'order_count': len(entry['order_ids']),
-                'total_quantity': entry['total_quantity'],
-                'quantity_breakdown': [
-                    {
-                        'purchase_quantity': bucket['purchase_quantity'],
-                        'order_count': len(bucket['orders']),
-                        'total_quantity': bucket['total_quantity']
-                    }
-                    for bucket in sorted(entry['quantity_breakdown'].values(), key=lambda b: b['purchase_quantity'])
-                ]
-            })
+            product_name = ' / '.join(sorted(entry['names'])) or '(상품명 없음)'
+            for bucket in sorted(entry['buckets'].values(), key=lambda b: b['purchase_quantity']):
+                rows.append({
+                    'sku': entry['sku'],
+                    'product_name': product_name,
+                    'purchase_quantity': bucket['purchase_quantity'],
+                    'order_count': len(bucket['orders']),
+                    'total_quantity': bucket['total_quantity']
+                })
         rows.sort(key=lambda row: (not bool(row['sku']), row['sku'].casefold(), row['product_name'].casefold()))
         return jsonify({
             'items': rows,
-            'sku_count': len(rows),
+            'sku_count': len(grouped),
+            'row_count': len(rows),
             'order_count': len({order_id for entry in grouped.values() for order_id in entry['order_ids']}),
-            'total_quantity': sum(entry['total_quantity'] for entry in grouped.values())
+            'total_quantity': sum(bucket['total_quantity'] for entry in grouped.values() for bucket in entry['buckets'].values())
         })
     finally:
         conn.close()
@@ -988,9 +998,27 @@ def api_narda_pdf_bundle():
         from pypdf import PdfReader, PdfWriter
         import io
         import concurrent.futures
+        import threading
+        from requests.adapters import HTTPAdapter
     except Exception as e:
         app.logger.exception('나르다 PDF 병합 라이브러리 로드 실패')
         return f'나르다 송장 병합 기능을 불러오지 못했습니다: {e}', 500
+
+    pdf_session_local = threading.local()
+    pdf_sessions = []
+    pdf_sessions_lock = threading.Lock()
+
+    def get_pdf_session():
+        session = getattr(pdf_session_local, 'session', None)
+        if session is None:
+            session = requests.Session()
+            adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=0)
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+            pdf_session_local.session = session
+            with pdf_sessions_lock:
+                pdf_sessions.append(session)
+        return session
 
     def fetch_single_pdf(item):
         url = (item.get('invoice_pdf_url') or '').strip()
@@ -998,10 +1026,10 @@ def api_narda_pdf_bundle():
             app.logger.warning('나르다 PDF URL이 비어 있거나 HTTP URL이 아닙니다 (order id=%s)', item.get('id'))
             return (item['id'], None)
         try:
-            resp = requests.get(
+            resp = get_pdf_session().get(
                 url,
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
-                timeout=20
+                timeout=(8, 20)
             )
             if resp.status_code == 200 and resp.content.startswith(b'%PDF-'):
                 return (item['id'], resp.content)
@@ -1013,9 +1041,13 @@ def api_narda_pdf_bundle():
             app.logger.warning('나르다 PDF 다운로드 실패 (order id=%s): %s', item.get('id'), e)
         return (item['id'], None)
 
-    # 병렬 다운로드 (최대 15개 동시 요청으로 대량 주문도 1~2초 만에 초고속 병합)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        pdf_dict = dict(executor.map(fetch_single_pdf, rows))
+    # 작업 스레드마다 HTTP 연결을 재사용하고, 공식 PDF를 최대 30개씩 병렬로 받습니다.
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(30, len(rows))) as executor:
+            pdf_dict = dict(executor.map(fetch_single_pdf, rows))
+    finally:
+        for session in pdf_sessions:
+            session.close()
 
     writer = PdfWriter()
     merged_count = 0
@@ -1060,8 +1092,10 @@ def api_narda_pdf_bundle():
         output_stream,
         mimetype='application/pdf',
         as_attachment=False,
-        download_name=f'NARDA_통합송장_{merged_count}건.pdf'
+        download_name=f'NARDA_통합송장_{merged_count}건.pdf',
+        max_age=300
     )
+    response.cache_control.private = True
     response.headers['X-Narda-Label-Count'] = str(merged_count)
     response.headers['X-Narda-Failed-Count'] = str(len(failed_orders))
     return response
