@@ -192,8 +192,13 @@
             #stockin-pane .stockin-batch-panel { display: none !important; }
             #stockin-pane .stockin-quick-panel .card { margin-bottom: 0 !important; }
             #stockin-pane .stockin-camera-button { min-width: 54px; font-size: 22px; }
-            #stockin-pane #scanCameraVideo { width: 100%; max-height: 65dvh; object-fit: cover; background: #111827; border-radius: 12px; }
         }
+        .barcode-camera-panel { margin-top: 12px; }
+        .barcode-camera-view { position: relative; overflow: hidden; border-radius: 12px; background: #111827; }
+        #scanCameraVideo { display: block; width: 100%; max-height: 58dvh; min-height: 230px; object-fit: cover; }
+        .barcode-scan-line { position: absolute; z-index: 2; left: 6%; right: 6%; top: 50%; height: 3px; background: #ff2738; box-shadow: 0 0 8px 2px rgba(255,39,56,.8); animation: barcode-scan-sweep 2s ease-in-out infinite alternate; pointer-events: none; }
+        @keyframes barcode-scan-sweep { from { transform: translateY(-75px); } to { transform: translateY(75px); } }
+        .barcode-scan-frame { position: absolute; z-index: 1; inset: 25% 6%; border: 2px solid rgba(255,255,255,.75); border-radius: 10px; pointer-events: none; }
     </style>
 </head>
 <body>
@@ -659,6 +664,17 @@
                                     <button class="btn btn-primary px-4" onclick="searchBarcodeSingle()">
                                         <i class="fa-solid fa-magnifying-glass me-1"></i> 검색
                                     </button>
+                                </div>
+                                <div id="barcodeCameraPanel" class="barcode-camera-panel" style="display:none;">
+                                    <div class="barcode-camera-view">
+                                        <video id="scanCameraVideo" autoplay muted playsinline></video>
+                                        <div class="barcode-scan-frame"></div>
+                                        <div class="barcode-scan-line"></div>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center gap-2 mt-2">
+                                        <div id="scanCameraStatus" class="small text-muted">바코드를 빨간 선에 맞춰주세요.</div>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" onclick="closeBarcodeCamera()">카메라 끄기</button>
+                                    </div>
                                 </div>
                             </div>
 
@@ -1411,22 +1427,6 @@
     </div>
 </div>
 
-<!-- 모바일 카메라 바코드 스캔 -->
-<div class="modal fade" id="barcodeCameraModal" tabindex="-1" aria-labelledby="barcodeCameraTitle" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow">
-            <div class="modal-header">
-                <h5 class="modal-title fw-bold" id="barcodeCameraTitle">📷 바코드 스캔</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
-            </div>
-            <div class="modal-body">
-                <video id="scanCameraVideo" autoplay muted playsinline></video>
-                <div id="scanCameraStatus" class="small text-muted text-center mt-3">바코드를 화면 가운데에 맞춰주세요.</div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Bootstrap 5 JS -->
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
@@ -1462,7 +1462,6 @@
         refreshAllData();
         setupDragAndDrop();
         initBatchScanRows();
-        document.getElementById('barcodeCameraModal')?.addEventListener('hidden.bs.modal', stopBarcodeCamera);
     });
 
     function refreshAllData(refreshEveryTab = false) {
@@ -2906,6 +2905,12 @@
         }
     }
 
+    function closeBarcodeCamera() {
+        stopBarcodeCamera();
+        const panel = document.getElementById('barcodeCameraPanel');
+        if (panel) panel.style.display = 'none';
+    }
+
     function stopBarcodeCamera() {
         if (barcodeCameraTimer) {
             clearTimeout(barcodeCameraTimer);
@@ -2933,11 +2938,11 @@
         }
 
         barcodeCameraHandled = false;
-        const modalEl = document.getElementById('barcodeCameraModal');
         const status = document.getElementById('scanCameraStatus');
         const video = document.getElementById('scanCameraVideo');
+        const panel = document.getElementById('barcodeCameraPanel');
+        panel.style.display = 'block';
         status.textContent = '카메라 연결 중...';
-        bootstrap.Modal.getOrCreateInstance(modalEl).show();
 
         try {
             barcodeCameraStream = await navigator.mediaDevices.getUserMedia({
@@ -2956,7 +2961,7 @@
                 }
                 if (formats.length) {
                     barcodeCameraDetector = new BarcodeDetector({ formats });
-                    scanCameraFrame(video, modalEl);
+                    scanCameraFrame(video);
                     return;
                 }
             }
@@ -2965,7 +2970,7 @@
             if (zxing?.BrowserMultiFormatReader) {
                 const reader = new zxing.BrowserMultiFormatReader();
                 barcodeCameraControls = await reader.decodeFromVideoElement(video, (result) => {
-                    if (result) handleDetectedBarcode(result.getText(), modalEl);
+                    if (result) handleDetectedBarcode(result.getText());
                 });
                 return;
             }
@@ -2982,29 +2987,29 @@
         }
     }
 
-    function scanCameraFrame(video, modalEl) {
+    function scanCameraFrame(video) {
         if (barcodeCameraHandled || !barcodeCameraStream || !barcodeCameraDetector) return;
         barcodeCameraDetector.detect(video)
             .then(codes => {
                 if (codes?.length) {
-                    handleDetectedBarcode(codes[0].rawValue, modalEl);
+                    handleDetectedBarcode(codes[0].rawValue);
                     return;
                 }
-                barcodeCameraTimer = setTimeout(() => scanCameraFrame(video, modalEl), 120);
+                barcodeCameraTimer = setTimeout(() => scanCameraFrame(video), 120);
             })
             .catch(() => {
-                barcodeCameraTimer = setTimeout(() => scanCameraFrame(video, modalEl), 250);
+                barcodeCameraTimer = setTimeout(() => scanCameraFrame(video), 250);
             });
     }
 
-    function handleDetectedBarcode(value, modalEl) {
+    function handleDetectedBarcode(value) {
         const barcode = String(value || '').trim();
         if (!barcode || barcodeCameraHandled) return;
         barcodeCameraHandled = true;
         const input = document.getElementById('scanBarcodeSingle');
         input.value = barcode;
         stopBarcodeCamera();
-        bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+        document.getElementById('barcodeCameraPanel').style.display = 'none';
         searchBarcodeSingle();
     }
 
