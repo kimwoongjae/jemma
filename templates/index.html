@@ -287,7 +287,7 @@
                         <!-- 1. 검색창 -->
                         <div class="col-xl-4 col-md-5">
                             <div class="input-group">
-                                <select id="orderSearchField" class="form-select" style="max-width: 120px;" onchange="loadOrders()">
+                                <select id="orderSearchField" class="form-select" style="max-width: 120px;">
                                     <option value="all">전체 검색</option>
                                     <option value="product_name">상품명</option>
                                     <option value="sku">바코드(SKU)</option>
@@ -297,25 +297,21 @@
                                     <option value="customs_id">통관부호</option>
                                     <option value="address">배송지</option>
                                 </select>
-                                <input type="text" id="orderSearchInput" class="form-control" placeholder="검색어 입력 후 Enter" onkeyup="if(event.key==='Enter') loadOrders()">
-                                <button class="btn btn-outline-secondary" onclick="loadOrders()"><i class="fa-solid fa-magnifying-glass"></i></button>
+                                <input type="text" id="orderSearchInput" class="form-control" placeholder="검색어 입력 후 검색 버튼 클릭" onkeyup="if(event.key==='Enter') loadOrders()">
+                                <button class="btn btn-primary text-nowrap" onclick="loadOrders()"><i class="fa-solid fa-magnifying-glass me-1"></i>검색</button>
                             </div>
                         </div>
-                        <!-- 2. 택배사 필터 -->
-                        <div class="col-xl-2 col-md-2">
-                            <select id="orderCourierFilter" class="form-select" onchange="loadOrders()">
-                                <option value="전체">택배사 전체</option>
-                                <option value="나르다">나르다 (NARDA)</option>
-                                <option value="CJ대한통운">CJ대한통운</option>
-                                <option value="우체국택배">우체국택배</option>
-                                <option value="한진택배">한진택배</option>
-                                <option value="롯데택배">롯데택배</option>
-                                <option value="로젠택배">로젠택배</option>
+                        <!-- 2. 재고 출고 가능 여부 필터 -->
+                        <div class="col-xl-2 col-md-3">
+                            <select id="orderDispatchFilter" class="form-select">
+                                <option value="전체">출고여부: 전체</option>
+                                <option value="출고가능">출고가능</option>
+                                <option value="재고부족">재고부족</option>
                             </select>
                         </div>
                         <!-- 3. 통관부호 검증 상태 필터 -->
                         <div class="col-xl-2 col-md-3">
-                            <select id="orderCustomsFilter" class="form-select" onchange="loadOrders()">
+                            <select id="orderCustomsFilter" class="form-select">
                                 <option value="전체" selected>통관부호: 전체</option>
                                 <option value="오류" class="text-danger fw-bold">통관부호: 검증오류</option>
                                 <option value="일치" class="text-success">통관부호: 정상일치</option>
@@ -1550,13 +1546,37 @@
     async function loadOrders() {
         // 주문 관리 목록에는 아직 발송되지 않은 주문만 표시합니다.
         const status = '출고대기';
-        const courier = document.getElementById('orderCourierFilter')?.value || '전체';
         const customs = document.getElementById('orderCustomsFilter')?.value || '전체';
+        const dispatchFilter = document.getElementById('orderDispatchFilter')?.value || '전체';
         const search = document.getElementById('orderSearchInput')?.value || '';
         const searchField = document.getElementById('orderSearchField')?.value || 'all';
         try {
-            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&courier=${encodeURIComponent(courier)}&customs_status=${encodeURIComponent(customs)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
+            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&customs_status=${encodeURIComponent(customs)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
             ordersList = await res.json();
+
+            if (dispatchFilter !== '전체' && ordersList.length > 0) {
+                // 화면 정렬 순서와 동일하게 재고를 가상 차감하여 출고 가능 여부를 계산합니다.
+                sortOrdersInPlace(ordersList);
+                const availabilityRes = await fetch('/api/orders/check-dispatch-availability', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order_ids: ordersList.map(order => order.id) })
+                });
+                if (!availabilityRes.ok) throw new Error('출고 가능 여부를 확인하지 못했습니다.');
+                const availabilityData = await availabilityRes.json();
+                if (availabilityData.status !== 'success') throw new Error(availabilityData.error || '출고 가능 여부 확인 실패');
+
+                ordersList.forEach(order => {
+                    const result = availabilityData.results?.[order.id];
+                    if (result) {
+                        order._dispatchStatus = result.status;
+                        order._dispatchDetails = result.items;
+                    }
+                });
+                ordersList = ordersList.filter(order => dispatchFilter === '출고가능'
+                    ? order._dispatchStatus === '출고가능'
+                    : order._dispatchStatus !== '출고가능');
+            }
             renderOrdersTable(ordersList);
         } catch (e) {
             console.error('Order load error', e);
