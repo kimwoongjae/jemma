@@ -358,6 +358,47 @@ def get_picking_list():
     cur = conn.cursor()
     try:
         cur.execute('''
+            SELECT sku, product_name, option_name
+            FROM products
+            WHERE sku IS NOT NULL AND TRIM(sku) != ''
+        ''')
+        master_names = {}
+
+        def combined_item_name(product, option):
+            product = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', str(product or '')).strip()
+            option = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', str(option or '')).strip()
+            if option in ('단일옵션', 'nan', 'None'):
+                option = ''
+            if not option or option == product:
+                return product or option
+            if product and product in option:
+                return option
+            if option and option in product:
+                return product
+            return ' '.join(part for part in (product, option) if part).strip()
+
+        for row in cur.fetchall():
+            master = dict(row)
+            sku = str(master.get('sku') or '').strip()
+            name = combined_item_name(master.get('product_name'), master.get('option_name'))
+            if sku and name:
+                master_names[sku] = name
+
+        cur.execute('''
+            SELECT po.sku, p.product_name, po.option_name
+            FROM product_options po
+            LEFT JOIN products p ON p.id = po.product_id
+            WHERE po.sku IS NOT NULL AND TRIM(po.sku) != ''
+            ORDER BY po.id ASC
+        ''')
+        for row in cur.fetchall():
+            master = dict(row)
+            sku = str(master.get('sku') or '').strip()
+            name = combined_item_name(master.get('product_name'), master.get('option_name'))
+            if sku and name:
+                master_names.setdefault(sku, name)
+
+        cur.execute('''
             SELECT o.id AS order_id, o.original_quantity, oi.sku,
                    oi.item_product_name, oi.item_option_name,
                    oi.option_quantity, oi.quantity
@@ -373,29 +414,18 @@ def get_picking_list():
             sku = str(item.get('sku') or '').strip()
             product = str(item.get('item_product_name') or '').strip()
             option = str(item.get('item_option_name') or '').strip()
-            if option in ('단일옵션', 'nan', 'None'):
-                option = ''
-            product = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', product).strip()
-            option = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', option).strip()
-            if not option or option == product:
-                combined_name = product or option
-            elif product and product in option:
-                combined_name = option
-            elif option and option in product:
-                combined_name = product
-            else:
-                combined_name = ' '.join(part for part in (product, option) if part).strip()
+            combined_name = combined_item_name(product, option)
 
             # 바코드가 있으면 바코드를 기준으로 합산하고, 없으면 상품/옵션 조합으로 분리합니다.
             key = ('sku', sku) if sku else ('name', combined_name)
             entry = grouped.setdefault(key, {
                 'sku': sku,
-                'names': set(),
+                'name_counts': {},
                 'order_ids': set(),
                 'buckets': {}
             })
             if combined_name:
-                entry['names'].add(combined_name)
+                entry['name_counts'][combined_name] = entry['name_counts'].get(combined_name, 0) + 1
             order_id = item.get('order_id')
             entry['order_ids'].add(order_id)
             try:
@@ -417,24 +447,37 @@ def get_picking_list():
             bucket['orders'].add(order_id)
             bucket['total_quantity'] += purchase_quantity
 
-        rows = []
+        groups = []
         for entry in grouped.values():
-            product_name = ' / '.join(sorted(entry['names'])) or '(상품명 없음)'
-            for bucket in sorted(entry['buckets'].values(), key=lambda b: b['purchase_quantity']):
-                rows.append({
-                    'sku': entry['sku'],
-                    'product_name': product_name,
+            fallback_name = max(
+                entry['name_counts'],
+                key=lambda name: (entry['name_counts'][name], -len(name), name),
+                default='(상품명 없음)'
+            )
+            product_name = master_names.get(entry['sku']) or fallback_name
+            buckets = [
+                {
                     'purchase_quantity': bucket['purchase_quantity'],
                     'order_count': len(bucket['orders']),
                     'total_quantity': bucket['total_quantity']
-                })
-        rows.sort(key=lambda row: (not bool(row['sku']), row['sku'].casefold(), row['product_name'].casefold()))
+                }
+                for bucket in sorted(entry['buckets'].values(), key=lambda b: b['purchase_quantity'])
+            ]
+            groups.append({
+                'sku': entry['sku'],
+                'product_name': product_name,
+                'order_count': len(entry['order_ids']),
+                'total_quantity': sum(bucket['total_quantity'] for bucket in buckets),
+                'buckets': buckets
+            })
+        groups.sort(key=lambda group: (not bool(group['sku']), group['sku'].casefold(), group['product_name'].casefold()))
+        row_count = sum(len(group['buckets']) for group in groups)
         return jsonify({
-            'items': rows,
+            'groups': groups,
             'sku_count': len(grouped),
-            'row_count': len(rows),
+            'row_count': row_count,
             'order_count': len({order_id for entry in grouped.values() for order_id in entry['order_ids']}),
-            'total_quantity': sum(bucket['total_quantity'] for entry in grouped.values() for bucket in entry['buckets'].values())
+            'total_quantity': sum(group['total_quantity'] for group in groups)
         })
     finally:
         conn.close()

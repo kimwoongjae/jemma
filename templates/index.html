@@ -187,6 +187,21 @@
             .form-control, .form-select, .input-group-text { font-size: 14px; }
             .btn { min-height: 40px; }
             .btn-sm, .btn-xs { min-height: 34px; }
+            #picking-pane .picking-summary { align-items: stretch !important; flex-direction: column; gap: 10px !important; }
+            #picking-pane .picking-summary-title { width: 100%; }
+            #picking-pane .picking-summary-title .text-muted { font-size: 12px; line-height: 1.45; }
+            #picking-pane .picking-summary > .btn { width: 100%; }
+            #picking-pane .picking-summary-metrics { width: 100%; display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px !important; margin: 0 !important; }
+            #picking-pane .picking-summary-metrics .badge { white-space: normal; font-size: 12px !important; padding: 8px 5px !important; }
+            #pickingMobileList { padding: 8px !important; }
+            .picking-mobile-group { border: 1px solid #dbe3ed; border-radius: 10px; overflow: hidden; background: #fff; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(15,23,42,.05); }
+            .picking-mobile-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 11px; background: #f8fafc; }
+            .picking-mobile-name { font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+            .picking-mobile-total { flex: 0 0 auto; color: #198754; font-weight: 800; font-size: 17px; white-space: nowrap; }
+            .picking-mobile-sku { display: block; margin-top: 4px; font-size: 12px; }
+            .picking-mobile-bucket { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 11px; border-top: 1px solid #e5eaf0; }
+            .picking-mobile-bucket-info { min-width: 0; line-height: 1.4; }
+            .picking-mobile-bucket-total { flex: 0 0 auto; font-weight: 700; white-space: nowrap; }
             #labels-pane .row > [class*="col-"] { width: 100%; }
             #stockin-pane .stockin-quick-panel { flex: 0 0 100%; width: 100%; }
             #stockin-pane .stockin-batch-panel { display: none !important; }
@@ -495,13 +510,13 @@
         <!-- 주문 관리와 같은 미발송 주문을 바코드별로 합산한 피킹 목록 -->
         <div class="tab-pane fade" id="picking-pane" role="tabpanel">
             <div class="card border-0 shadow-sm mb-3">
-                <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3">
-                    <div>
+                <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3 picking-summary">
+                    <div class="picking-summary-title">
                         <h5 class="fw-bold mb-1"><i class="fa-solid fa-list-check text-primary me-2"></i>피킹리스트</h5>
                         <div class="text-muted">주문관리의 미발송 품목을 바코드별로 합산합니다. 발송 처리가 완료된 주문은 목록에서 자동으로 빠집니다.</div>
                     </div>
                     <button class="btn btn-outline-secondary" onclick="loadPickingList()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
-                    <div class="d-flex flex-wrap gap-2 ms-lg-auto">
+                    <div class="d-flex flex-wrap gap-2 ms-lg-auto picking-summary-metrics">
                         <span class="badge bg-primary fs-6 px-3 py-2">피킹 순번 <strong id="pickingSkuCount">0</strong></span>
                         <span class="badge bg-secondary fs-6 px-3 py-2">주문 <strong id="pickingOrderCount">0</strong>건</span>
                         <span class="badge bg-success fs-6 px-3 py-2">총 피킹 수량 <strong id="pickingTotalQuantity">0</strong>개</span>
@@ -510,7 +525,7 @@
             </div>
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
-                    <div class="table-responsive">
+                    <div class="table-responsive d-none d-md-block">
                         <table class="table table-bordered table-hover align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
@@ -519,13 +534,16 @@
                                     <th style="width:190px">바코드 (SKU)</th>
                                     <th style="min-width:260px">구매 수량별 합계</th>
                                     <th class="text-center" style="width:110px">주문 건수</th>
-                                    <th class="text-center" style="width:130px">총 피킹 수량</th>
+                                    <th class="text-center" style="width:150px">바코드 전체 총수량</th>
                                 </tr>
                             </thead>
                             <tbody id="pickingListTableBody">
                                 <tr><td colspan="6" class="text-center py-5 text-muted">피킹리스트를 불러오는 중입니다...</td></tr>
                             </tbody>
                         </table>
+                    </div>
+                    <div id="pickingMobileList" class="d-md-none p-2">
+                        <div class="text-center py-4 text-muted">피킹리스트를 불러오는 중입니다...</div>
                     </div>
                 </div>
             </div>
@@ -2026,37 +2044,71 @@
 
     async function loadPickingList() {
         const tbody = document.getElementById('pickingListTableBody');
-        if (!tbody) return;
+        const mobileList = document.getElementById('pickingMobileList');
+        if (!tbody || !mobileList) return;
         tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted"><i class="fa-solid fa-spinner fa-spin me-2"></i>피킹리스트를 불러오는 중입니다...</td></tr>';
+        mobileList.innerHTML = '<div class="text-center py-4 text-muted"><i class="fa-solid fa-spinner fa-spin me-2"></i>피킹리스트를 불러오는 중입니다...</div>';
         try {
             const res = await fetch('/api/picking-list');
             if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
             const data = await res.json();
-            const items = Array.isArray(data.items) ? data.items : [];
-            document.getElementById('pickingSkuCount').textContent = Number(data.row_count || items.length).toLocaleString();
+            const groups = Array.isArray(data.groups) ? data.groups : [];
+            const rowCount = Number(data.row_count || groups.reduce((sum, group) => sum + (group.buckets || []).length, 0));
+            document.getElementById('pickingSkuCount').textContent = rowCount.toLocaleString();
             document.getElementById('pickingOrderCount').textContent = Number(data.order_count || 0).toLocaleString();
             document.getElementById('pickingTotalQuantity').textContent = Number(data.total_quantity || 0).toLocaleString();
 
-            if (!items.length) {
+            if (!groups.length) {
                 tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted">피킹할 미발송 상품이 없습니다.</td></tr>';
+                mobileList.innerHTML = '<div class="text-center py-4 text-muted">피킹할 미발송 상품이 없습니다.</div>';
                 return;
             }
-            tbody.innerHTML = items.map((item, index) => {
-                const purchaseQuantity = Number(item.purchase_quantity || 0);
-                const orderCount = Number(item.order_count || 0);
-                const totalQuantity = Number(item.total_quantity || 0);
-                return `<tr>
-                    <td class="text-center text-muted">${index + 1}</td>
-                    <td class="fw-semibold">${escapeHtml(item.product_name || '(상품명 없음)')}</td>
-                    <td>${item.sku ? `<code class="fs-6">${escapeHtml(item.sku)}</code>` : '<span class="text-muted">바코드 없음</span>'}</td>
-                    <td><span class="badge bg-light text-dark border">${purchaseQuantity.toLocaleString()}개 구매 × ${orderCount.toLocaleString()}건 <strong class="text-success">= ${totalQuantity.toLocaleString()}개</strong></span></td>
-                    <td class="text-center">${orderCount.toLocaleString()}건</td>
-                    <td class="text-center fw-bold text-success fs-5">${totalQuantity.toLocaleString()}개</td>
-                </tr>`;
-            }).join('');
+            let sequence = 0;
+            const desktopRows = [];
+            const mobileGroups = [];
+            groups.forEach(group => {
+                const buckets = group.buckets || [];
+                if (!buckets.length) return;
+                const rowspan = buckets.length;
+                const firstSequence = sequence + 1;
+                const nameHtml = `<span class="fw-semibold">${escapeHtml(group.product_name || '(상품명 없음)')}</span>`;
+                const skuHtml = group.sku ? `<code class="fs-6">${escapeHtml(group.sku)}</code>` : '<span class="text-muted">바코드 없음</span>';
+                buckets.forEach((bucket, bucketIndex) => {
+                    sequence += 1;
+                    const purchaseQuantity = Number(bucket.purchase_quantity || 0);
+                    const orderCount = Number(bucket.order_count || 0);
+                    const bucketTotal = Number(bucket.total_quantity || 0);
+                    desktopRows.push(`<tr>
+                        <td class="text-center text-muted">${sequence}</td>
+                        ${bucketIndex === 0 ? `<td rowspan="${rowspan}" class="picking-merged-cell">${nameHtml}</td><td rowspan="${rowspan}" class="text-center picking-merged-cell">${skuHtml}</td>` : ''}
+                        <td><span class="badge bg-light text-dark border">${purchaseQuantity.toLocaleString()}개 구매 × ${orderCount.toLocaleString()}건 <strong class="text-success">= ${bucketTotal.toLocaleString()}개</strong></span></td>
+                        <td class="text-center">${orderCount.toLocaleString()}건</td>
+                        ${bucketIndex === 0 ? `<td rowspan="${rowspan}" class="text-center fw-bold text-success fs-5 picking-merged-cell">${Number(group.total_quantity || 0).toLocaleString()}개</td>` : ''}
+                    </tr>`);
+                });
+                mobileGroups.push(`<section class="picking-mobile-group">
+                    <div class="picking-mobile-head">
+                        <div class="min-w-0"><div class="picking-mobile-name">${escapeHtml(group.product_name || '(상품명 없음)')}</div><code class="picking-mobile-sku">${group.sku ? escapeHtml(group.sku) : '바코드 없음'}</code></div>
+                        <div class="picking-mobile-total">총 ${Number(group.total_quantity || 0).toLocaleString()}개</div>
+                    </div>
+                    ${buckets.map((bucket, bucketIndex) => {
+                        const currentSequence = firstSequence + bucketIndex;
+                        const purchaseQuantity = Number(bucket.purchase_quantity || 0);
+                        const orderCount = Number(bucket.order_count || 0);
+                        const bucketTotal = Number(bucket.total_quantity || 0);
+                        return `<div class="picking-mobile-bucket">
+                            <div class="picking-mobile-bucket-info"><span class="badge bg-secondary me-1">#${currentSequence}</span><strong>${purchaseQuantity.toLocaleString()}개 구매</strong> · ${orderCount.toLocaleString()}건</div>
+                            <div class="picking-mobile-bucket-total text-success">${bucketTotal.toLocaleString()}개</div>
+                        </div>`;
+                    }).join('')}
+                </section>`);
+            });
+            tbody.innerHTML = desktopRows.join('');
+            mobileList.innerHTML = mobileGroups.join('');
         } catch (error) {
             console.error('Picking list load error', error);
             tbody.innerHTML = `<tr><td colspan="6" class="text-center py-5 text-danger">피킹리스트를 불러오지 못했습니다: ${escapeHtml(error.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadPickingList()">다시 시도</button></td></tr>`;
+            mobileList.innerHTML = `<div class="text-center py-4 text-danger">피킹리스트를 불러오지 못했습니다: ${escapeHtml(error.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadPickingList()">다시 시도</button></div>`;
         }
     }
 
