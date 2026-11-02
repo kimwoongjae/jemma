@@ -1569,19 +1569,13 @@
     async function applyBulkWeight() {
         const checked = getSelectedOrderIds();
         if (!checked || checked.length === 0) {
-            alert('무게를 적용할 주문을 먼저 체크박스로 선택해주세요.');
             return;
         }
         const weightVal = document.getElementById('bulkWeightInput')?.value;
         if (!weightVal || isNaN(parseFloat(weightVal)) || parseFloat(weightVal) < 0) {
-            alert('적용할 유효한 무게(kg) 숫자를 입력해주세요. (예: 0.5)');
-            document.getElementById('bulkWeightInput')?.focus();
             return;
         }
         const weight = parseFloat(weightVal);
-        if (!confirm(`선택한 ${checked.length}건의 주문 무게를 ${weight}kg으로 일괄 변경하시겠습니까?`)) {
-            return;
-        }
         try {
             const res = await fetch('/api/orders/bulk-weight', {
                 method: 'POST',
@@ -1593,8 +1587,15 @@
             });
             const data = await res.json();
             if (data.status === 'success') {
-                alert(`선택한 ${data.updated_count}건의 주문 무게가 ${data.weight}kg으로 일괄 적용되었습니다.`);
-                loadOrders();
+                const selectedIds = new Set(checked);
+                ordersList.forEach(order => {
+                    if (selectedIds.has(Number(order.id))) order.weight = weight;
+                });
+                document.querySelectorAll('.order-row-check:checked').forEach(checkbox => {
+                    const row = checkbox.closest('tr');
+                    const weightInput = row?.querySelector('input[type="number"]');
+                    if (weightInput) weightInput.value = String(weight);
+                });
             } else {
                 alert('무게 일괄 적용 실패: ' + (data.error || '오류'));
             }
