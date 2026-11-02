@@ -220,6 +220,15 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                 'is_mock': True
             })
 
+    # 전송 중 상태를 먼저 저장합니다. API 실패가 나도 주문상태와 재고는 건드리지 않습니다.
+    for item in orders_data:
+        cur.execute('''
+            UPDATE orders
+            SET api_dispatch_status = '전송중', api_dispatch_message = '나르다 API 응답 대기 중'
+            WHERE id = ?
+        ''', (item['oid'],))
+    conn.commit()
+
     # 2. 나르다 실 API 병렬 동시 호출 (최대 10개 스레드로 초고속 전송)
     def call_api_single(item):
         if item.get('is_cached'):
@@ -245,6 +254,10 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         if not api_res.get('success'):
             err_msg = api_res.get('error') or '등록 실패'
             print(f"나르다 API 발급 실패 (주문번호 {ord_dict['order_no']}): {err_msg}")
+            cur.execute('''
+                UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
+                WHERE id = ?
+            ''', (str(err_msg), oid))
             failed_orders.append({
                 'order_id': oid,
                 'order_no': ord_dict['order_no'],
@@ -256,18 +269,24 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         tracking_no = api_res.get('tracking_no')
         pdf_url = api_res.get('pdf_url', '')
         if not tracking_no or not str(tracking_no).strip():
+            err_msg = '나르다 응답에 송장번호가 없어 발송 완료로 처리하지 않았습니다.'
+            cur.execute('''
+                UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
+                WHERE id = ?
+            ''', (err_msg, oid))
             failed_orders.append({
                 'order_id': oid,
                 'order_no': ord_dict['order_no'],
                 'recipient_name': ord_dict['recipient_name'],
-                'error': '나르다 응답에 송장번호가 없어 발송 완료로 처리하지 않았습니다.'
+                'error': err_msg
             })
             continue
         tracking_no = str(tracking_no).strip()
 
         cur.execute('''
             UPDATE orders
-            SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '출고완료', dispatched_at = ?
+            SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '출고완료', dispatched_at = ?,
+                api_dispatch_status = '성공', api_dispatch_message = ''
             WHERE id = ?
         ''', (tracking_no, target_courier, pdf_url, now_str, oid))
 

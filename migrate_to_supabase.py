@@ -93,6 +93,8 @@ def migrate():
         customs_validation_status TEXT DEFAULT '',
         customs_validation_msg TEXT DEFAULT '',
         invoice_pdf_url TEXT DEFAULT '',
+        api_dispatch_status TEXT DEFAULT '',
+        api_dispatch_message TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 

@@ -156,6 +156,8 @@ def init_db():
     cur = conn.cursor()
 
     if isinstance(conn, PgConnectionWrapper):
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
         cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
@@ -271,6 +273,8 @@ def init_db():
         weight REAL DEFAULT 0.0,
         customs_validation_status TEXT DEFAULT '',
         customs_validation_msg TEXT DEFAULT '',
+        api_dispatch_status TEXT DEFAULT '',
+        api_dispatch_message TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -287,6 +291,10 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN customs_validation_msg TEXT DEFAULT ''")
     if 'invoice_pdf_url' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN invoice_pdf_url TEXT DEFAULT ''")
+    if 'api_dispatch_status' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN api_dispatch_status TEXT DEFAULT ''")
+    if 'api_dispatch_message' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN api_dispatch_message TEXT DEFAULT ''")
 
     # 기존 출고대기 상태 주문접수로 통일 정규화
     cur.execute("UPDATE orders SET status = '주문접수' WHERE status = '출고대기'")

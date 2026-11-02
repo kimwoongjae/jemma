@@ -332,6 +332,84 @@ def get_orders():
 
     return jsonify(orders)
 
+@app.route('/api/picking-list', methods=['GET'])
+def get_picking_list():
+    """Aggregate pending order items by barcode for warehouse picking."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            SELECT o.id AS order_id, oi.sku, oi.item_product_name, oi.item_option_name,
+                   oi.quantity
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            WHERE o.status IN ('주문접수', '출고대기')
+            ORDER BY oi.sku ASC, oi.item_product_name ASC, oi.item_option_name ASC, o.id ASC
+        ''')
+
+        grouped = {}
+        for row in cur.fetchall():
+            item = dict(row)
+            sku = str(item.get('sku') or '').strip()
+            product = str(item.get('item_product_name') or '').strip()
+            option = str(item.get('item_option_name') or '').strip()
+            if option in ('단일옵션', 'nan', 'None'):
+                option = ''
+            combined_name = ' '.join(part for part in (product, option) if part).strip()
+            combined_name = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', combined_name).strip()
+
+            # 바코드가 있으면 바코드를 기준으로 합산하고, 없으면 상품/옵션 조합으로 분리합니다.
+            key = ('sku', sku) if sku else ('name', combined_name)
+            entry = grouped.setdefault(key, {
+                'sku': sku,
+                'names': set(),
+                'order_ids': set(),
+                'total_quantity': 0,
+                'quantity_breakdown': {}
+            })
+            if combined_name:
+                entry['names'].add(combined_name)
+            order_id = item.get('order_id')
+            entry['order_ids'].add(order_id)
+            try:
+                quantity = max(1, int(item.get('quantity') or 1))
+            except (TypeError, ValueError):
+                quantity = 1
+            entry['total_quantity'] += quantity
+            bucket = entry['quantity_breakdown'].setdefault(str(quantity), {
+                'purchase_quantity': quantity,
+                'orders': set(),
+                'total_quantity': 0
+            })
+            bucket['orders'].add(order_id)
+            bucket['total_quantity'] += quantity
+
+        rows = []
+        for entry in grouped.values():
+            rows.append({
+                'sku': entry['sku'],
+                'product_name': ' / '.join(sorted(entry['names'])) or '(상품명 없음)',
+                'order_count': len(entry['order_ids']),
+                'total_quantity': entry['total_quantity'],
+                'quantity_breakdown': [
+                    {
+                        'purchase_quantity': bucket['purchase_quantity'],
+                        'order_count': len(bucket['orders']),
+                        'total_quantity': bucket['total_quantity']
+                    }
+                    for bucket in sorted(entry['quantity_breakdown'].values(), key=lambda b: b['purchase_quantity'])
+                ]
+            })
+        rows.sort(key=lambda row: (not bool(row['sku']), row['sku'].casefold(), row['product_name'].casefold()))
+        return jsonify({
+            'items': rows,
+            'sku_count': len(rows),
+            'order_count': len({order_id for entry in grouped.values() for order_id in entry['order_ids']}),
+            'total_quantity': sum(entry['total_quantity'] for entry in grouped.values())
+        })
+    finally:
+        conn.close()
+
 @app.route('/api/dispatched-orders', methods=['GET'])
 def get_dispatched_orders():
     courier = request.args.get('courier', '').strip()

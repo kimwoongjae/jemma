@@ -174,7 +174,7 @@
                 -webkit-overflow-scrolling: touch;
                 overscroll-behavior-x: contain;
             }
-            #ordersTable { min-width: 1180px; }
+            #ordersTable { min-width: 1420px; }
             #customsErrorTable { min-width: 900px; }
             #dispatchedTable { min-width: 1200px; }
             #inventoryTable, #logsTable { min-width: 760px; }
@@ -303,6 +303,11 @@
         <li class="nav-item">
             <button class="nav-link active" id="tab-orders" data-bs-toggle="tab" data-bs-target="#orders-pane" type="button" role="tab">
                 <i class="fa-solid fa-file-invoice me-1"></i> 주문 관리 & 엑셀 업로드
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" id="tab-picking" data-bs-toggle="tab" data-bs-target="#picking-pane" type="button" role="tab" onclick="loadPickingList()">
+                <i class="fa-solid fa-list-check text-primary me-1"></i> 피킹리스트
             </button>
         </li>
         <li class="nav-item">
@@ -472,13 +477,53 @@
                                     <th class="text-center" style="width: 75px;">옵션수량</th>
                                     <th class="text-center text-primary" style="width: 85px; background-color: #eef6fc;">구매수량</th>
                                     <th class="text-center" style="width: 95px;">출고여부</th>
+                                    <th class="text-center" style="width: 230px;">API 전송상태</th>
                                     <th class="text-center" style="width: 70px;">관리</th>
                                 </tr>
                             </thead>
                             <tbody id="ordersTableBody">
                                 <tr>
-                                    <td colspan="13" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
+                                    <td colspan="14" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
                                 </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 주문 관리와 같은 미발송 주문을 바코드별로 합산한 피킹 목록 -->
+        <div class="tab-pane fade" id="picking-pane" role="tabpanel">
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3">
+                    <div>
+                        <h5 class="fw-bold mb-1"><i class="fa-solid fa-list-check text-primary me-2"></i>피킹리스트</h5>
+                        <div class="text-muted">주문관리의 미발송 품목을 바코드별로 합산합니다. 발송 처리가 완료된 주문은 목록에서 자동으로 빠집니다.</div>
+                    </div>
+                    <button class="btn btn-outline-secondary" onclick="loadPickingList()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
+                    <div class="d-flex flex-wrap gap-2 ms-lg-auto">
+                        <span class="badge bg-primary fs-6 px-3 py-2">바코드/품목 <strong id="pickingSkuCount">0</strong></span>
+                        <span class="badge bg-secondary fs-6 px-3 py-2">주문 <strong id="pickingOrderCount">0</strong>건</span>
+                        <span class="badge bg-success fs-6 px-3 py-2">총 피킹 수량 <strong id="pickingTotalQuantity">0</strong>개</span>
+                    </div>
+                </div>
+            </div>
+            <div class="card border-0 shadow-sm">
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="text-center" style="width:60px">순번</th>
+                                    <th>상품명 + 옵션명</th>
+                                    <th style="width:190px">바코드 (SKU)</th>
+                                    <th style="min-width:300px">구매 수량별 합계</th>
+                                    <th class="text-center" style="width:110px">주문 건수</th>
+                                    <th class="text-center" style="width:130px">총 피킹 수량</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pickingListTableBody">
+                                <tr><td colspan="6" class="text-center py-5 text-muted">피킹리스트를 불러오는 중입니다...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1486,6 +1531,7 @@
         loadStats();
         if (refreshEveryTab) {
             loadOrders();
+            loadPickingList();
             loadCustomsErrorOrders();
             loadDispatchedOrders();
             loadInventory();
@@ -1499,6 +1545,7 @@
         const activeTabId = document.querySelector('#mainTabs .nav-link.active')?.id || 'tab-orders';
         const refreshCurrentTab = {
             'tab-orders': () => { loadOrders(); loadCustomsErrorOrders(); },
+            'tab-picking': loadPickingList,
             'tab-customs-error': loadCustomsErrorOrders,
             'tab-dispatched': loadDispatchedOrders,
             'tab-stockin': initStockInTab,
@@ -1699,7 +1746,7 @@
             console.error('Order load error', e);
             const tbody = document.getElementById('ordersTableBody');
             if (tbody) {
-                tbody.innerHTML = `<tr><td colspan="13" class="text-center py-5 text-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>주문 목록 로딩 중 일시적 오류: ${e.message} <br><button class="btn btn-sm btn-outline-secondary mt-2" onclick="loadOrders()"><i class="fa-solid fa-arrows-rotate me-1"></i>다시 불러오기</button></td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="14" class="text-center py-5 text-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>주문 목록 로딩 중 일시적 오류: ${e.message} <br><button class="btn btn-sm btn-outline-secondary mt-2" onclick="loadOrders()"><i class="fa-solid fa-arrows-rotate me-1"></i>다시 불러오기</button></td></tr>`;
             }
         }
     }
@@ -1977,6 +2024,42 @@
         }
     }
 
+    async function loadPickingList() {
+        const tbody = document.getElementById('pickingListTableBody');
+        if (!tbody) return;
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted"><i class="fa-solid fa-spinner fa-spin me-2"></i>피킹리스트를 불러오는 중입니다...</td></tr>';
+        try {
+            const res = await fetch('/api/picking-list');
+            if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+            const data = await res.json();
+            const items = Array.isArray(data.items) ? data.items : [];
+            document.getElementById('pickingSkuCount').textContent = Number(data.sku_count || 0).toLocaleString();
+            document.getElementById('pickingOrderCount').textContent = Number(data.order_count || 0).toLocaleString();
+            document.getElementById('pickingTotalQuantity').textContent = Number(data.total_quantity || 0).toLocaleString();
+
+            if (!items.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted">피킹할 미발송 상품이 없습니다.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map((item, index) => {
+                const breakdown = (item.quantity_breakdown || []).map(bucket =>
+                    `<span class="badge bg-light text-dark border me-1 mb-1">${Number(bucket.purchase_quantity).toLocaleString()}개 구매 ${Number(bucket.order_count).toLocaleString()}건 <strong class="text-success">(총 ${Number(bucket.total_quantity).toLocaleString()}개)</strong></span>`
+                ).join('');
+                return `<tr>
+                    <td class="text-center text-muted">${index + 1}</td>
+                    <td class="fw-semibold">${escapeHtml(item.product_name || '(상품명 없음)')}</td>
+                    <td>${item.sku ? `<code class="fs-6">${escapeHtml(item.sku)}</code>` : '<span class="text-muted">바코드 없음</span>'}</td>
+                    <td>${breakdown || '<span class="text-muted">수량 정보 없음</span>'}</td>
+                    <td class="text-center">${Number(item.order_count || 0).toLocaleString()}건</td>
+                    <td class="text-center fw-bold text-success fs-5">${Number(item.total_quantity || 0).toLocaleString()}개</td>
+                </tr>`;
+            }).join('');
+        } catch (error) {
+            console.error('Picking list load error', error);
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-5 text-danger">피킹리스트를 불러오지 못했습니다: ${escapeHtml(error.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadPickingList()">다시 시도</button></td></tr>`;
+        }
+    }
+
     function getCleanCombinedName(o, it) {
         const cleanDispatchLabel = value => String(value || '').replace(/\s*\(출고\s*품목\)\s*/g, ' ').trim();
         const pName = cleanDispatchLabel(o && o.original_product_name ? o.original_product_name : (it && it.item_product_name ? it.item_product_name : ''));
@@ -2050,7 +2133,7 @@
         const tbody = document.getElementById('ordersTableBody');
         tbody.innerHTML = '';
         if (!orders || orders.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="13" class="text-center py-5 text-muted">조건에 일치하는 주문 데이터가 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="14" class="text-center py-5 text-muted">조건에 일치하는 주문 데이터가 없습니다.</td></tr>`;
             updateOrderSelectionCount();
             return;
         }
@@ -2084,6 +2167,17 @@
                 dispatchBadge = '<span class="badge bg-danger px-2 py-1 fs-6"><i class="fa-solid fa-circle-xmark me-1"></i>재고부족</span>';
             } else if (o._dispatchStatus === '부분부족') {
                 dispatchBadge = '<span class="badge bg-warning text-dark px-2 py-1 fs-6"><i class="fa-solid fa-triangle-exclamation me-1"></i>부분부족</span>';
+            }
+
+            const apiDispatchStatus = String(o.api_dispatch_status || '').trim();
+            const apiDispatchMessage = String(o.api_dispatch_message || '').trim();
+            let apiDispatchHtml = '<span class="badge bg-light text-secondary border">미전송</span>';
+            if (apiDispatchStatus === '전송중') {
+                apiDispatchHtml = `<span class="badge bg-info text-dark"><i class="fa-solid fa-spinner fa-spin me-1"></i>전송중</span><div class="small text-muted mt-1">${escapeHtml(apiDispatchMessage)}</div>`;
+            } else if (apiDispatchStatus === '실패') {
+                apiDispatchHtml = `<span class="badge bg-danger"><i class="fa-solid fa-circle-exclamation me-1"></i>전송 실패</span><div class="small text-danger mt-1" style="white-space:normal; min-width:180px;" title="${escapeHtml(apiDispatchMessage)}">${escapeHtml(apiDispatchMessage || '실패 사유 없음')}</div>`;
+            } else if (apiDispatchStatus === '성공') {
+                apiDispatchHtml = '<span class="badge bg-success">전송 성공</span>';
             }
 
             const items = (o.items && o.items.length > 0) ? o.items : [{
@@ -2159,6 +2253,7 @@
                 if (idx === 0) {
                     rowHtml += `
                         <td rowspan="${rowCount}" class="text-center bg-white">${dispatchBadge}</td>
+                        <td rowspan="${rowCount}" class="text-center bg-white">${apiDispatchHtml}</td>
                         <td rowspan="${rowCount}" class="text-center bg-white">
                             <div class="d-flex flex-column gap-1 align-items-center">
                                 <button class="btn btn-sm btn-outline-primary py-1 px-2" onclick="openEditOrderModal(${o.id})" title="주문 및 수취인 정보 수정">
