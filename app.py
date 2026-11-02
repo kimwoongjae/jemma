@@ -316,7 +316,9 @@ def get_dispatched_orders():
         wild = f'%{search}%'
         params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
 
-    query += ' ORDER BY COALESCE(dispatched_at, created_at) DESC, id DESC'
+    # PostgreSQL에서는 dispatched_at(TEXT)와 created_at(TIMESTAMP)의
+    # COALESCE가 타입 오류를 내므로 양쪽을 TEXT로 맞춰 정렬합니다.
+    query += " ORDER BY COALESCE(NULLIF(CAST(dispatched_at AS TEXT), ''), CAST(created_at AS TEXT)) DESC, id DESC"
     if limit_param and limit_param.isdigit():
         query += ' LIMIT ?'
         params.append(int(limit_param))
