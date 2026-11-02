@@ -3488,6 +3488,16 @@
         window.open(`/api/shipping/narda-pdf-bundle?order_ids=${currentBatchOrderIds.join(',')}`, '_blank');
     }
 
+    function previewSinglePdf(url) {
+        const frame = document.getElementById('nardaPdfFrame');
+        const pdfContainer = document.getElementById('nardaPdfViewerContainer');
+        if (frame && pdfContainer) {
+            frame.src = url;
+            pdfContainer.style.display = 'block';
+            pdfContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+
     function printCurrentLabels() {
         const frame = document.getElementById('nardaPdfFrame');
         const pdfContainer = document.getElementById('nardaPdfViewerContainer');
@@ -3548,96 +3558,67 @@
                     btnPdf.innerHTML = `<i class="fa-solid fa-file-pdf me-1"></i> 나르다 공식 PDF 통합 출력 (${hasPdfOrders.length}건)`;
                 }
 
-                container.innerHTML = `
+                // 나르다 공식 정품 송장만 제공: 임의의 HTML 송장 카드는 절대 노출하지 않음
+                let listHtml = `
                     <div class="card border-0 shadow-sm w-100 my-2">
-                        <div class="card-header bg-light py-2 d-flex justify-content-between align-items-center">
-                            <span class="small fw-bold text-dark"><i class="fa-solid fa-boxes-packing me-1"></i>출고 품목 및 주문 패킹 확인 목록 (${labels.length}건)</span>
-                            <span class="badge bg-success">나르다 공식 PDF 라벨 탑재 완료</span>
+                        <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center">
+                            <span class="fw-bold text-dark"><i class="fa-solid fa-plane-departure me-2 text-danger"></i>나르다 공식 정품 송장 라벨 목록 (${hasPdfOrders.length}건)</span>
+                            <span class="badge bg-success"><i class="fa-solid fa-circle-check me-1"></i>나르다 공식 PDF 연동 완료</span>
+                        </div>
+                        <div class="card-body p-0 table-responsive" style="max-height: 480px;">
+                            <table class="table table-hover table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 45px;" class="text-center">#</th>
+                                        <th style="width: 180px;">주문번호</th>
+                                        <th style="width: 100px;">수취인</th>
+                                        <th style="width: 140px;">나르다 운송장번호</th>
+                                        <th>배송지 주소</th>
+                                        <th class="text-center" style="width: 200px;">공식 정품 송장</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                `;
+
+                hasPdfOrders.forEach((o, idx) => {
+                    listHtml += `
+                        <tr>
+                            <td class="text-center text-muted small">${idx + 1}</td>
+                            <td class="fw-bold">${escapeHtml(o.order_no)}</td>
+                            <td>${escapeHtml(o.recipient_name)}</td>
+                            <td><code class="text-primary fw-bold fs-6">${escapeHtml(o.tracking_no || '-')}</code></td>
+                            <td><small class="text-muted text-truncate d-inline-block" style="max-width: 220px;" title="${escapeHtml(o.address)}">${escapeHtml(o.address || '-')}</small></td>
+                            <td class="text-center">
+                                <div class="btn-group btn-group-sm">
+                                    <button class="btn btn-outline-primary py-1 px-2" onclick="previewSinglePdf('${escapeHtml(o.invoice_pdf_url)}')">
+                                        <i class="fa-solid fa-eye me-1"></i>뷰어로 보기
+                                    </button>
+                                    <a href="${escapeHtml(o.invoice_pdf_url)}" target="_blank" class="btn btn-outline-danger py-1 px-2">
+                                        <i class="fa-solid fa-file-pdf me-1"></i>PDF 열기
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                listHtml += `
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 `;
+                container.innerHTML = listHtml;
+                return; // ★ 이상한 HTML 카드(shipping-label-card) 렌더링 원천 차단
             } else {
                 if (pdfContainer) {
                     pdfContainer.style.display = 'none';
                     if (pdfFrame) pdfFrame.src = '';
                 }
                 if (btnPdf) btnPdf.style.display = 'none';
+                container.innerHTML = `<div class="p-5 text-center text-muted">선택된 주문에 발급된 나르다 공식 송장 PDF가 없습니다. 먼저 주문관리에서 송장을 발급해주세요.</div>`;
+                return;
             }
-
-            labels.forEach(o => {
-                const card = document.createElement('div');
-                card.className = 'shipping-label-card';
-                const itemsRows = (o.items || []).map(it => `
-                    <tr>
-                        <td style="font-weight:bold;">${escapeHtml(it.item_product_name || '')}</td>
-                        <td>${escapeHtml(it.item_option_name || '')}</td>
-                        <td style="text-align:center; font-weight:bold;">${it.quantity}</td>
-                    </tr>
-                `).join('');
-
-                card.innerHTML = `
-                    <div class="label-header d-flex justify-content-between align-items-center mb-2 pb-1 border-bottom border-dark">
-                        <div>
-                            <span class="badge text-white px-2 py-1" style="background-color: #6f42c1; font-size: 13px;">
-                                <i class="fa-solid fa-plane-departure me-1"></i>${escapeHtml(o.courier || '나르다')}
-                            </span>
-                            <strong style="font-size: 16px; margin-left: 6px;">택배운송장 (NARDA AIR)</strong>
-                        </div>
-                        <div class="text-end">
-                            <div style="font-size: 11px;">주문: ${escapeHtml(o.order_no)}</div>
-                            ${o.invoice_pdf_url ? `
-                            <div class="mt-1 no-print">
-                                <a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-sm btn-outline-danger py-0 px-2 fw-bold" style="font-size: 11px;">
-                                    <i class="fa-solid fa-file-pdf me-1"></i>나르다 공식 PDF 다운로드
-                                </a>
-                            </div>` : ''}
-                        </div>
-                    </div>
-                    <div style="text-align:center; margin-bottom: 8px;">
-                        <svg id="barcode-${o.id}"></svg>
-                    </div>
-                    <table class="label-table">
-                        <tr>
-                            <th>받는 사람</th>
-                            <td colspan="3"><strong style="font-size:14px;">${escapeHtml(o.recipient_name || '')}</strong> 님 (${escapeHtml(o.recipient_phone1 || '')})</td>
-                        </tr>
-                        <tr>
-                            <th>도착 주소</th>
-                            <td colspan="3"><strong style="font-size:12px;">[${escapeHtml(o.postal_code || '')}] ${escapeHtml(o.address || '')}</strong></td>
-                        </tr>
-                        <tr>
-                            <th>통관고유부호</th>
-                            <td><code>${escapeHtml(o.customs_id || '없음')}</code></td>
-                            <th>배송요청</th>
-                            <td>${escapeHtml(o.shipping_memo || '문앞 배송')}</td>
-                        </tr>
-                        <tr>
-                            <th>보내는 사람</th>
-                            <td colspan="3">${escapeHtml(o.sender?.sender_name || 'TOA')} (${escapeHtml(o.sender?.sender_phone || '02-1234-5678')})<br><small>${escapeHtml(o.sender?.sender_address || '')}</small></td>
-                        </tr>
-                    </table>
-                    <div style="font-size:11px; font-weight:bold; margin-bottom:4px; margin-top:6px;">📦 분할 출고 상품 내역:</div>
-                    <table class="label-table" style="font-size:10px;">
-                        <thead>
-                            <tr style="background:#eee;">
-                                <th>품목명</th>
-                                <th>단품 옵션</th>
-                                <th style="width:15%; text-align:center;">수량</th>
-                            </tr>
-                        </thead>
-                        <tbody>${itemsRows}</tbody>
-                    </table>
-                `;
-                container.appendChild(card);
-
-                if (o.tracking_no) {
-                    try {
-                        JsBarcode(`#barcode-${o.id}`, o.tracking_no, {
-                            format: "CODE128", width: 1.8, height: 45, displayValue: true, fontSize: 13
-                        });
-                    } catch (e) {}
-                }
-            });
         } catch (e) {
             console.error('Labels error', e);
             container.innerHTML = `<div class="p-5 text-center text-danger">라벨 로딩 중 오류가 발생했습니다: ${e.message}</div>`;

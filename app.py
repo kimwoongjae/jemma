@@ -833,49 +833,66 @@ def api_narda_pdf_bundle():
             conn.close()
             return "유효한 주문 ID가 없습니다.", 400
         placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f"SELECT id, order_no, invoice_pdf_url FROM orders WHERE id IN ({placeholders}) AND invoice_pdf_url != ''", order_ids)
+        cur.execute(f"SELECT id, order_no, invoice_pdf_url FROM orders WHERE id IN ({placeholders}) AND invoice_pdf_url IS NOT NULL AND invoice_pdf_url != ''", order_ids)
     else:
         # 지정되지 않은 경우 최근 발급된 나르다 PDF 송장 주문 최대 200건 조회
-        cur.execute("SELECT id, order_no, invoice_pdf_url FROM orders WHERE invoice_pdf_url != '' ORDER BY id DESC LIMIT 200")
+        cur.execute("SELECT id, order_no, invoice_pdf_url FROM orders WHERE invoice_pdf_url IS NOT NULL AND invoice_pdf_url != '' ORDER BY id DESC LIMIT 200")
 
-    rows = cur.fetchall()
+    raw_rows = cur.fetchall()
     conn.close()
 
+    rows = [dict(r) for r in raw_rows] if raw_rows else []
     if not rows:
         return "선택한 주문에 발급된 나르다 송장 PDF가 없습니다. 먼저 송장을 발급해주세요.", 404
+
+    # 단 1건인 경우 해당 공식 PDF URL로 즉시 리다이렉트
+    if len(rows) == 1:
+        return redirect(rows[0]['invoice_pdf_url'])
 
     from pypdf import PdfWriter
     import io
     import concurrent.futures
 
-    def fetch_single_pdf(r):
-        url = r['invoice_pdf_url']
+    def fetch_single_pdf(item):
+        url = (item.get('invoice_pdf_url') or '').strip()
+        if not url or not url.startswith('http'):
+            return (item['id'], None)
         try:
-            resp = requests.get(url, timeout=15)
-            if resp.status_code == 200 and resp.content:
-                return (r['id'], resp.content)
+            resp = requests.get(
+                url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+                timeout=20
+            )
+            if resp.status_code == 200 and len(resp.content) > 100:
+                return (item['id'], resp.content)
         except Exception as e:
-            print(f"PDF 다운로드 실패 ({r['order_no']}, {url}): {e}")
-        return (r['id'], None)
+            print(f"PDF 다운로드 실패 ({item.get('order_no')}, {url}): {e}")
+        return (item['id'], None)
 
-    # 병렬 다운로드 (최대 20개 동시 요청으로 대량 주문도 1~2초 만에 초고속 병합)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    # 병렬 다운로드 (최대 15개 동시 요청으로 대량 주문도 1~2초 만에 초고속 병합)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         pdf_dict = dict(executor.map(fetch_single_pdf, rows))
 
     writer = PdfWriter()
     merged_count = 0
+    all_streams = []
 
     for r in rows:
         content = pdf_dict.get(r['id'])
         if content:
             try:
-                pdf_stream = io.BytesIO(content)
-                writer.append(pdf_stream)
+                st = io.BytesIO(content)
+                all_streams.append(st)
+                writer.append(st)
                 merged_count += 1
             except Exception as pe:
-                print(f"PDF 파싱 실패 ({r['order_no']}): {pe}")
+                print(f"PDF 파싱 실패 ({r.get('order_no')}): {pe}")
 
     if merged_count == 0:
+        # 병합 실패 시에도 첫 번째 공식 PDF URL로 즉시 리다이렉트하여 송장이 무조건 열리도록 보장
+        first_valid = next((r['invoice_pdf_url'] for r in rows if r.get('invoice_pdf_url')), None)
+        if first_valid:
+            return redirect(first_valid)
         return "PDF 파일을 다운로드하여 병합하지 못했습니다.", 500
 
     output_stream = io.BytesIO()
