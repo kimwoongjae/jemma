@@ -2525,10 +2525,15 @@
         const search = document.getElementById('dispatchedSearchInput')?.value || '';
         try {
             const res = await fetch(`/api/dispatched-orders?courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}`);
-            dispatchedOrdersList = await res.json();
+            if (!res.ok) throw new Error(`발송내역 조회 실패 (${res.status})`);
+            const data = await res.json();
+            if (!Array.isArray(data)) throw new Error(data.error || '발송내역 응답 형식이 올바르지 않습니다.');
+            dispatchedOrdersList = data;
             renderDispatchedTable(dispatchedOrdersList);
         } catch (e) {
             console.error('Dispatched orders load error', e);
+            const tbody = document.getElementById('dispatchedTableBody');
+            if (tbody) tbody.innerHTML = `<tr><td colspan="12" class="text-center py-5 text-danger">발송내역을 불러오지 못했습니다: ${escapeHtml(e.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadDispatchedOrders()">다시 시도</button></td></tr>`;
         }
     }
 
