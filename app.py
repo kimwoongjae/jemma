@@ -947,7 +947,7 @@ def get_inventory():
         SELECT p.*,
             (COALESCE(p.dispatched_quantity, 0) + 
              COALESCE((
-                 SELECT SUM(oi.quantity * oi.option_quantity) 
+                 SELECT SUM(oi.quantity)
                  FROM order_items oi 
                  JOIN orders o ON oi.order_id = o.id 
                  WHERE oi.sku = p.sku AND o.status = '출고완료'
@@ -1468,8 +1468,11 @@ def get_inventory_logs():
     params = []
 
     if change_type and change_type != '전체':
-        query += ' AND change_type = ?'
-        params.append(change_type)
+        if change_type == '출고':
+            query += " AND change_type IN ('출고', '주문출고')"
+        else:
+            query += ' AND change_type = ?'
+            params.append(change_type)
 
     if search:
         query += ' AND (sku LIKE ? OR product_name LIKE ? OR memo LIKE ?)'

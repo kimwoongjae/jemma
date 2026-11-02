@@ -296,20 +296,20 @@ def issue_tracking_numbers(order_ids, courier_name=None):
 
                 # 바코드(SKU) 기준 일괄 집계 누적 (개별 주문마다 기록하지 않고 묶음당 1건만 기록)
                 sku_key = matched_prod['sku'] or str(matched_prod['id'])
-                if sku_key not in aggregated_deductions:
-                    aggregated_deductions[sku_key] = {
+                log_key = (oid, sku_key)
+                if log_key not in aggregated_deductions:
+                    aggregated_deductions[log_key] = {
                         'product_id': matched_prod['id'],
                         'sku': matched_prod['sku'],
                         'product_name': matched_prod['product_name'],
                         'option_name': matched_prod.get('option_name') or '',
+                        'order_no': ord_dict['order_no'],
                         'total_qty': 0,
                         'final_stock': new_stock,
-                        'order_nos': set(),
                         'courier': target_courier
                     }
-                aggregated_deductions[sku_key]['total_qty'] += deduct_qty
-                aggregated_deductions[sku_key]['final_stock'] = new_stock
-                aggregated_deductions[sku_key]['order_nos'].add(ord_dict['order_no'])
+                aggregated_deductions[log_key]['total_qty'] += deduct_qty
+                aggregated_deductions[log_key]['final_stock'] = new_stock
 
             cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ?", (it['id'],))
 
@@ -323,13 +323,11 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         })
 
     # ==========================================
-    # 바코드 기준으로 총수량 1건만 입출고 내역(inventory_logs)에 기입
+    # 주문별·바코드별로 출고 내역을 남겨 처리 건을 추적할 수 있도록 기록
     # ==========================================
     now_log_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     for agg in aggregated_deductions.values():
-        cnt = len(agg['order_nos'])
-        memo_text = f"총 {cnt}건 주문 일괄 출고 ({agg['courier']} 송장발급)"
-        ref_no = f"{cnt}건 일괄출고"
+        memo_text = f"주문 출고 ({agg['courier']} 송장발급)"
         cur.execute('''
             INSERT INTO inventory_logs (
                 product_id, sku, product_name, option_name,
@@ -337,7 +335,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
             ) VALUES (?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)
         ''', (
             agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
-            -agg['total_qty'], agg['final_stock'], ref_no, memo_text, now_log_str
+            -agg['total_qty'], agg['final_stock'], agg['order_no'], memo_text, now_log_str
         ))
 
     conn.commit()
