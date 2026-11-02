@@ -3567,7 +3567,12 @@
             }
 
             // 나르다 공식 정품 PDF가 발급된 주문들 확인
-            const hasPdfOrders = labels.filter(o => o.invoice_pdf_url && o.invoice_pdf_url.trim() !== '');
+            const hasPdfOrders = labels.filter(o => {
+                const courier = String(o.courier || '').trim().toLowerCase();
+                return ['나르다', 'narda', 'narda air'].includes(courier)
+                    && typeof o.invoice_pdf_url === 'string'
+                    && o.invoice_pdf_url.trim() !== '';
+            });
             if (hasPdfOrders.length > 0) {
                 const pdfIds = hasPdfOrders.map(o => o.id);
                 currentBatchOrderIds = pdfIds;

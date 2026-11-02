@@ -730,9 +730,8 @@ def api_shipping_batches():
             SELECT id, order_no, courier, tracking_no, invoice_pdf_url, recipient_name,
                    created_at, dispatched_at, status
             FROM orders
-            WHERE (tracking_no IS NOT NULL AND tracking_no != '')
-               OR invoice_pdf_url != ''
-               OR status IN ('송장발급', '출고완료')
+            WHERE LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+              AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
             ORDER BY id DESC
         ''')
         orders = [dict(r) for r in cur.fetchall()]
@@ -763,8 +762,7 @@ def api_shipping_batches():
                 }
             groups[group_key]['order_ids'].append(o['id'])
             groups[group_key]['orders_count'] += 1
-            if o.get('invoice_pdf_url'):
-                groups[group_key]['has_pdf_count'] += 1
+            groups[group_key]['has_pdf_count'] += 1
 
         batch_list = list(groups.values())
         return jsonify(batch_list)
@@ -792,13 +790,16 @@ def api_shipping_labels():
 
         if order_ids:
             placeholders = ','.join(['?'] * len(order_ids))
-            cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
+            cur.execute(f'''SELECT * FROM orders
+                WHERE id IN ({placeholders})
+                  AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+                  AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
+                ORDER BY id ASC''', order_ids)
         else:
             cur.execute('''
                 SELECT * FROM orders
-                WHERE (tracking_no IS NOT NULL AND tracking_no != '')
-                   OR invoice_pdf_url != ''
-                   OR status IN ('송장발급', '출고완료')
+                WHERE LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+                  AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
                 ORDER BY id DESC LIMIT 150
             ''')
 
@@ -833,10 +834,16 @@ def api_narda_pdf_bundle():
             conn.close()
             return "유효한 주문 ID가 없습니다.", 400
         placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f"SELECT id, order_no, invoice_pdf_url FROM orders WHERE id IN ({placeholders}) AND invoice_pdf_url IS NOT NULL AND invoice_pdf_url != ''", order_ids)
+        cur.execute(f'''SELECT id, order_no, invoice_pdf_url FROM orders
+            WHERE id IN ({placeholders})
+              AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+              AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != '' ''', order_ids)
     else:
         # 지정되지 않은 경우 최근 발급된 나르다 PDF 송장 주문 최대 200건 조회
-        cur.execute("SELECT id, order_no, invoice_pdf_url FROM orders WHERE invoice_pdf_url IS NOT NULL AND invoice_pdf_url != '' ORDER BY id DESC LIMIT 200")
+        cur.execute('''SELECT id, order_no, invoice_pdf_url FROM orders
+            WHERE LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+              AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
+            ORDER BY id DESC LIMIT 200''')
 
     raw_rows = cur.fetchall()
     conn.close()
