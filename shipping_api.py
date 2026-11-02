@@ -445,6 +445,20 @@ def export_shipping_excel(order_ids=None, column_order=None):
     ws = wb.active
     ws.title = "발송처리결과"
 
+    def product_quantity(order, item):
+        try:
+            value = int(item.get('product_quantity') or order['original_quantity'] or 0)
+            if value > 0:
+                return value
+        except (TypeError, ValueError):
+            pass
+        try:
+            option_qty = max(1, int(item.get('option_quantity') or 1))
+            buy_qty = max(1, int(item.get('quantity') or 1))
+            return max(1, round(buy_qty / option_qty))
+        except (TypeError, ValueError):
+            return 1
+
     column_definitions = {
         'weight': ('무게 (kg)', lambda o, its: o['weight'] if ('weight' in o.keys() and o['weight']) else 0.0),
         'order_no': ('주문번호', lambda o, its: o['order_no'] or ''),
@@ -456,8 +470,9 @@ def export_shipping_excel(order_ids=None, column_order=None):
             ' '.join(value for value in [str(item.get('item_product_name') or '').strip(), str(item.get('item_option_name') or '').strip()] if value and value not in str(item.get('item_product_name') or ''))
             for item in its
         ) if its else ' '.join(value for value in [o['original_product_name'] or '', o['original_option_name'] or ''] if value)),
-        'option_quantity': ('옵션 수량', lambda o, its: ' | '.join(str(item.get('option_quantity') or 1) for item in its) if its else '1'),
-        'buy_quantity': ('구매 수량', lambda o, its: ' | '.join(str(item.get('quantity') or 1) for item in its) if its else str(o['original_quantity'] or 1)),
+        'product_quantity': ('상품수량', lambda o, its: ' | '.join(str(product_quantity(o, item)) for item in its) if its else str(o['original_quantity'] or 1)),
+        'option_quantity': ('옵션수량', lambda o, its: ' | '.join(str(item.get('option_quantity') or 1) for item in its) if its else '1'),
+        'buy_quantity': ('구매수량', lambda o, its: ' | '.join(str(item.get('quantity') or 1) for item in its) if its else str(o['original_quantity'] or 1)),
         'courier_tracking': ('택배사 / 송장번호', lambda o, its: ' / '.join(value for value in [o['courier'] or '', o['tracking_no'] or ''] if value)),
         'status': ('상태', lambda o, its: o['status'] or '')
     }

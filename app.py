@@ -3,8 +3,9 @@ import json
 import re
 import uuid
 import time
+import requests
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, redirect
 
 from werkzeug.utils import secure_filename
 
@@ -873,6 +874,7 @@ def api_narda_pdf_bundle():
     def fetch_single_pdf(item):
         url = (item.get('invoice_pdf_url') or '').strip()
         if not url or not url.startswith('http'):
+            app.logger.warning('나르다 PDF URL이 비어 있거나 HTTP URL이 아닙니다 (order id=%s)', item.get('id'))
             return (item['id'], None)
         try:
             resp = requests.get(
@@ -882,8 +884,12 @@ def api_narda_pdf_bundle():
             )
             if resp.status_code == 200 and resp.content.startswith(b'%PDF-'):
                 return (item['id'], resp.content)
+            app.logger.warning(
+                '나르다 PDF 응답이 PDF 형식이 아닙니다 (order id=%s, HTTP %s, Content-Type=%s)',
+                item.get('id'), resp.status_code, resp.headers.get('Content-Type', '')
+            )
         except Exception as e:
-            print(f"PDF 다운로드 실패 ({item.get('order_no')}, {url}): {e}")
+            app.logger.warning('나르다 PDF 다운로드 실패 (order id=%s): %s', item.get('id'), e)
         return (item['id'], None)
 
     # 병렬 다운로드 (최대 15개 동시 요청으로 대량 주문도 1~2초 만에 초고속 병합)

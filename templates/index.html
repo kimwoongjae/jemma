@@ -555,8 +555,9 @@
                                     <th data-column-key="customs_id" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">통관부호</th>
                                     <th data-column-key="address" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">배송지 주소</th>
                                     <th data-column-key="product" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">상품명 + 옵션명</th>
-                                    <th data-column-key="option_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">옵션 수량</th>
-                                    <th data-column-key="buy_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">구매 수량</th>
+                                    <th data-column-key="product_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">상품수량</th>
+                                    <th data-column-key="option_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">옵션수량</th>
+                                    <th data-column-key="buy_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">구매수량</th>
                                     <th data-column-key="courier_tracking" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">택배사 / 송장번호</th>
                                     <th data-column-key="status" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 85px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">상태</th>
                                 </tr>
@@ -2538,14 +2539,27 @@
     }
 
     const DISPATCHED_COLUMN_ORDER_KEY = 'jamma-dispatched-columns-v1';
-    const DEFAULT_DISPATCHED_COLUMN_ORDER = ['weight', 'order_no', 'dispatched_at', 'recipient', 'customs_id', 'address', 'product', 'option_quantity', 'buy_quantity', 'courier_tracking', 'status'];
+    const DEFAULT_DISPATCHED_COLUMN_ORDER = ['weight', 'order_no', 'dispatched_at', 'recipient', 'customs_id', 'address', 'product', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier_tracking', 'status'];
 
     function getDispatchedColumnOrder() {
         try {
             const saved = JSON.parse(localStorage.getItem(DISPATCHED_COLUMN_ORDER_KEY) || '[]');
             const valid = Array.isArray(saved) ? saved.filter(key => DEFAULT_DISPATCHED_COLUMN_ORDER.includes(key)) : [];
-            return [...new Set([...valid, ...DEFAULT_DISPATCHED_COLUMN_ORDER.filter(key => !valid.includes(key))])];
+            const order = [...new Set(valid)];
+            DEFAULT_DISPATCHED_COLUMN_ORDER.forEach((key, index) => {
+                if (order.includes(key)) return;
+                const nextDefaultKey = DEFAULT_DISPATCHED_COLUMN_ORDER.slice(index + 1).find(nextKey => order.includes(nextKey));
+                order.splice(nextDefaultKey ? order.indexOf(nextDefaultKey) : order.length, 0, key);
+            });
+            return order;
         } catch { return [...DEFAULT_DISPATCHED_COLUMN_ORDER]; }
+    }
+
+    function getDispatchedQuantities(order, item) {
+        const optionQuantity = Math.max(1, parseInt(item?.option_quantity) || 1);
+        const buyQuantity = Math.max(1, parseInt(item?.quantity) || ((parseInt(order?.original_quantity) || 1) * optionQuantity));
+        const productQuantity = Math.max(1, parseInt(item?.product_quantity) || parseInt(order?.original_quantity) || Math.round(buyQuantity / optionQuantity));
+        return { productQuantity, optionQuantity, buyQuantity };
     }
 
     function applyDispatchedColumnOrder() {
@@ -2635,8 +2649,9 @@
                 const combinedName = getCleanCombinedName(o, it);
                 return `<div class="fw-bold text-dark">${escapeHtml(combinedName)}</div><div class="small text-muted"><code>${escapeHtml(it.sku || '-')}</code><span class="badge bg-success-subtle text-success py-0 px-1 ms-1">차감완료</span></div>`;
             }).join('<hr class="my-1">');
-            const optionQtyHtml = items.map(it => `${getOrderQuantities(o, it).optQty}개`).join('<br>');
-            const buyQtyHtml = items.map(it => `${getOrderQuantities(o, it).buyQty}개`).join('<br>');
+            const productQtyHtml = items.map(it => `${getDispatchedQuantities(o, it).productQuantity}개`).join('<br>');
+            const optionQtyHtml = items.map(it => `${getDispatchedQuantities(o, it).optionQuantity}개`).join('<br>');
+            const buyQtyHtml = items.map(it => `${getDispatchedQuantities(o, it).buyQuantity}개`).join('<br>');
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
@@ -2648,6 +2663,7 @@
                 <td data-column-key="customs_id" class="bg-white"><code>${o.customs_id || '-'}</code></td>
                 <td data-column-key="address" class="bg-white"><small class="text-secondary" title="${o.address}">${o.address || '-'}</small></td>
                 <td data-column-key="product">${productHtml}</td>
+                <td data-column-key="product_quantity" class="text-center fw-bold text-dark">${productQtyHtml}</td>
                 <td data-column-key="option_quantity" class="text-center fw-bold text-secondary">${optionQtyHtml}</td>
                 <td data-column-key="buy_quantity" class="text-center fs-6 fw-bold text-primary">${buyQtyHtml}</td>
                 <td data-column-key="courier_tracking" class="bg-white"><div>${courierBadge}</div>${o.tracking_no ? `<div><code class="text-primary fw-bold">${o.tracking_no}</code></div>${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}` : '<span class="text-muted small">미발급</span>'}</td>
