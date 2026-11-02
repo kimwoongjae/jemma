@@ -357,13 +357,6 @@ def get_picking_list():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute('''
-            SELECT sku, product_name, option_name
-            FROM products
-            WHERE sku IS NOT NULL AND TRIM(sku) != ''
-        ''')
-        master_names = {}
-
         def combined_item_name(product, option):
             product = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', str(product or '')).strip()
             option = re.sub(r'\s*\(출고\s*품목\)\s*', ' ', str(option or '')).strip()
@@ -377,27 +370,6 @@ def get_picking_list():
                 return product
             return ' '.join(part for part in (product, option) if part).strip()
 
-        for row in cur.fetchall():
-            master = dict(row)
-            sku = str(master.get('sku') or '').strip()
-            name = combined_item_name(master.get('product_name'), master.get('option_name'))
-            if sku and name:
-                master_names[sku] = name
-
-        cur.execute('''
-            SELECT po.sku, p.product_name, po.option_name
-            FROM product_options po
-            LEFT JOIN products p ON p.id = po.product_id
-            WHERE po.sku IS NOT NULL AND TRIM(po.sku) != ''
-            ORDER BY po.id ASC
-        ''')
-        for row in cur.fetchall():
-            master = dict(row)
-            sku = str(master.get('sku') or '').strip()
-            name = combined_item_name(master.get('product_name'), master.get('option_name'))
-            if sku and name:
-                master_names.setdefault(sku, name)
-
         cur.execute('''
             SELECT o.id AS order_id, o.original_quantity, oi.sku,
                    oi.item_product_name, oi.item_option_name,
@@ -408,7 +380,7 @@ def get_picking_list():
             ORDER BY oi.sku ASC, oi.item_product_name ASC, oi.item_option_name ASC, o.id ASC
         ''')
 
-        grouped = {}
+        per_order_items = {}
         for row in cur.fetchall():
             item = dict(row)
             sku = str(item.get('sku') or '').strip()
@@ -416,18 +388,7 @@ def get_picking_list():
             option = str(item.get('item_option_name') or '').strip()
             combined_name = combined_item_name(product, option)
 
-            # 바코드가 있으면 바코드를 기준으로 합산하고, 없으면 상품/옵션 조합으로 분리합니다.
-            key = ('sku', sku) if sku else ('name', combined_name)
-            entry = grouped.setdefault(key, {
-                'sku': sku,
-                'name_counts': {},
-                'order_ids': set(),
-                'buckets': {}
-            })
-            if combined_name:
-                entry['name_counts'][combined_name] = entry['name_counts'].get(combined_name, 0) + 1
             order_id = item.get('order_id')
-            entry['order_ids'].add(order_id)
             try:
                 product_quantity = max(1, int(float(item.get('original_quantity') or 1)))
             except (TypeError, ValueError):
@@ -439,38 +400,50 @@ def get_picking_list():
             # option_quantity가 나중에 동기화된 과거 주문은 quantity 값이 예전 수량일 수 있어
             # 주문의 상품수량 × 현재 옵션의 실제 출고수량으로 피킹 수량을 계산합니다.
             purchase_quantity = product_quantity * option_quantity
+            # 먼저 주문 안에서 같은 바코드·상품 옵션의 분할 행을 합칩니다.
+            barcode_key = ('sku', sku) if sku else ('name', combined_name)
+            order_item_key = (barcode_key, order_id, combined_name or '(상품명 없음)')
+            per_order_items[order_item_key] = per_order_items.get(order_item_key, 0) + purchase_quantity
+
+        grouped = {}
+        for (barcode_key, order_id, combined_name), purchase_quantity in per_order_items.items():
+            sku = barcode_key[1] if barcode_key[0] == 'sku' else ''
+            entry = grouped.setdefault(barcode_key, {
+                'sku': sku,
+                'order_ids': set(),
+                'buckets': {}
+            })
+            entry['order_ids'].add(order_id)
             bucket = entry['buckets'].setdefault(str(purchase_quantity), {
                 'purchase_quantity': purchase_quantity,
+                'descriptions': {}
+            })
+            description = bucket['descriptions'].setdefault(combined_name, {
                 'orders': set(),
                 'total_quantity': 0
             })
-            bucket['orders'].add(order_id)
-            bucket['total_quantity'] += purchase_quantity
+            description['orders'].add(order_id)
+            description['total_quantity'] += purchase_quantity
 
         groups = []
         for entry in grouped.values():
-            fallback_name = max(
-                entry['name_counts'],
-                key=lambda name: (entry['name_counts'][name], -len(name), name),
-                default='(상품명 없음)'
-            )
-            product_name = master_names.get(entry['sku']) or fallback_name
             buckets = [
                 {
                     'purchase_quantity': bucket['purchase_quantity'],
-                    'order_count': len(bucket['orders']),
-                    'total_quantity': bucket['total_quantity']
+                    'product_name': name,
+                    'order_count': len(description['orders']),
+                    'total_quantity': description['total_quantity']
                 }
                 for bucket in sorted(entry['buckets'].values(), key=lambda b: b['purchase_quantity'])
+                for name, description in sorted(bucket['descriptions'].items())
             ]
             groups.append({
                 'sku': entry['sku'],
-                'product_name': product_name,
                 'order_count': len(entry['order_ids']),
                 'total_quantity': sum(bucket['total_quantity'] for bucket in buckets),
                 'buckets': buckets
             })
-        groups.sort(key=lambda group: (not bool(group['sku']), group['sku'].casefold(), group['product_name'].casefold()))
+        groups.sort(key=lambda group: (not bool(group['sku']), group['sku'].casefold()))
         row_count = sum(len(group['buckets']) for group in groups)
         return jsonify({
             'groups': groups,
