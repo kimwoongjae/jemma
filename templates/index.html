@@ -527,7 +527,7 @@
                             <span class="badge bg-success fs-6 px-3 py-2" id="dispatchedSelectionBadge">
                                 <i class="fa-solid fa-truck-fast me-1"></i> 선택: <strong id="selectedDispatchedCount">0</strong>건 / 총 발송완료 <strong id="totalDispatchedCount">0</strong>건
                             </span>
-                            <span class="text-muted small">※ 행 왼쪽 ⠿ 손잡이를 드래그해 순서를 바꾸세요. 설정한 순서는 이 브라우저에 저장되며 엑셀에도 적용됩니다.</span>
+                            <span class="text-muted small">※ 표의 열 제목을 좌우로 드래그해 목록 순서를 바꿀 수 있습니다.</span>
                         </div>
                         <div>
                             <button class="btn btn-sm btn-outline-secondary" onclick="loadDispatchedOrders()">
@@ -545,26 +545,25 @@
                         <table class="table table-bordered table-hover align-middle mb-0" id="dispatchedTable">
                             <thead class="table-light">
                                 <tr>
-                                    <th style="width: 34px;" class="text-center" title="행을 드래그해 순서를 바꿉니다">↕</th>
-                                    <th style="width: 40px;" class="text-center">
+                                    <th data-column-key="selection" style="width: 40px;" class="text-center">
                                         <input type="checkbox" class="form-check-input" id="checkAllDispatched" onchange="toggleSelectAllDispatched(this)">
                                     </th>
-                                    <th style="width: 85px;" class="text-center">무게 (kg)</th>
-                                    <th>주문번호</th>
-                                    <th>발송 일시</th>
-                                    <th>수취인 / 연락처</th>
-                                    <th>통관부호</th>
-                                    <th>배송지 주소</th>
-                                    <th>상품명 + 옵션명</th>
-                                    <th class="text-center" style="width: 80px;">옵션 수량</th>
-                                    <th class="text-center" style="width: 80px;">구매 수량</th>
-                                    <th>택배사 / 송장번호</th>
-                                    <th class="text-center" style="width: 85px;">상태</th>
+                                    <th data-column-key="weight" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 85px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">무게 (kg)</th>
+                                    <th data-column-key="order_no" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">주문번호</th>
+                                    <th data-column-key="dispatched_at" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">발송 일시</th>
+                                    <th data-column-key="recipient" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">수취인 / 연락처</th>
+                                    <th data-column-key="customs_id" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">통관부호</th>
+                                    <th data-column-key="address" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">배송지 주소</th>
+                                    <th data-column-key="product" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">상품명 + 옵션명</th>
+                                    <th data-column-key="option_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">옵션 수량</th>
+                                    <th data-column-key="buy_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">구매 수량</th>
+                                    <th data-column-key="courier_tracking" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">택배사 / 송장번호</th>
+                                    <th data-column-key="status" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 85px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">상태</th>
                                 </tr>
                             </thead>
                             <tbody id="dispatchedTableBody">
                                 <tr>
-                                    <td colspan="13" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
+                                    <td colspan="12" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -2529,80 +2528,79 @@
             if (!res.ok) throw new Error(`발송내역 조회 실패 (${res.status})`);
             const data = await res.json();
             if (!Array.isArray(data)) throw new Error(data.error || '발송내역 응답 형식이 올바르지 않습니다.');
-            dispatchedOrdersList = applySavedDispatchedOrder(data);
+            dispatchedOrdersList = data;
             renderDispatchedTable(dispatchedOrdersList);
         } catch (e) {
             console.error('Dispatched orders load error', e);
             const tbody = document.getElementById('dispatchedTableBody');
-            if (tbody) tbody.innerHTML = `<tr><td colspan="13" class="text-center py-5 text-danger">발송내역을 불러오지 못했습니다: ${escapeHtml(e.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadDispatchedOrders()">다시 시도</button></td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="12" class="text-center py-5 text-danger">발송내역을 불러오지 못했습니다: ${escapeHtml(e.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadDispatchedOrders()">다시 시도</button></td></tr>`;
         }
     }
 
-    const DISPATCHED_ORDER_STORAGE_KEY = 'jamma-dispatched-order-v1';
+    const DISPATCHED_COLUMN_ORDER_KEY = 'jamma-dispatched-columns-v1';
+    const DEFAULT_DISPATCHED_COLUMN_ORDER = ['weight', 'order_no', 'dispatched_at', 'recipient', 'customs_id', 'address', 'product', 'option_quantity', 'buy_quantity', 'courier_tracking', 'status'];
 
-    function getSavedDispatchedOrderIds() {
+    function getDispatchedColumnOrder() {
         try {
-            const value = JSON.parse(localStorage.getItem(DISPATCHED_ORDER_STORAGE_KEY) || '[]');
-            return Array.isArray(value) ? value.map(String) : [];
-        } catch { return []; }
+            const saved = JSON.parse(localStorage.getItem(DISPATCHED_COLUMN_ORDER_KEY) || '[]');
+            const valid = Array.isArray(saved) ? saved.filter(key => DEFAULT_DISPATCHED_COLUMN_ORDER.includes(key)) : [];
+            return [...new Set([...valid, ...DEFAULT_DISPATCHED_COLUMN_ORDER.filter(key => !valid.includes(key))])];
+        } catch { return [...DEFAULT_DISPATCHED_COLUMN_ORDER]; }
     }
 
-    function applySavedDispatchedOrder(orders) {
-        const savedIds = getSavedDispatchedOrderIds();
-        const position = new Map(savedIds.map((id, index) => [id, index]));
-        return orders.map((order, index) => ({ order, index }))
-            .sort((a, b) => {
-                const aPosition = position.has(String(a.order.id)) ? position.get(String(a.order.id)) : Number.MAX_SAFE_INTEGER;
-                const bPosition = position.has(String(b.order.id)) ? position.get(String(b.order.id)) : Number.MAX_SAFE_INTEGER;
-                return aPosition - bPosition || a.index - b.index;
-            })
-            .map(entry => entry.order);
+    function applyDispatchedColumnOrder() {
+        const order = getDispatchedColumnOrder();
+        const headerRow = document.querySelector('#dispatchedTable thead tr');
+        if (!headerRow) return;
+        const headerCells = new Map(Array.from(headerRow.cells).map(cell => [cell.dataset.columnKey, cell]));
+        const selectionHeader = headerCells.get('selection');
+        headerRow.replaceChildren(...[selectionHeader, ...order.map(key => headerCells.get(key))].filter(Boolean));
+
+        document.querySelectorAll('#dispatchedTableBody tr').forEach(row => {
+            const cells = new Map(Array.from(row.cells).map(cell => [cell.dataset.columnKey, cell]));
+            if (!cells.size) return;
+            row.replaceChildren(...[cells.get('selection'), ...order.map(key => cells.get(key))].filter(Boolean));
+        });
     }
 
-    function saveDispatchedOrderIds() {
-        const visibleIds = dispatchedOrdersList.map(order => String(order.id));
-        const visibleSet = new Set(visibleIds);
-        const hiddenIds = getSavedDispatchedOrderIds().filter(id => !visibleSet.has(id));
-        try { localStorage.setItem(DISPATCHED_ORDER_STORAGE_KEY, JSON.stringify([...visibleIds, ...hiddenIds])); } catch {}
-    }
-
-    function startDispatchedOrderDrag(event, orderId) {
+    function startDispatchedColumnDrag(event) {
+        const key = event.currentTarget.dataset.columnKey;
+        if (!key || key === 'selection') { event.preventDefault(); return; }
         event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', String(orderId));
-        event.currentTarget.closest('tr')?.classList.add('opacity-50');
+        event.dataTransfer.setData('text/plain', key);
+        event.currentTarget.classList.add('opacity-50');
     }
 
-    function allowDispatchedOrderDrop(event) {
+    function allowDispatchedColumnDrop(event) {
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
         event.currentTarget.classList.add('table-primary');
     }
 
-    function clearDispatchedDropTarget(event) {
-        event.currentTarget.classList.remove('table-primary', 'opacity-50');
-    }
-
-    function dropDispatchedOrder(event, targetOrderId) {
+    function dropDispatchedColumn(event) {
         event.preventDefault();
-        document.querySelectorAll('#dispatchedTableBody tr').forEach(clearRow => clearRow.classList.remove('table-primary', 'opacity-50'));
-        const sourceOrderId = event.dataTransfer.getData('text/plain');
-        if (!sourceOrderId || sourceOrderId === String(targetOrderId)) return;
+        const target = event.currentTarget;
+        document.querySelectorAll('#dispatchedTable thead th').forEach(th => th.classList.remove('table-primary', 'opacity-50'));
+        const sourceKey = event.dataTransfer.getData('text/plain');
+        const targetKey = target.dataset.columnKey;
+        if (!sourceKey || !targetKey || sourceKey === 'selection' || targetKey === 'selection' || sourceKey === targetKey) return;
 
-        const selectedIds = new Set(Array.from(document.querySelectorAll('.dispatched-row-check:checked')).map(input => String(input.value)));
-        const fromIndex = dispatchedOrdersList.findIndex(order => String(order.id) === sourceOrderId);
-        const toIndex = dispatchedOrdersList.findIndex(order => String(order.id) === String(targetOrderId));
-        if (fromIndex < 0 || toIndex < 0) return;
-
-        const [movedOrder] = dispatchedOrdersList.splice(fromIndex, 1);
-        const targetRow = event.currentTarget;
-        const dropAfterTarget = event.clientY > targetRow.getBoundingClientRect().top + targetRow.getBoundingClientRect().height / 2;
-        const adjustedTargetIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
-        dispatchedOrdersList.splice(adjustedTargetIndex + (dropAfterTarget ? 1 : 0), 0, movedOrder);
-        saveDispatchedOrderIds();
-        renderDispatchedTable(dispatchedOrdersList);
-        document.querySelectorAll('.dispatched-row-check').forEach(input => { input.checked = selectedIds.has(String(input.value)); });
-        updateDispatchedSelectionCount();
+        const order = getDispatchedColumnOrder();
+        const sourceIndex = order.indexOf(sourceKey);
+        const targetIndex = order.indexOf(targetKey);
+        if (sourceIndex < 0 || targetIndex < 0) return;
+        order.splice(sourceIndex, 1);
+        const rect = target.getBoundingClientRect();
+        const insertAfter = event.clientX > rect.left + rect.width / 2;
+        const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+        order.splice(adjustedTargetIndex + (insertAfter ? 1 : 0), 0, sourceKey);
+        try { localStorage.setItem(DISPATCHED_COLUMN_ORDER_KEY, JSON.stringify(order)); } catch {}
+        applyDispatchedColumnOrder();
     }
+
+    document.addEventListener('dragend', () => {
+        document.querySelectorAll('#dispatchedTable thead th').forEach(th => th.classList.remove('table-primary', 'opacity-50'));
+    });
 
     function renderDispatchedTable(orders) {
         const tbody = document.getElementById('dispatchedTableBody');
@@ -2610,7 +2608,7 @@
         tbody.innerHTML = '';
 
         if (!orders || orders.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="13" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="12" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
             updateDispatchedSelectionCount();
             return;
         }
@@ -2633,77 +2631,30 @@
                 option_quantity: 1,
                 quantity: o.original_quantity || 1
             }];
-            const rowCount = items.length;
-
-            items.forEach((it, idx) => {
-                const tr = document.createElement('tr');
-                tr.dataset.orderId = String(o.id);
-                tr.ondragover = allowDispatchedOrderDrop;
-                tr.ondragleave = clearDispatchedDropTarget;
-                tr.ondrop = event => dropDispatchedOrder(event, o.id);
-                let rowHtml = '';
-
-                if (idx === 0) {
-                    rowHtml += `
-                        <td rowspan="${rowCount}" class="text-center bg-white" title="마우스로 끌어 순서 변경">
-                            <span draggable="true" ondragstart="startDispatchedOrderDrag(event, ${Number(o.id)})" class="text-secondary" style="cursor: grab; user-select: none; font-size: 18px;" aria-label="순서 이동">⠿</span>
-                        </td>
-                        <td rowspan="${rowCount}" class="text-center bg-white">
-                            <input type="checkbox" class="form-check-input dispatched-row-check" value="${o.id}" onchange="updateDispatchedSelectionCount()">
-                        </td>
-                        <td rowspan="${rowCount}" class="text-center bg-white">
-                            <span class="badge bg-light text-dark border">${o.weight && o.weight > 0 ? o.weight + ' kg' : '-'}</span>
-                        </td>
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div class="fw-bold">${o.order_no}</div>
-                            <small class="text-muted">접수: ${o.created_at || ''}</small>
-                        </td>
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div class="fw-bold text-success"><i class="fa-regular fa-clock me-1"></i>${dispatchDate}</div>
-                        </td>
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div class="fw-bold">${o.recipient_name}</div>
-                            <small class="text-muted">${o.recipient_phone1 || ''}</small>
-                        </td>
-                        <td rowspan="${rowCount}" class="bg-white"><code>${o.customs_id || '-'}</code></td>
-                        <td rowspan="${rowCount}" class="bg-white"><small class="text-secondary text-truncate d-inline-block" style="max-width: 170px;" title="${o.address}">${o.address || '-'}</small></td>
-                    `;
-                }
-
+            const productHtml = items.map(it => {
                 const combinedName = getCleanCombinedName(o, it);
-                const { prodQty, optQty, buyQty } = getOrderQuantities(o, it);
+                return `<div class="fw-bold text-dark">${escapeHtml(combinedName)}</div><div class="small text-muted"><code>${escapeHtml(it.sku || '-')}</code><span class="badge bg-success-subtle text-success py-0 px-1 ms-1">차감완료</span></div>`;
+            }).join('<hr class="my-1">');
+            const optionQtyHtml = items.map(it => `${getOrderQuantities(o, it).optQty}개`).join('<br>');
+            const buyQtyHtml = items.map(it => `${getOrderQuantities(o, it).buyQty}개`).join('<br>');
 
-                rowHtml += `
-                    <td>
-                        <div class="fw-bold text-dark">${escapeHtml(combinedName)}</div>
-                        <div class="small text-muted">
-                            <code>${escapeHtml(it.sku || '-')}</code>
-                            <span class="badge bg-success-subtle text-success py-0 px-1">차감완료</span>
-                        </div>
-                    </td>
-                    <td class="text-center fw-bold text-secondary">${optQty}개</td>
-                    <td class="text-center fs-6 fw-bold text-primary">${buyQty}개</td>
-                `;
-
-                if (idx === 0) {
-                    rowHtml += `
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div>${courierBadge}</div>
-                            ${o.tracking_no ? `
-                                <div><code class="text-primary fw-bold">${o.tracking_no}</code></div>
-                                ${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}
-                            ` : '<span class="text-muted small">미발급</span>'}
-                        </td>
-                        <td rowspan="${rowCount}" class="text-center bg-white">
-                            <span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span>
-                        </td>
-                    `;
-                }
-
-                tr.innerHTML = rowHtml;
-                tbody.appendChild(tr);
-            });
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td data-column-key="selection" class="text-center bg-white"><input type="checkbox" class="form-check-input dispatched-row-check" value="${o.id}" onchange="updateDispatchedSelectionCount()"></td>
+                <td data-column-key="weight" class="text-center bg-white"><span class="badge bg-light text-dark border">${o.weight && o.weight > 0 ? o.weight + ' kg' : '-'}</span></td>
+                <td data-column-key="order_no" class="bg-white"><div class="fw-bold">${o.order_no}</div><small class="text-muted">접수: ${o.created_at || ''}</small></td>
+                <td data-column-key="dispatched_at" class="bg-white"><div class="fw-bold text-success"><i class="fa-regular fa-clock me-1"></i>${dispatchDate}</div></td>
+                <td data-column-key="recipient" class="bg-white"><div class="fw-bold">${o.recipient_name}</div><small class="text-muted">${o.recipient_phone1 || ''}</small></td>
+                <td data-column-key="customs_id" class="bg-white"><code>${o.customs_id || '-'}</code></td>
+                <td data-column-key="address" class="bg-white"><small class="text-secondary" title="${o.address}">${o.address || '-'}</small></td>
+                <td data-column-key="product">${productHtml}</td>
+                <td data-column-key="option_quantity" class="text-center fw-bold text-secondary">${optionQtyHtml}</td>
+                <td data-column-key="buy_quantity" class="text-center fs-6 fw-bold text-primary">${buyQtyHtml}</td>
+                <td data-column-key="courier_tracking" class="bg-white"><div>${courierBadge}</div>${o.tracking_no ? `<div><code class="text-primary fw-bold">${o.tracking_no}</code></div>${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}` : '<span class="text-muted small">미발급</span>'}</td>
+                <td data-column-key="status" class="text-center bg-white"><span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span></td>`;
+            tbody.appendChild(tr);
         });
+        applyDispatchedColumnOrder();
         updateDispatchedSelectionCount();
     }
 
@@ -2731,11 +2682,11 @@
             const selected = new Set(Array.from(document.querySelectorAll('.dispatched-row-check:checked')).map(ck => String(ck.value)));
             ids = dispatchedOrdersList.filter(order => selected.has(String(order.id))).map(order => Number(order.id));
             if (ids.length === 0) { alert('다운로드할 발송 내역을 선택하세요.'); return; }
-        } else {
-            ids = dispatchedOrdersList.map(order => Number(order.id));
-            if (ids.length === 0) { alert('다운로드할 발송 내역이 없습니다.'); return; }
         }
-        window.location.href = `/api/shipping/export-excel?order_ids=${ids.join(',')}`;
+        const params = new URLSearchParams();
+        if (ids.length > 0) params.set('order_ids', ids.join(','));
+        params.set('column_order', getDispatchedColumnOrder().join(','));
+        window.location.href = `/api/shipping/export-excel?${params.toString()}`;
     }
 
     function openPrintModalForDispatched() {

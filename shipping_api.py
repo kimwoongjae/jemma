@@ -417,7 +417,7 @@ def complete_dispatch(order_ids):
     conn.close()
     return {'dispatched_orders': dispatched_count, 'deducted_items': deducted_items}
 
-def export_shipping_excel(order_ids=None):
+def export_shipping_excel(order_ids=None, column_order=None):
     """
     발송 완료된 주문 목록을 원본 엑셀 형식에 송장번호가 채워진 파일로 다운로드
     """
@@ -426,44 +426,50 @@ def export_shipping_excel(order_ids=None):
 
     if order_ids and len(order_ids) > 0:
         placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders})', order_ids)
-        rows_by_id = {int(row['id']): row for row in cur.fetchall()}
-        orders = [rows_by_id[order_id] for order_id in order_ids if order_id in rows_by_id]
+        cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        orders = cur.fetchall()
     else:
         cur.execute('SELECT * FROM orders ORDER BY id DESC')
         orders = cur.fetchall()
+
+    order_ids_for_items = [row['id'] for row in orders]
+    items_by_order = {}
+    if order_ids_for_items:
+        placeholders = ','.join(['?'] * len(order_ids_for_items))
+        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids_for_items)
+        for item in cur.fetchall():
+            items_by_order.setdefault(item['order_id'], []).append(dict(item))
     conn.close()
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "발송처리결과"
 
-    headers = [
-        "주문번호", "발송일시", "택배사", "송장번호", "무게(kg)", "배송방법", "상품명", "옵션이름", "상품수량",
-        "수취인이름", "수취인전화번호1", "수취인전화번호2", "개인통관부호", "수취인우편번호", "수취인주소", "배송메세지", "처리상태"
-    ]
+    column_definitions = {
+        'weight': ('무게 (kg)', lambda o, its: o['weight'] if ('weight' in o.keys() and o['weight']) else 0.0),
+        'order_no': ('주문번호', lambda o, its: o['order_no'] or ''),
+        'dispatched_at': ('발송 일시', lambda o, its: o['dispatched_at'] or ''),
+        'recipient': ('수취인 / 연락처', lambda o, its: ' / '.join(value for value in [o['recipient_name'] or '', o['recipient_phone1'] or ''] if value)),
+        'customs_id': ('통관부호', lambda o, its: o['customs_id'] or ''),
+        'address': ('배송지 주소', lambda o, its: o['address'] or ''),
+        'product': ('상품명 + 옵션명', lambda o, its: ' | '.join(
+            ' '.join(value for value in [str(item.get('item_product_name') or '').strip(), str(item.get('item_option_name') or '').strip()] if value and value not in str(item.get('item_product_name') or ''))
+            for item in its
+        ) if its else ' '.join(value for value in [o['original_product_name'] or '', o['original_option_name'] or ''] if value)),
+        'option_quantity': ('옵션 수량', lambda o, its: ' | '.join(str(item.get('option_quantity') or 1) for item in its) if its else '1'),
+        'buy_quantity': ('구매 수량', lambda o, its: ' | '.join(str(item.get('quantity') or 1) for item in its) if its else str(o['original_quantity'] or 1)),
+        'courier_tracking': ('택배사 / 송장번호', lambda o, its: ' / '.join(value for value in [o['courier'] or '', o['tracking_no'] or ''] if value)),
+        'status': ('상태', lambda o, its: o['status'] or '')
+    }
+    requested_order = column_order or list(column_definitions)
+    ordered_keys = [key for key in requested_order if key in column_definitions]
+    ordered_keys.extend(key for key in column_definitions if key not in ordered_keys)
+    headers = [column_definitions[key][0] for key in ordered_keys]
     ws.append(headers)
 
     for o in orders:
-        ws.append([
-            o['order_no'],
-            o['dispatched_at'] or '',
-            o['courier'] or 'CJ대한통운',
-            o['tracking_no'] or '',
-            o['weight'] if ('weight' in o.keys() and o['weight']) else 0.0,
-            o['shipping_method'] or '택배',
-            o['original_product_name'] or '',
-            o['original_option_name'] or '',
-            o['original_quantity'] or 1,
-            o['recipient_name'] or '',
-            o['recipient_phone1'] or '',
-            o['recipient_phone2'] or '',
-            o['customs_id'] or '',
-            o['postal_code'] or '',
-            o['address'] or '',
-            o['shipping_memo'] or '',
-            o['status'] or '주문접수'
-        ])
+        row_items = items_by_order.get(o['id'], [])
+        ws.append([column_definitions[key][1](o, row_items) for key in ordered_keys])
 
     output = BytesIO()
     wb.save(output)

@@ -714,7 +714,8 @@ def api_dispatch():
 def api_export_excel():
     order_ids_str = request.args.get('order_ids', '')
     order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
-    excel_buf = export_shipping_excel(order_ids if order_ids else None)
+    column_order = [key.strip() for key in request.args.get('column_order', '').split(',') if key.strip()]
+    excel_buf = export_shipping_excel(order_ids if order_ids else None, column_order=column_order or None)
     return send_file(
         excel_buf,
         as_attachment=True,
