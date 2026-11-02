@@ -285,7 +285,7 @@
                 <div class="card-body p-3">
                     <div class="row g-2 align-items-center mb-2">
                         <!-- 1. 검색창 -->
-                        <div class="col-xl-3 col-md-4">
+                        <div class="col-xl-4 col-md-5">
                             <div class="input-group">
                                 <select id="orderSearchField" class="form-select" style="max-width: 120px;" onchange="loadOrders()">
                                     <option value="all">전체 검색</option>
@@ -301,17 +301,7 @@
                                 <button class="btn btn-outline-secondary" onclick="loadOrders()"><i class="fa-solid fa-magnifying-glass"></i></button>
                             </div>
                         </div>
-                        <!-- 2. 주문 상태 필터 -->
-                        <div class="col-xl-2 col-md-3">
-                            <select id="statusFilter" class="form-select" onchange="loadOrders()">
-                                <option value="출고대기" selected>출고대기 (미발송)</option>
-                                <option value="주문접수">주문접수 (송장미발급)</option>
-                                <option value="송장발급">송장발급 완료</option>
-                                <option value="전체">상태 전체 (출고완료 포함)</option>
-                                <option value="출고완료">출고완료 (발송완료)</option>
-                            </select>
-                        </div>
-                        <!-- 3. 택배사 필터 -->
+                        <!-- 2. 택배사 필터 -->
                         <div class="col-xl-2 col-md-2">
                             <select id="orderCourierFilter" class="form-select" onchange="loadOrders()">
                                 <option value="전체">택배사 전체</option>
@@ -323,7 +313,7 @@
                                 <option value="로젠택배">로젠택배</option>
                             </select>
                         </div>
-                        <!-- 4. 통관부호 검증 상태 필터 -->
+                        <!-- 3. 통관부호 검증 상태 필터 -->
                         <div class="col-xl-2 col-md-3">
                             <select id="orderCustomsFilter" class="form-select" onchange="loadOrders()">
                                 <option value="전체" selected>통관부호: 전체</option>
@@ -332,8 +322,8 @@
                                 <option value="미검증" class="text-muted">통관부호: 미검증</option>
                             </select>
                         </div>
-                        <!-- 5. 무게(kg) 일괄 등록 -->
-                        <div class="col-xl-3 col-md-12">
+                        <!-- 4. 무게(kg) 일괄 등록 -->
+                        <div class="col-xl-4 col-md-12">
                             <div class="input-group">
                                 <span class="input-group-text bg-light text-muted small"><i class="fa-solid fa-weight-scale me-1"></i>무게</span>
                                 <input type="number" id="bulkWeightInput" class="form-control" placeholder="무게(kg)" step="0.01" min="0">
@@ -1557,7 +1547,8 @@
     }
 
     async function loadOrders() {
-        const status = document.getElementById('statusFilter')?.value || '출고대기';
+        // 주문 관리 목록에는 아직 발송되지 않은 주문만 표시합니다.
+        const status = '출고대기';
         const courier = document.getElementById('orderCourierFilter')?.value || '전체';
         const customs = document.getElementById('orderCustomsFilter')?.value || '전체';
         const search = document.getElementById('orderSearchInput')?.value || '';
@@ -1798,10 +1789,12 @@
     }
 
     function getCleanCombinedName(o, it) {
-        const pName = (o && o.original_product_name ? o.original_product_name : (it && it.item_product_name ? it.item_product_name : '')).trim();
+        const cleanDispatchLabel = value => String(value || '').replace(/\s*\(출고\s*품목\)\s*/g, ' ').trim();
+        const pName = cleanDispatchLabel(o && o.original_product_name ? o.original_product_name : (it && it.item_product_name ? it.item_product_name : ''));
         let origOpt = (o && o.original_option_name ? o.original_option_name : '').trim();
         if (origOpt === '단일옵션' || origOpt.toLowerCase() === 'nan') origOpt = '';
-        let itemOpt = (it && it.item_option_name ? it.item_option_name : '').trim();
+        let itemOpt = cleanDispatchLabel(it && it.item_option_name ? it.item_option_name : '');
+        origOpt = cleanDispatchLabel(origOpt);
         if (itemOpt === '단일옵션' || itemOpt.toLowerCase() === 'nan') itemOpt = '';
 
         const opt = origOpt || itemOpt;
