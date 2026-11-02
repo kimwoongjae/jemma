@@ -670,7 +670,7 @@
                                     </button>
                                 </div>
                                 <div id="barcodeCameraPanel" class="barcode-camera-panel" style="display:none;">
-                                    <div class="barcode-camera-view">
+                                    <div class="barcode-camera-view" onclick="refocusBarcodeCamera()" title="화면을 누르면 초점을 다시 맞춥니다">
                                         <video id="scanCameraVideo" autoplay muted playsinline></video>
                                         <div class="barcode-scan-frame"></div>
                                         <div class="barcode-scan-line"></div>
@@ -2952,11 +2952,19 @@
         try {
             barcodeCameraStream = await navigator.mediaDevices.getUserMedia({
                 audio: false,
-                video: { facingMode: { ideal: 'environment' } }
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                }
             });
             video.srcObject = barcodeCameraStream;
             await video.play();
-            status.textContent = '바코드를 화면 가운데에 맞춰주세요.';
+            const cameraTrack = barcodeCameraStream.getVideoTracks()[0];
+            const autoFocusEnabled = await enableContinuousAutofocus(cameraTrack);
+            status.textContent = autoFocusEnabled
+                ? '자동 초점 사용 중 · 바코드를 빨간 선에 맞춰주세요.'
+                : '바코드를 빨간 선 가까이 대고 화면을 눌러 초점을 맞춰주세요.';
 
             if ('BarcodeDetector' in window) {
                 let formats = ['code_128', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_39', 'itf', 'codabar'];
@@ -2989,6 +2997,42 @@
             } else if (e.name === 'NotFoundError') {
                 status.textContent = '사용 가능한 카메라를 찾을 수 없습니다.';
             }
+        }
+    }
+
+    async function enableContinuousAutofocus(track) {
+        if (!track?.applyConstraints) return false;
+        try {
+            const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+            const focusModes = capabilities.focusMode || [];
+            if (focusModes.includes('continuous')) {
+                await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                return true;
+            }
+            if (focusModes.length === 0) {
+                await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                return true;
+            }
+        } catch (e) {
+            console.debug('Continuous autofocus is not supported by this camera.', e);
+        }
+        return false;
+    }
+
+    async function refocusBarcodeCamera() {
+        const track = barcodeCameraStream?.getVideoTracks()[0];
+        if (!track?.applyConstraints) return;
+        try {
+            const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+            const focusModes = capabilities.focusMode || [];
+            if (focusModes.includes('single-shot')) {
+                await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
+                setTimeout(() => enableContinuousAutofocus(track), 500);
+            } else {
+                await enableContinuousAutofocus(track);
+            }
+        } catch (e) {
+            console.debug('Tap to focus is not supported by this camera.', e);
         }
     }
 
