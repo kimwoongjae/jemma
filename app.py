@@ -297,7 +297,9 @@ def get_dispatched_orders():
     conn = get_connection()
     cur = conn.cursor()
 
-    query = "SELECT * FROM orders WHERE status IN ('출고완료', '송장발급')"
+    query = """SELECT * FROM orders
+        WHERE (status IN ('출고완료', '송장발급')
+           OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))"""
     params = []
 
     if courier and courier != '전체':
@@ -684,11 +686,12 @@ def api_issue_tracking():
         failed = []
 
     return jsonify({
-        'status': 'success',
+        'status': 'success' if updated else 'error',
         'updated': updated,
         'failed': failed,
         'success_count': len(updated),
-        'failed_count': len(failed)
+        'failed_count': len(failed),
+        'message': f"송장 발급 {len(updated)}건 성공, {len(failed)}건 실패"
     })
 
 @app.route('/api/shipping/dispatch', methods=['POST'])
@@ -856,9 +859,13 @@ def api_narda_pdf_bundle():
     if len(rows) == 1:
         return redirect(rows[0]['invoice_pdf_url'])
 
-    from pypdf import PdfWriter
-    import io
-    import concurrent.futures
+    try:
+        from pypdf import PdfReader, PdfWriter
+        import io
+        import concurrent.futures
+    except Exception as e:
+        app.logger.exception('나르다 PDF 병합 라이브러리 로드 실패')
+        return f'나르다 송장 병합 기능을 불러오지 못했습니다: {e}', 500
 
     def fetch_single_pdf(item):
         url = (item.get('invoice_pdf_url') or '').strip()
@@ -870,7 +877,7 @@ def api_narda_pdf_bundle():
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
                 timeout=20
             )
-            if resp.status_code == 200 and len(resp.content) > 100:
+            if resp.status_code == 200 and resp.content.startswith(b'%PDF-'):
                 return (item['id'], resp.content)
         except Exception as e:
             print(f"PDF 다운로드 실패 ({item.get('order_no')}, {url}): {e}")
@@ -882,36 +889,52 @@ def api_narda_pdf_bundle():
 
     writer = PdfWriter()
     merged_count = 0
-    all_streams = []
+    failed_orders = []
 
     for r in rows:
         content = pdf_dict.get(r['id'])
-        if content:
-            try:
-                st = io.BytesIO(content)
-                all_streams.append(st)
-                writer.append(st)
-                merged_count += 1
-            except Exception as pe:
-                print(f"PDF 파싱 실패 ({r.get('order_no')}): {pe}")
+        if not content:
+            failed_orders.append(str(r.get('order_no') or r['id']))
+            continue
+        try:
+            reader = PdfReader(io.BytesIO(content), strict=False)
+            if reader.is_encrypted:
+                try:
+                    reader.decrypt('')
+                except Exception:
+                    pass
+            if not reader.pages:
+                raise ValueError('PDF 페이지가 없습니다')
+            for page in reader.pages:
+                writer.add_page(page)
+            merged_count += 1
+        except Exception as pe:
+            failed_orders.append(str(r.get('order_no') or r['id']))
+            app.logger.warning('나르다 송장 PDF 파싱 실패 (%s): %s', r.get('order_no'), pe)
 
     if merged_count == 0:
-        # 병합 실패 시에도 첫 번째 공식 PDF URL로 즉시 리다이렉트하여 송장이 무조건 열리도록 보장
-        first_valid = next((r['invoice_pdf_url'] for r in rows if r.get('invoice_pdf_url')), None)
-        if first_valid:
-            return redirect(first_valid)
-        return "PDF 파일을 다운로드하여 병합하지 못했습니다.", 500
+        return '선택한 나르다 공식 PDF를 가져오지 못했습니다. 송장 PDF URL 또는 서버의 외부 연결을 확인해주세요.', 502
+    if failed_orders:
+        failed_list = ', '.join(failed_orders[:20])
+        return f'선택한 송장 중 {len(failed_orders)}건을 불러오지 못해 통합 출력을 중단했습니다. 실패 주문: {failed_list}', 502
 
     output_stream = io.BytesIO()
-    writer.write(output_stream)
-    output_stream.seek(0)
+    try:
+        writer.write(output_stream)
+        output_stream.seek(0)
+    except Exception as e:
+        app.logger.exception('나르다 통합 PDF 생성 실패')
+        return f'나르다 통합 PDF를 만들지 못했습니다: {e}', 500
 
-    return send_file(
+    response = send_file(
         output_stream,
         mimetype='application/pdf',
         as_attachment=False,
         download_name=f'NARDA_통합송장_{merged_count}건.pdf'
     )
+    response.headers['X-Narda-Label-Count'] = str(merged_count)
+    response.headers['X-Narda-Failed-Count'] = str(len(failed_orders))
+    return response
 
 # ----------------- 5. 재고 관리 (WMS) 및 입고 API -----------------
 @app.route('/api/inventory', methods=['GET'])

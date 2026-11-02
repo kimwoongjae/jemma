@@ -255,6 +255,15 @@ def issue_tracking_numbers(order_ids, courier_name=None):
 
         tracking_no = api_res.get('tracking_no')
         pdf_url = api_res.get('pdf_url', '')
+        if not tracking_no or not str(tracking_no).strip():
+            failed_orders.append({
+                'order_id': oid,
+                'order_no': ord_dict['order_no'],
+                'recipient_name': ord_dict['recipient_name'],
+                'error': '나르다 응답에 송장번호가 없어 발송 완료로 처리하지 않았습니다.'
+            })
+            continue
+        tracking_no = str(tracking_no).strip()
 
         cur.execute('''
             UPDATE orders
