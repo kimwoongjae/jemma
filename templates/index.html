@@ -2363,8 +2363,8 @@
 
         modal.show();
 
-        // 서버에서 20건을 동시에 처리하므로, 지나치게 작은 요청을 반복하지 않도록 묶음 크기를 확대합니다.
-        const chunkSize = 60;
+        // 15건 단위로 진행 상황을 표시하면서 서버가 나르다 API에 안정적으로 전달합니다.
+        const chunkSize = 15;
         let processedCount = 0;
         let allUpdated = [];
         let allFailed = [];

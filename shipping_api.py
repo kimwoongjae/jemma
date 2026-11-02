@@ -4,6 +4,7 @@ import re
 import requests
 import json
 import concurrent.futures
+import threading
 from datetime import datetime
 import openpyxl
 from io import BytesIO
@@ -11,11 +12,19 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from database import get_connection
 
-# 고속 HTTP 세션 및 연결 풀 설정 (Keep-Alive 및 재시도)
-_narda_session = requests.Session()
-_narda_adapter = HTTPAdapter(pool_connections=30, pool_maxsize=50, max_retries=Retry(total=2, backoff_factor=0.3))
-_narda_session.mount("http://", _narda_adapter)
-_narda_session.mount("https://", _narda_adapter)
+# 스레드별 HTTP 세션을 사용해 동시 요청 사이의 세션/쿠키 공유를 방지합니다.
+_narda_thread_local = threading.local()
+
+
+def get_narda_session():
+    session = getattr(_narda_thread_local, 'session', None)
+    if session is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=Retry(total=2, backoff_factor=0.3))
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        _narda_thread_local.session = session
+    return session
 
 COURIER_PREFIX = {
     '나르다': '3054',
@@ -121,7 +130,7 @@ def call_narda_regist_order(ord_row, items, settings):
     }
 
     try:
-        resp = _narda_session.post(
+        resp = get_narda_session().post(
             url,
             headers={"Content-Type": "application/json"},
             json=payload,
@@ -243,7 +252,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         ''', active_ids)
     conn.commit()
 
-    # 2. 나르다 실 API 병렬 호출. 최대 20건 동시 처리로 대량 발급 대기 시간을 줄입니다.
+    # 나르다 인증 응답 안정성을 위해 API 동시 요청은 최대 3건으로 제한합니다.
     def call_api_single(item):
         if item.get('is_cached'):
             return (item['oid'], item['ord_dict'], {
@@ -258,7 +267,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
         return (item['oid'], item['ord_dict'], api_res)
 
-    workers_count = min(20, len(orders_data)) if orders_data else 1
+    workers_count = min(3, len(orders_data)) if orders_data else 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers_count) as executor:
         api_results = list(executor.map(call_api_single, orders_data))
 
