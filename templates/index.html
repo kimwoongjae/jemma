@@ -401,11 +401,11 @@
                                     <th>수취인 / 연락처</th>
                                     <th>통관부호 / 유효성</th>
                                     <th>배송지 주소 (우편번호)</th>
-                                    <th>상품명 + 옵션명 (출고 품목)</th>
+                                    <th>상품명 + 옵션명</th>
                                     <th>바코드 (SKU)</th>
-                                    <th class="text-center" style="width: 75px;">옵션 수량</th>
-                                    <th class="text-center" style="width: 75px;">구매 수량</th>
-                                    <th class="text-center text-primary" style="width: 85px; background-color: #eef6fc;">출고 수량</th>
+                                    <th class="text-center" style="width: 75px;">상품수량</th>
+                                    <th class="text-center" style="width: 75px;">옵션수량</th>
+                                    <th class="text-center text-primary" style="width: 85px; background-color: #eef6fc;">구매수량</th>
                                     <th class="text-center" style="width: 95px;">출고여부</th>
                                     <th class="text-center" style="width: 70px;">관리</th>
                                 </tr>
@@ -564,7 +564,7 @@
                                     <th>수취인 / 연락처</th>
                                     <th>통관부호</th>
                                     <th>배송지 주소</th>
-                                    <th>상품명 + 옵션명 (출고 품목)</th>
+                                    <th>상품명 + 옵션명</th>
                                     <th class="text-center" style="width: 80px;">옵션 수량</th>
                                     <th class="text-center" style="width: 80px;">구매 수량</th>
                                     <th>택배사 / 송장번호</th>
@@ -1797,6 +1797,31 @@
         }
     }
 
+    function getCleanCombinedName(o, it) {
+        const pName = (o && o.original_product_name ? o.original_product_name : (it && it.item_product_name ? it.item_product_name : '')).trim();
+        let origOpt = (o && o.original_option_name ? o.original_option_name : '').trim();
+        if (origOpt === '단일옵션' || origOpt.toLowerCase() === 'nan') origOpt = '';
+        let itemOpt = (it && it.item_option_name ? it.item_option_name : '').trim();
+        if (itemOpt === '단일옵션' || itemOpt.toLowerCase() === 'nan') itemOpt = '';
+
+        const opt = origOpt || itemOpt;
+        if (!opt) return pName;
+        if (opt.includes(pName)) return opt;
+        if (pName.includes(opt)) return pName;
+        return `${pName} ${opt}`;
+    }
+
+    function getOrderQuantities(o, it) {
+        let prodQty = parseInt((it && it.product_quantity) || (o && o.original_quantity) || 1);
+        if (isNaN(prodQty) || prodQty < 1) prodQty = 1;
+
+        let optQty = parseInt((it && it.option_quantity) || 1);
+        if (isNaN(optQty) || optQty < 1) optQty = 1;
+
+        const buyQty = prodQty * optQty;
+        return { prodQty, optQty, buyQty };
+    }
+
     function sortOrdersInPlace(list) {
         if (!list || !Array.isArray(list)) return list;
         return list.sort((a, b) => {
@@ -1825,9 +1850,9 @@
             }
             if (aSku !== bSku) return aSku.localeCompare(bSku);
 
-            // 4. 출고수량 (옵션수량 * 주문수량의 합) 오름차순
-            const aQty = aItems.reduce((acc, it) => acc + ((parseInt(it.option_quantity) || 1) * (parseInt(it.quantity) || parseInt(a.original_quantity) || 1)), 0);
-            const bQty = bItems.reduce((acc, it) => acc + ((parseInt(it.option_quantity) || 1) * (parseInt(it.quantity) || parseInt(b.original_quantity) || 1)), 0);
+            // 4. 구매수량 (상품수량 * 옵션수량) 오름차순
+            const aQty = aItems.reduce((acc, it) => acc + getOrderQuantities(a, it).buyQty, 0);
+            const bQty = bItems.reduce((acc, it) => acc + getOrderQuantities(b, it).buyQty, 0);
             if (aQty !== bQty) return aQty - bQty;
 
             // 5. 주문번호 오름차순
@@ -1926,25 +1951,23 @@
                     `;
                 }
 
-                // 상품명 + 나눈 옵션명 합친 명칭
-                const optName = (it.item_option_name && it.item_option_name !== '단일옵션') ? it.item_option_name : '';
-                const combinedName = optName ? `${it.item_product_name} ${optName}` : it.item_product_name;
-                const optQty = it.option_quantity || 1;
-                const buyQty = it.quantity || o.original_quantity || 1;
-                const dispatchQty = optQty * buyQty;
+                // 상품명 + 옵션명 결합 (중복 방지)
+                const combinedName = getCleanCombinedName(o, it);
+                // 상품수량(엑셀 원본), 옵션수량(세트 낱개수), 구매수량(상품수량 * 옵션수량)
+                const { prodQty, optQty, buyQty } = getOrderQuantities(o, it);
 
                 rowHtml += `
                     <td>
-                        <div class="fw-bold text-dark">${combinedName}</div>
+                        <div class="fw-bold text-dark">${escapeHtml(combinedName)}</div>
                         ${rowCount > 1 ? `<span class="badge bg-light text-primary border py-0 px-1 mt-1">품목 ${idx + 1}/${rowCount}</span>` : ''}
                     </td>
                     <td>
-                        <code class="fw-bold text-dark">${it.sku || '-'}</code>
+                        <code class="fw-bold text-dark">${escapeHtml(it.sku || '-')}</code>
                     </td>
+                    <td class="text-center fw-bold text-dark">${prodQty}개</td>
                     <td class="text-center fw-bold text-secondary">${optQty}개</td>
-                    <td class="text-center fw-bold text-dark">${buyQty}개</td>
                     <td class="text-center fw-bold text-primary" style="background-color: #f3f8fd;">
-                        <span class="badge bg-primary fs-6 px-2 py-1">${dispatchQty}개</span>
+                        <span class="badge bg-primary fs-6 px-2 py-1">${buyQty}개</span>
                     </td>
                 `;
 
@@ -2261,10 +2284,8 @@
                     `;
                 }
 
-                const optName = (it.item_option_name && it.item_option_name !== '단일옵션') ? it.item_option_name : '';
-                const combinedName = optName ? `${it.item_product_name} ${optName}` : it.item_product_name;
-                const optQty = it.option_quantity || 1;
-                const buyQty = it.quantity || o.original_quantity || 1;
+                const combinedName = getCleanCombinedName(o, it);
+                const { prodQty, optQty, buyQty } = getOrderQuantities(o, it);
 
                 rowHtml += `
                     <td>
@@ -2574,16 +2595,14 @@
                     `;
                 }
 
-                const optName = (it.item_option_name && it.item_option_name !== '단일옵션') ? it.item_option_name : '';
-                const combinedName = optName ? `${it.item_product_name} ${optName}` : it.item_product_name;
-                const optQty = it.option_quantity || 1;
-                const buyQty = it.quantity || o.original_quantity || 1;
+                const combinedName = getCleanCombinedName(o, it);
+                const { prodQty, optQty, buyQty } = getOrderQuantities(o, it);
 
                 rowHtml += `
                     <td>
-                        <div class="fw-bold text-dark">${combinedName}</div>
+                        <div class="fw-bold text-dark">${escapeHtml(combinedName)}</div>
                         <div class="small text-muted">
-                            <code>${it.sku}</code>
+                            <code>${escapeHtml(it.sku || '-')}</code>
                             <span class="badge bg-success-subtle text-success py-0 px-1">차감완료</span>
                         </div>
                     </td>

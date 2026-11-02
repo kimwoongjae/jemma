@@ -255,6 +255,7 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
                 'item_product_name': sub_p,
                 'item_option_name': sub_o,
                 'sku': sub_sku,
+                'product_quantity': qty,
                 'option_quantity': opt_multiplier,
                 'quantity': sub_qty,
                 'matched': info['matched'] or bool(r['target_sku'])
@@ -269,6 +270,7 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
             'item_product_name': direct_info.get('matched_product_name') or product_name,
             'item_option_name': direct_info.get('matched_option_name') or option_name,
             'sku': direct_info['sku'],
+            'product_quantity': qty,
             'option_quantity': opt_qty,
             'quantity': qty * opt_qty,
             'matched': True
@@ -300,6 +302,7 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
                 'item_product_name': info.get('matched_product_name') or (product_name if not is_product_split else p),
                 'item_option_name': info.get('matched_option_name') or (p if not is_product_split else '단일옵션'),
                 'sku': sku,
+                'product_quantity': qty,
                 'option_quantity': opt_qty,
                 'quantity': qty * opt_qty,
                 'matched': info['matched']
@@ -315,6 +318,7 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
             'item_product_name': info.get('matched_product_name') or product_name,
             'item_option_name': info.get('matched_option_name') or option_name,
             'sku': sku,
+            'product_quantity': qty,
             'option_quantity': opt_qty,
             'quantity': qty * opt_qty if (num_match or info['matched']) else qty,
             'matched': info['matched']

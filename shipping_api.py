@@ -55,10 +55,10 @@ def call_narda_regist_order(ord_row, items, settings):
 
     api_items = []
     for it in items:
-        # 옵션수량 * 구매수량
+        # 상품수량(엑셀 원본) * 옵션수량(세트 낱개수) = 최종 구매/출고 수량
         opt_qty = int(it.get('option_quantity') or 1)
-        buy_qty = int(it.get('quantity') or 1)
-        qty = opt_qty * buy_qty
+        prod_qty = int(it.get('product_quantity') or ord_row.get('original_quantity') or 1)
+        qty = opt_qty * prod_qty
 
         price = float(it.get('unit_price') or 10.0)
         hs = str(it.get('hs_code') or '630690').replace('.', '').strip() or '630690'

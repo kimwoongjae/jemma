@@ -81,7 +81,7 @@ def get_order_sort_key(o):
     # 3. 출고수량 (옵션수량 * 구매수량) 오름차순
     if items:
         dispatch_qty = sum(
-            (int(it.get('option_quantity') or 1)) * (int(it.get('quantity') or o.get('original_quantity') or 1))
+            (int(it.get('option_quantity') or 1)) * (int(it.get('product_quantity') or o.get('original_quantity') or 1))
             for it in items
         )
     else:
@@ -428,9 +428,9 @@ def check_dispatch_availability():
 
         for it in items:
             sku = it['sku']
-            opt_qty = it.get('option_quantity') or 1
-            buy_qty = it.get('quantity') or 1
-            needed = opt_qty * buy_qty
+            opt_qty = int(it.get('option_quantity') or 1)
+            prod_qty = int(it.get('product_quantity') or o.get('original_quantity') or 1)
+            needed = opt_qty * prod_qty
 
             current_stock = stock_map.get(sku, 0)
             if current_stock >= needed:
