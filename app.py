@@ -924,10 +924,40 @@ def get_inventory():
         FROM products p 
         ORDER BY p.id DESC
     ''')
-    products = [dict(p) for p in cur.fetchall()]
-    for p in products:
+    import math
+    raw_products = [dict(p) for p in cur.fetchall()]
+    products = []
+    for p in raw_products:
         cur.execute('SELECT * FROM product_options WHERE sku = ? OR product_id = ? ORDER BY id ASC', (p['sku'], p['id']))
-        p['options'] = [dict(row) for row in cur.fetchall()]
+        raw_options = [dict(row) for row in cur.fetchall()]
+        cleaned_options = []
+        for opt in raw_options:
+            o_dict = dict(opt)
+            for k in ['unit_price']:
+                try:
+                    val = float(o_dict.get(k, 0.0) or 0.0)
+                    o_dict[k] = 0.0 if (math.isnan(val) or math.isinf(val)) else val
+                except:
+                    o_dict[k] = 0.0
+            cleaned_options.append(o_dict)
+        p['options'] = cleaned_options
+
+        # NaN 및 None 방어 처리 (JSON 직렬화 및 브라우저 파싱 호환)
+        for k in ['unit_price']:
+            try:
+                val = float(p.get(k, 0.0) or 0.0)
+                p[k] = 0.0 if (math.isnan(val) or math.isinf(val)) else val
+            except:
+                p[k] = 0.0
+        for k in ['stock_quantity', 'dispatched_quantity', 'total_dispatched_quantity']:
+            try:
+                p[k] = int(p.get(k, 0) or 0)
+            except:
+                p[k] = 0
+        for k in ['english_name', 'hs_code', 'product_url']:
+            v = str(p.get(k, '') or '').strip()
+            p[k] = '' if v.lower() == 'nan' else v
+        products.append(p)
     conn.close()
     return jsonify(products)
 
@@ -1149,24 +1179,52 @@ def upload_products_excel():
         saved_count = 0
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
 
+        import math
         for _, row in df.iterrows():
-            sku = str(row.get(col_map.get('sku', ''), '')).strip()
-            name = str(row.get(col_map.get('product_name', ''), '')).strip()
-            eng = str(row.get(col_map.get('english_name', ''), '')).strip()
-            hs = str(row.get(col_map.get('hs_code', ''), '')).strip()
-            url = str(row.get(col_map.get('product_url', ''), '')).strip()
+            sku = str(row.get(col_map.get('sku', ''), '') or '').strip()
+            name = str(row.get(col_map.get('product_name', ''), '') or '').strip()
+            eng = str(row.get(col_map.get('english_name', ''), '') or '').strip()
+            hs = str(row.get(col_map.get('hs_code', ''), '') or '').strip()
+            url = str(row.get(col_map.get('product_url', ''), '') or '').strip()
+            
+            # 숫자형 바코드(SKU) 뒤에 붙은 .0 자동 제거 (예: 4531663030487.0 -> 4531663030487)
+            if sku.endswith('.0') and sku[:-2].isdigit():
+                sku = sku[:-2]
+            if sku.lower() == 'nan': sku = ''
+            if name.lower() == 'nan': name = ''
+            if eng.lower() == 'nan': eng = ''
+            if hs.lower() == 'nan': hs = ''
             if url.lower() == 'nan': url = ''
             
+            # 단가(price) NaN 및 무한대 방어
             try:
-                price = float(row.get(col_map.get('unit_price', ''), 0.0) or 0.0)
+                p_val = row.get(col_map.get('unit_price', ''), 0.0)
+                if pd.isna(p_val) or str(p_val).strip().lower() == 'nan':
+                    price = 0.0
+                else:
+                    price = float(p_val)
+                if math.isnan(price) or math.isinf(price):
+                    price = 0.0
             except:
                 price = 0.0
+
+            # 재고(stock) 수량 정수 변환 및 방어
             try:
-                stock = int(float(row.get(col_map.get('stock_quantity', ''), 0) or 0))
+                s_val = row.get(col_map.get('stock_quantity', ''), 0)
+                if pd.isna(s_val) or str(s_val).strip().lower() == 'nan':
+                    stock = 0
+                else:
+                    stock = int(float(s_val))
             except:
                 stock = 0
+
+            # 1회 출고 수량 정수 변환 및 방어
             try:
-                dispatched = int(float(row.get(col_map.get('dispatched_quantity', ''), 1) or 1))
+                d_val = row.get(col_map.get('dispatched_quantity', ''), 1)
+                if pd.isna(d_val) or str(d_val).strip().lower() == 'nan':
+                    dispatched = 1
+                else:
+                    dispatched = int(float(d_val))
             except:
                 dispatched = 1
 

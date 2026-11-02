@@ -2884,8 +2884,13 @@
     async function loadInventory() {
         try {
             const res = await fetch('/api/inventory');
+            if (!res.ok) {
+                console.error('Inventory load response status:', res.status);
+                return;
+            }
             inventoryList = await res.json();
-            document.getElementById('stat-product-count').textContent = inventoryList.length.toLocaleString();
+            const countEl = document.getElementById('stat-product-count');
+            if (countEl) countEl.textContent = (inventoryList || []).length.toLocaleString();
             renderInventoryTable(filterInventory());
         } catch (e) {
             console.error('Inventory load error', e);
@@ -2894,13 +2899,13 @@
 
     function filterInventory() {
         const search = (document.getElementById('inventorySearchInput')?.value || '').toLowerCase().trim();
-        if (!search) return inventoryList;
-        return inventoryList.filter(p => 
-            (p.sku && p.sku.toLowerCase().includes(search)) ||
-            (p.product_name && p.product_name.toLowerCase().includes(search)) ||
-            (p.english_name && p.english_name.toLowerCase().includes(search)) ||
-            (p.hs_code && p.hs_code.toLowerCase().includes(search)) ||
-            (p.options && p.options.some(opt => opt.option_name && opt.option_name.toLowerCase().includes(search)))
+        if (!search) return inventoryList || [];
+        return (inventoryList || []).filter(p => 
+            (p.sku && String(p.sku).toLowerCase().includes(search)) ||
+            (p.product_name && String(p.product_name).toLowerCase().includes(search)) ||
+            (p.english_name && String(p.english_name).toLowerCase().includes(search)) ||
+            (p.hs_code && String(p.hs_code).toLowerCase().includes(search)) ||
+            (p.options && p.options.some(opt => opt.option_name && String(opt.option_name).toLowerCase().includes(search)))
         );
     }
 
@@ -3033,7 +3038,7 @@
 
                 if (idx === 0) {
                     rowHtml += `
-                        <td rowspan="${rowCount}" class="text-center bg-white fs-6 fw-bold text-primary">${p.stock_quantity.toLocaleString()}개</td>
+                        <td rowspan="${rowCount}" class="text-center bg-white fs-6 fw-bold text-primary">${(p.stock_quantity || 0).toLocaleString()}개</td>
                         <td rowspan="${rowCount}" class="text-center bg-white">${urlHtml}</td>
                         <td rowspan="${rowCount}" class="text-center bg-white">
                             <div class="btn-group btn-group-sm">
