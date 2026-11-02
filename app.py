@@ -5,6 +5,7 @@ import uuid
 import time
 import requests
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from flask import Flask, request, jsonify, render_template, send_file, redirect
 
 from werkzeug.utils import secure_filename
@@ -23,6 +24,24 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # DB 초기화
 init_db()
+
+
+def format_inventory_log_datetime(value):
+    """Normalize SQLite strings and PostgreSQL datetime values for the logs screen/export."""
+    if value is None:
+        return ''
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d %H:%M')
+    raw = str(value).strip()
+    if not raw:
+        return ''
+    try:
+        return datetime.fromisoformat(raw.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M')
+    except (TypeError, ValueError):
+        try:
+            return parsedate_to_datetime(raw).strftime('%Y-%m-%d %H:%M')
+        except (TypeError, ValueError, OverflowError):
+            return raw[:16]
 
 @app.route('/')
 def index():
@@ -1641,12 +1660,16 @@ def get_inventory_logs():
         wild = f'%{search}%'
         params.extend([wild, wild, wild])
 
+    # 최근 내역을 먼저 제한한 뒤, 화면에는 재고가 차감되는 흐름대로 오래된 항목부터 표시합니다.
     query += ' ORDER BY id DESC LIMIT ?'
     params.append(limit)
 
     cur.execute(query, params)
     logs = [dict(l) for l in cur.fetchall()]
     conn.close()
+    logs.reverse()
+    for log in logs:
+        log['created_at'] = format_inventory_log_datetime(log.get('created_at'))
     return jsonify(logs)
 
 @app.route('/api/inventory/export-logs', methods=['GET'])
@@ -1658,9 +1681,9 @@ def export_inventory_logs():
     if ids_str:
         ids = [int(x) for x in ids_str.split(',') if x.strip().isdigit()]
         placeholders = ','.join(['?'] * len(ids))
-        cur.execute(f'SELECT * FROM inventory_logs WHERE id IN ({placeholders}) ORDER BY id DESC', ids)
+        cur.execute(f'SELECT * FROM inventory_logs WHERE id IN ({placeholders}) ORDER BY id ASC', ids)
     else:
-        cur.execute('SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 1000')
+        cur.execute('SELECT * FROM (SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 1000) recent_logs ORDER BY id ASC')
 
     logs = cur.fetchall()
     conn.close()
@@ -1676,7 +1699,7 @@ def export_inventory_logs():
 
     for l in logs:
         # created_at 형식 정규화 (YYYY-MM-DD HH:MM)
-        date_str = str(l['created_at'])[:16]
+        date_str = format_inventory_log_datetime(l['created_at'])
         ws.append([
             date_str,
             l['sku'],
