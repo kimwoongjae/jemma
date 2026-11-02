@@ -1797,16 +1797,45 @@
         }
     }
 
-    async function saveOrderWeight(orderId, val) {
+    async function saveOrderWeight(orderId, val, input = null) {
         const weight = parseFloat(val) || 0.0;
+        const savedWeight = String(weight);
+        if (input && input.dataset.savedWeight === savedWeight) return true;
         try {
-            await fetch(`/api/orders/${orderId}/weight`, {
+            const response = await fetch(`/api/orders/${orderId}/weight`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ weight: weight })
             });
+            const result = await response.json();
+            if (!response.ok || result.status !== 'success') {
+                throw new Error(result.error || '서버에서 저장하지 못했습니다.');
+            }
+            if (input) input.dataset.savedWeight = savedWeight;
+            const order = ordersList.find(item => Number(item.id) === Number(orderId));
+            if (order) order.weight = weight;
+            return true;
         } catch (e) {
             console.error('Weight save error', e);
+            alert('무게 저장에 실패했습니다: ' + e.message);
+            return false;
+        }
+    }
+
+    async function handleOrderWeightKeydown(event, input) {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        const saved = await saveOrderWeight(input.dataset.orderId, input.value, input);
+        if (!saved) return;
+
+        const inputs = Array.from(document.querySelectorAll('#ordersTableBody .order-weight-input'));
+        const currentIndex = inputs.indexOf(input);
+        const nextInput = inputs[currentIndex + 1];
+        if (nextInput) {
+            nextInput.focus();
+            nextInput.select();
+        } else {
+            input.select();
         }
     }
 
@@ -1941,9 +1970,12 @@
                         </td>
                         <td rowspan="${rowCount}" class="text-center bg-white">
                             <div class="input-group input-group-sm">
-                                <input type="number" step="0.01" min="0" class="form-control form-control-sm text-end px-1" 
+                                <input type="text" inputmode="decimal" class="form-control form-control-sm text-end px-1 order-weight-input"
                                        value="${o.weight && o.weight > 0 ? o.weight : ''}" placeholder="0.00" 
-                                       onchange="saveOrderWeight(${o.id}, this.value)" title="무게(kg) 입력 시 자동 저장됩니다">
+                                       data-order-id="${o.id}" data-saved-weight="${Number(o.weight) || 0}"
+                                       onclick="this.select()" onfocus="this.select()"
+                                       onkeydown="handleOrderWeightKeydown(event, this)"
+                                       onchange="saveOrderWeight(${o.id}, this.value, this)" title="클릭 후 무게를 입력하고 Enter를 누르면 저장 후 다음 주문으로 이동합니다">
                             </div>
                         </td>
                         <td rowspan="${rowCount}" class="bg-white">
