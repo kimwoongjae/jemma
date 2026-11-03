@@ -32,7 +32,6 @@
         <section class="tab-pane fade" id="adminLogin">
             <form onsubmit="submitAuth(event, '/api/auth/login')">
                 <input type="hidden" name="login_type" value="admin">
-                <div class="alert alert-light border small">관리자 아이디와 비밀번호는 Render 환경 변수 <code>ADMIN_USERNAME</code>, <code>ADMIN_PASSWORD</code>에 설정한 값입니다.</div>
                 <label class="form-label">관리자 아이디</label><input class="form-control mb-3" name="username" required autocomplete="username">
                 <label class="form-label">관리자 비밀번호</label><input class="form-control mb-4" name="password" type="password" required autocomplete="current-password">
                 <button class="btn btn-dark w-100 py-2">관리자 로그인</button>
