@@ -511,9 +511,10 @@ def _ensure_tenant_indexes(cur):
     ):
         index_name = f'ux_{table}_tenant_key'
         cur.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} ({columns})')
-    # Product options can reuse a SKU across separate companies as well.
+    # A company may intentionally have several option rows mapped to one barcode.
+    # Scope lookups by tenant, but do not impose SKU uniqueness on option rows.
     cur.execute('ALTER TABLE product_options DROP CONSTRAINT IF EXISTS product_options_sku_key')
-    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_product_options_tenant_sku ON product_options (tenant_id, sku)')
+    cur.execute('DROP INDEX IF EXISTS ux_product_options_tenant_sku')
 
 
 def _rebuild_sqlite_tenant_uniques(cur):
