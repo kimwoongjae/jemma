@@ -3,7 +3,7 @@
 ## 업체 계정 및 Render 배포 설정
 
 - `/login`에서 업체 대표 계정을 만들거나 초대 코드로 직원 계정을 추가합니다. 한 업체의 사용자는 같은 주문·재고 데이터를 함께 사용합니다.
-- `/admin`은 `ADMIN_USERNAME`, `ADMIN_PASSWORD` 환경 변수로 로그인하는 운영자 전용 화면입니다. 업체별 주문 건수와 발송 현황을 확인할 수 있습니다.
+- `/login` 화면의 **관리자 로그인** 탭에서 `ADMIN_USERNAME`, `ADMIN_PASSWORD`로 로그인하면 `/admin` 운영자 화면으로 이동합니다. 이 계정은 업체 회원가입과 분리되어 있으며 업체별 주문 건수와 발송 현황을 확인할 수 있습니다.
 - 기존 DB 주문·재고 데이터는 자동으로 `젬마 (기존 데이터)` 업체에 귀속됩니다. 해당 데이터를 쓸 대표 계정을 만들려면 `LEGACY_OWNER_USERNAME`, `LEGACY_OWNER_PASSWORD`를 배포 환경에 입력한 뒤 앱을 재시작합니다. 비밀번호는 10자 이상으로 설정하세요.
 - Render 환경 변수에는 기존 Supabase `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `LEGACY_OWNER_USERNAME`, `LEGACY_OWNER_PASSWORD`, `NARDA_CUSTOMER_CODE`, `NARDA_API_KEY`, `NARDA_ID`를 설정해야 합니다. `FLASK_SECRET_KEY`는 Render에서 생성하고 `SESSION_COOKIE_SECURE=1`을 유지합니다.
 - `DATABASE_URL`이 설정되어 있는데 PostgreSQL 연결이 실패하면 앱은 SQLite로 몰래 전환하지 않고 오류를 표시합니다. Render의 임시 파일 시스템에 주문 데이터가 저장되는 상황을 막기 위한 동작입니다.

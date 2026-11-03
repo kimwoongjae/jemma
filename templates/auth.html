@@ -13,8 +13,9 @@
 <body>
 <main class="card auth-card"><div class="card-body p-4 p-md-5">
     <div class="text-center mb-4"><div class="brand fs-3">NARDA OMS</div><div class="text-secondary">주문·재고·발송 관리</div></div>
-    <ul class="nav nav-pills nav-fill mb-4" role="tablist">
+    <ul class="nav nav-pills nav-fill flex-wrap gap-1 mb-4" role="tablist">
         <li class="nav-item"><button class="nav-link active" data-bs-toggle="pill" data-bs-target="#login" type="button">로그인</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#adminLogin" type="button">관리자 로그인</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#register" type="button">업체 회원가입</button></li>
         <li class="nav-item"><button class="nav-link" data-bs-toggle="pill" data-bs-target="#join" type="button">초대 가입</button></li>
     </ul>
@@ -22,9 +23,19 @@
     <div class="tab-content">
         <section class="tab-pane fade show active" id="login">
             <form onsubmit="submitAuth(event, '/api/auth/login')">
+                <input type="hidden" name="login_type" value="user">
                 <label class="form-label">아이디</label><input class="form-control mb-3" name="username" required autocomplete="username">
                 <label class="form-label">비밀번호</label><input class="form-control mb-4" name="password" type="password" required autocomplete="current-password">
                 <button class="btn btn-primary w-100 py-2">로그인</button>
+            </form>
+        </section>
+        <section class="tab-pane fade" id="adminLogin">
+            <form onsubmit="submitAuth(event, '/api/auth/login')">
+                <input type="hidden" name="login_type" value="admin">
+                <div class="alert alert-light border small">관리자 아이디와 비밀번호는 Render 환경 변수 <code>ADMIN_USERNAME</code>, <code>ADMIN_PASSWORD</code>에 설정한 값입니다.</div>
+                <label class="form-label">관리자 아이디</label><input class="form-control mb-3" name="username" required autocomplete="username">
+                <label class="form-label">관리자 비밀번호</label><input class="form-control mb-4" name="password" type="password" required autocomplete="current-password">
+                <button class="btn btn-dark w-100 py-2">관리자 로그인</button>
             </form>
         </section>
         <section class="tab-pane fade" id="register">

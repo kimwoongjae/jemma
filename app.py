@@ -74,14 +74,19 @@ def auth_login():
     data = request.get_json() or {}
     username = str(data.get('username') or '').strip()
     password = str(data.get('password') or '')
+    login_type = str(data.get('login_type') or 'user').strip().lower()
     admin_username = os.environ.get('ADMIN_USERNAME', '').strip()
     admin_password = os.environ.get('ADMIN_PASSWORD', '')
+    if login_type == 'admin' and not (admin_username and admin_password):
+        return jsonify({'error': '관리자 계정이 설정되지 않았습니다. Render의 ADMIN_USERNAME과 ADMIN_PASSWORD를 먼저 설정해주세요.'}), 503
     if admin_username and username == admin_username and admin_password and secrets.compare_digest(password, admin_password):
         session.clear()
         session.permanent = True
         session['account_role'] = 'admin'
         session['username'] = username
         return jsonify({'status': 'success', 'role': 'admin', 'redirect': '/admin'})
+    if login_type == 'admin':
+        return jsonify({'error': '관리자 아이디 또는 비밀번호가 올바르지 않습니다.'}), 401
 
     conn = get_connection()
     cur = conn.cursor()
@@ -108,6 +113,9 @@ def _create_company_account(company_name, username, password, join_code=None):
     username = str(username or '').strip()
     if not re.fullmatch(r'[A-Za-z0-9_.-]{3,40}', username):
         return None, '아이디는 영문·숫자·밑줄·마침표·하이픈으로 3~40자 입력해주세요.'
+    reserved_admin = os.environ.get('ADMIN_USERNAME', '').strip()
+    if reserved_admin and username.casefold() == reserved_admin.casefold():
+        return None, '관리자 아이디는 업체 계정에서 사용할 수 없습니다.'
     if len(password) < 10:
         return None, '비밀번호는 10자 이상 입력해주세요.'
     conn = get_connection()
