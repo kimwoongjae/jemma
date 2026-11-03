@@ -1149,21 +1149,10 @@
                 <div class="col-lg-5">
                     <div class="card border-0 shadow-sm">
                         <div class="card-header bg-white py-3">
-                            <h5 class="fw-bold mb-0"><i class="fa-solid fa-truck text-primary me-2"></i>택배사 연동 및 발송인 정보</h5>
+                            <h5 class="fw-bold mb-0"><i class="fa-solid fa-truck text-primary me-2"></i>나르다 API 설정</h5>
                         </div>
                         <div class="card-body">
                             <form id="settingsForm" onsubmit="saveCourierSettings(event)">
-                                <div class="mb-3">
-                                    <label class="form-label fw-bold">연동 택배사</label>
-                                    <select class="form-select" id="settingCourierName">
-                                        <option value="나르다">나르다 (NARDA)</option>
-                                        <option value="CJ대한통운">CJ대한통운</option>
-                                        <option value="우체국택배">우체국택배</option>
-                                        <option value="한진택배">한진택배</option>
-                                        <option value="롯데택배">롯데택배</option>
-                                        <option value="로젠택배">로젠택배</option>
-                                    </select>
-                                </div>
                                 <div class="mb-3">
                                     <label class="form-label fw-bold">택배사 고객사 코드 / 나르다 송하인 (sender) <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control" id="settingCustomerCode" placeholder="예: TOA">
@@ -1180,28 +1169,9 @@
                                     <div class="text-muted small">나르다 주문등록 API 인증키(narda_api_key)로 전송됩니다.</div>
                                 </div>
                                 <div class="mb-3 form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" id="settingIsMock">
-                                    <label class="form-check-label fw-bold" for="settingIsMock">시뮬레이션 모의 발급 모드 사용</label>
-                                    <div class="text-muted small">※ 스위치를 끄면(OFF) 선택한 주문을 나르다 실 API(http://api.narda-jp.com)로 전송하여 실제 운송장번호와 라벨 PDF를 발급받습니다.</div>
-                                </div>
-                                <div class="mb-3 form-check form-switch">
                                     <input class="form-check-input" type="checkbox" id="settingStockOnlyDispatch">
                                     <label class="form-check-label fw-bold" for="settingStockOnlyDispatch">재고가 있을 때만 출고</label>
                                     <div class="text-muted small">켜면 선택 주문의 상품 재고가 부족하거나 상품 재고가 등록되지 않은 경우 해당 주문은 나르다에 전송하지 않습니다. 부족 주문은 주문관리에 남고 재고는 차감되지 않습니다.</div>
-                                </div>
-                                <hr>
-                                <h6 class="fw-bold mb-3">보내는 사람 (발송인) 정보 (송장에 인쇄됨)</h6>
-                                <div class="mb-2">
-                                    <label class="form-label small">발송처 상호 / 이름</label>
-                                    <input type="text" class="form-control" id="settingSenderName" value="프리비 물류센터">
-                                </div>
-                                <div class="mb-2">
-                                    <label class="form-label small">발송처 연락처</label>
-                                    <input type="text" class="form-control" id="settingSenderPhone" value="02-1234-5678">
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label small">발송처 주소</label>
-                                    <input type="text" class="form-control" id="settingSenderAddress" value="서울특별시 강남구 테헤란로 123 물류빌딩 3층">
                                 </div>
                                 <button type="submit" class="btn btn-primary w-100">
                                     <i class="fa-solid fa-floppy-disk me-1"></i> 설정 저장하기
@@ -4452,14 +4422,9 @@
             const sRes = await fetch('/api/settings');
             const s = await sRes.json();
             if (s && s.courier_name) {
-                document.getElementById('settingCourierName').value = s.courier_name;
                 document.getElementById('settingCustomerCode').value = s.customer_code || '';
                 document.getElementById('settingApiKey').value = s.api_key || '';
                 document.getElementById('settingNardaId').value = s.narda_id || 'calroid';
-                document.getElementById('settingSenderName').value = s.sender_name || '';
-                document.getElementById('settingSenderPhone').value = s.sender_phone || '';
-                document.getElementById('settingSenderAddress').value = s.sender_address || '';
-                document.getElementById('settingIsMock').checked = s.is_mock === 1;
                 document.getElementById('settingStockOnlyDispatch').checked = Number(s.stock_only_dispatch || 0) === 1;
             }
         } catch (e) {}
@@ -4495,14 +4460,9 @@
     async function saveCourierSettings(e) {
         e.preventDefault();
         const payload = {
-            courier_name: document.getElementById('settingCourierName').value,
             customer_code: document.getElementById('settingCustomerCode').value,
             api_key: document.getElementById('settingApiKey').value,
             narda_id: document.getElementById('settingNardaId').value,
-            sender_name: document.getElementById('settingSenderName').value,
-            sender_phone: document.getElementById('settingSenderPhone').value,
-            sender_address: document.getElementById('settingSenderAddress').value,
-            is_mock: document.getElementById('settingIsMock').checked,
             stock_only_dispatch: document.getElementById('settingStockOnlyDispatch').checked
         };
         const res = await fetch('/api/settings', {

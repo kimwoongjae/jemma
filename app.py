@@ -1014,11 +1014,10 @@ def bulk_update_weight():
 def api_issue_tracking():
     data = request.get_json() or {}
     order_ids = data.get('order_ids', [])
-    courier_name = data.get('courier_name')
     if not order_ids:
         return jsonify({'error': '송장을 발급할 주문을 선택하세요.'}), 400
 
-    res = issue_tracking_numbers(order_ids, courier_name)
+    res = issue_tracking_numbers(order_ids)
     if isinstance(res, dict):
         updated = res.get('updated_orders', [])
         failed = res.get('failed_orders', [])
@@ -2040,19 +2039,13 @@ def save_settings():
     cur = conn.cursor()
     cur.execute('''
         UPDATE courier_settings
-        SET courier_name = ?, customer_code = ?, api_key = ?, narda_id = ?,
-            sender_name = ?, sender_phone = ?, sender_address = ?,
-            is_mock = ?, stock_only_dispatch = ?, updated_at = CURRENT_TIMESTAMP
+        SET courier_name = '나르다', customer_code = ?, api_key = ?, narda_id = ?,
+            is_mock = 0, stock_only_dispatch = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = (SELECT id FROM courier_settings LIMIT 1)
     ''', (
-        data.get('courier_name', '나르다'),
         data.get('customer_code', ''),
         data.get('api_key', ''),
         data.get('narda_id', 'calroid'),
-        data.get('sender_name', ''),
-        data.get('sender_phone', ''),
-        data.get('sender_address', ''),
-        1 if data.get('is_mock') else 0,
         1 if data.get('stock_only_dispatch') else 0
     ))
     conn.commit()

@@ -1,4 +1,3 @@
-import random
 import time
 import re
 import requests
@@ -26,24 +25,6 @@ def get_narda_session():
         session.mount('https://', adapter)
         _narda_thread_local.session = session
     return session
-
-COURIER_PREFIX = {
-    '나르다': '3054',
-    'CJ대한통운': '6892',
-    '우체국택배': '6098',
-    '한진택배': '5081',
-    '롯데택배': '4023',
-    '로젠택배': '9012'
-}
-
-def generate_mock_tracking_number(courier_name='나르다'):
-    prefix = COURIER_PREFIX.get(courier_name, '3054')
-    # 12자리 유효 형태의 송장번호 생성
-    rand_mid = f"{random.randint(1000000, 9999999):07d}"
-    base_no = prefix + rand_mid
-    # 검증번호 (modulo 7 알고리즘 등)
-    check_digit = sum(int(c) for c in base_no) % 7
-    return f"{base_no}{check_digit}"
 
 def call_narda_regist_order(ord_row, items, settings):
     """
@@ -152,7 +133,7 @@ def call_narda_regist_order(ord_row, items, settings):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def issue_tracking_numbers(order_ids, courier_name=None):
+def issue_tracking_numbers(order_ids):
     conn = get_connection()
     cur = conn.cursor()
 
@@ -161,8 +142,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
     settings_row = cur.fetchone()
     settings = dict(settings_row) if settings_row else {}
 
-    target_courier = courier_name or settings.get('courier_name') or '나르다'
-    is_mock = settings.get('is_mock', 0)
+    target_courier = '나르다'
     updated_orders = []
     failed_orders = []
     aggregated_deductions = {}
@@ -196,51 +176,41 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         existing_tracking = ord_dict.get('tracking_no') or ''
         existing_pdf = ord_dict.get('invoice_pdf_url') or ''
 
-        if target_courier == '나르다' and is_mock == 0:
-            if existing_tracking and existing_pdf and existing_tracking.startswith('30'):
-                orders_data.append({
-                    'oid': oid,
-                    'ord_dict': ord_dict,
-                    'items': [],
-                    'deduct_items': raw_items,
-                    'is_cached': True,
-                    'tracking_no': existing_tracking,
-                    'pdf_url': existing_pdf
-                })
-                continue
-
-            items = []
-            for raw_item in raw_items:
-                it = dict(raw_item)
-                matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
-                if matched_prod:
-                    it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
-                    it['hs_code'] = matched_prod.get('hs_code') or '630690'
-                    it['unit_price'] = matched_prod.get('unit_price') or 10.0
-                    it['product_url'] = matched_prod.get('product_url') or ''
-                else:
-                    it['english_name'] = it.get('item_product_name') or 'Product'
-                    it['hs_code'] = '630690'
-                    it['unit_price'] = 10.0
-                    it['product_url'] = ''
-                items.append(it)
-
-            orders_data.append({
-                'oid': oid,
-                'ord_dict': ord_dict,
-                'items': items,
-                'deduct_items': raw_items,
-                'is_cached': False
-            })
-        else:
+        if existing_tracking and existing_pdf and existing_tracking.startswith('30'):
             orders_data.append({
                 'oid': oid,
                 'ord_dict': ord_dict,
                 'items': [],
                 'deduct_items': raw_items,
-                'is_cached': False,
-                'is_mock': True
+                'is_cached': True,
+                'tracking_no': existing_tracking,
+                'pdf_url': existing_pdf
             })
+            continue
+
+        items = []
+        for raw_item in raw_items:
+            it = dict(raw_item)
+            matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
+            if matched_prod:
+                it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
+                it['hs_code'] = matched_prod.get('hs_code') or '630690'
+                it['unit_price'] = matched_prod.get('unit_price') or 10.0
+                it['product_url'] = matched_prod.get('product_url') or ''
+            else:
+                it['english_name'] = it.get('item_product_name') or 'Product'
+                it['hs_code'] = '630690'
+                it['unit_price'] = 10.0
+                it['product_url'] = ''
+            items.append(it)
+
+        orders_data.append({
+            'oid': oid,
+            'ord_dict': ord_dict,
+            'items': items,
+            'deduct_items': raw_items,
+            'is_cached': False
+        })
 
     stock_only_dispatch = str(settings.get('stock_only_dispatch') or '0').strip().lower() in ('1', 'true', 't', 'yes', 'on')
     if stock_only_dispatch and orders_data:
@@ -333,10 +303,6 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                 'tracking_no': item['tracking_no'],
                 'pdf_url': item['pdf_url']
             })
-        if item.get('is_mock'):
-            mock_no = generate_mock_tracking_number(target_courier)
-            return (item['oid'], item['ord_dict'], {'success': True, 'tracking_no': mock_no, 'pdf_url': ''})
-
         api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
         return (item['oid'], item['ord_dict'], api_res)
 
