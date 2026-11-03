@@ -45,6 +45,16 @@ def require_account_session():
     if role == 'admin':
         if request.endpoint == 'admin_page' or request.endpoint and request.endpoint.startswith('admin_'):
             return None
+        admin_company_id = session.get('admin_tenant_id')
+        if admin_company_id:
+            try:
+                g.company_id = int(admin_company_id)
+            except (TypeError, ValueError):
+                session.pop('admin_tenant_id', None)
+                session.pop('company_id', None)
+                session.pop('company_name', None)
+                return redirect('/admin')
+            return None
         if request.path.startswith('/api/'):
             return jsonify({'error': '업체 계정으로 로그인해주세요.'}), 403
         return redirect('/admin')
@@ -207,6 +217,33 @@ def admin_page():
     if session.get('account_role') != 'admin':
         return redirect('/login')
     return render_template('admin.html')
+
+
+@app.route('/api/admin/companies/<int:company_id>/access', methods=['POST'])
+def admin_access_company(company_id):
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, name FROM companies WHERE id = ?', (company_id,))
+    company = cur.fetchone()
+    conn.close()
+    if not company:
+        return jsonify({'error': '업체를 찾을 수 없습니다.'}), 404
+    session['admin_tenant_id'] = company['id']
+    session['company_id'] = company['id']
+    session['company_name'] = company['name']
+    return jsonify({'status': 'success', 'redirect': '/'})
+
+
+@app.route('/admin/return', methods=['POST'])
+def admin_return_to_dashboard():
+    if session.get('account_role') != 'admin':
+        return redirect('/login')
+    session.pop('admin_tenant_id', None)
+    session.pop('company_id', None)
+    session.pop('company_name', None)
+    return redirect('/admin')
 
 
 @app.route('/api/admin/companies', methods=['GET'])
