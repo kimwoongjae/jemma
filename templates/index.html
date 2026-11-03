@@ -232,6 +232,10 @@
             <span>스마트 주문관리 & 발송처리 (OMS/WMS)</span>
         </a>
         <div class="d-flex align-items-center gap-3 site-header-controls">
+            <div class="text-end text-white small d-none d-md-block">
+                <strong id="headerCompanyName">업체</strong><br><span class="opacity-75">초대 코드 <code id="headerInviteCode" class="text-white">불러오는 중</code></span>
+            </div>
+            <button class="btn btn-outline-light btn-sm" onclick="logoutAccount()"><i class="fa-solid fa-right-from-bracket me-1"></i>로그아웃</button>
             <span class="badge bg-primary px-3 py-2 rounded-pill">
                 <i class="fa-solid fa-truck-fast me-1"></i> 택배 API 연동 가동 중
             </span>
@@ -1580,6 +1584,21 @@
     let barcodeCameraTimer = null;
     let barcodeCameraHandled = false;
     let barcodeCameraCandidate = '';
+
+    async function loadCompanyHeader() {
+        try {
+            const response = await fetch('/api/company');
+            if (!response.ok) return;
+            const company = await response.json();
+            document.getElementById('headerCompanyName').textContent = company.name || '업체';
+            document.getElementById('headerInviteCode').textContent = company.invite_code || '-';
+        } catch (error) { console.error('회사 정보 조회 실패', error); }
+    }
+
+    async function logoutAccount() {
+        await fetch('/api/auth/logout', { method: 'POST' });
+        location.href = '/login';
+    }
     let barcodeCameraCandidateCount = 0;
     let barcodeCameraZoomState = null;
     const barcodeScanCanvas = document.createElement('canvas');
@@ -1601,6 +1620,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        loadCompanyHeader();
         refreshAllData();
         setupDragAndDrop();
         renderUploadProfileMappingFields();

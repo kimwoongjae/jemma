@@ -2,19 +2,20 @@ import os
 import re
 import sqlite3
 import threading
+import secrets
 from datetime import datetime
 
 # Supabase PostgreSQL 연결 설정
 SUPABASE_CONFIG = {
-    "host": os.environ.get("PGHOST", "aws-0-ap-south-1.pooler.supabase.com"),
+    "host": os.environ.get("PGHOST", ""),
     "port": int(os.environ.get("PGPORT", 5432)),
-    "user": os.environ.get("PGUSER", "postgres.qazeqzbajdlrddfvmtxy"),
-    "password": os.environ.get("PGPASSWORD", "-WHkmP9pnRbT+V%"),
+    "user": os.environ.get("PGUSER", ""),
+    "password": os.environ.get("PGPASSWORD", ""),
     "dbname": os.environ.get("PGDATABASE", "postgres"),
     "sslmode": "require"
 }
 
-USE_POSTGRES = True
+USE_POSTGRES = bool(os.environ.get('DATABASE_URL') or (SUPABASE_CONFIG['host'] and SUPABASE_CONFIG['user'] and SUPABASE_CONFIG['password']))
 try:
     import psycopg2
     import psycopg2.extras
@@ -129,22 +130,21 @@ def _get_postgres_pool():
     return _pg_pool
 
 def get_connection():
+    if os.environ.get('RENDER') and not USE_POSTGRES:
+        raise RuntimeError('Render 배포에서는 영구 데이터베이스 보호를 위해 DATABASE_URL 또는 PGHOST/PGUSER/PGPASSWORD 설정이 필요합니다.')
     if USE_POSTGRES:
         try:
             pool = _get_postgres_pool()
             try:
                 return PgConnectionWrapper(pool.getconn(), pool)
-            except Exception:
-                # 풀의 모든 연결이 사용 중일 때는 SQLite로 전환하지 않고 임시 연결을 사용합니다.
+            except Exception as pool_error:
+                # 풀을 가져오지 못하면 PostgreSQL로만 재연결하고, 다른 DB로 조용히 전환하지 않습니다.
                 database_url = os.environ.get('DATABASE_URL')
                 if database_url:
-                    try:
-                        return PgConnectionWrapper(psycopg2.connect(database_url, sslmode='require'))
-                    except Exception:
-                        pass
+                    return PgConnectionWrapper(psycopg2.connect(database_url, sslmode='require'))
                 return PgConnectionWrapper(psycopg2.connect(**SUPABASE_CONFIG))
         except Exception as e:
-            print(f"[DB Warning] PostgreSQL connection failed ({e}), falling back to SQLite.")
+            raise RuntimeError(f"PostgreSQL 연결에 실패했습니다. DATABASE_URL/PG 설정을 확인하세요: {e}") from e
 
     # SQLite fallback
     conn = sqlite3.connect(DB_PATH, timeout=20.0)
@@ -156,17 +156,16 @@ def init_db():
     cur = conn.cursor()
 
     if isinstance(conn, PgConnectionWrapper):
+        _ensure_tenant_schema(cur, postgres=True)
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
         cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS stock_only_dispatch INTEGER NOT NULL DEFAULT 0")
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS upload_profiles (
-                profile_name TEXT PRIMARY KEY,
-                mapping_json TEXT NOT NULL DEFAULT '{}',
-                header_row INTEGER NOT NULL DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS tenant_id INTEGER")
+        for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
+            cur.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id INTEGER')
+        _assign_legacy_tenant(cur)
+        _ensure_tenant_indexes(cur)
+        _bootstrap_legacy_owner(cur)
         cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
@@ -176,6 +175,7 @@ def init_db():
         print("Connected to Supabase PostgreSQL cloud database successfully.")
         return
 
+    conn.execute('PRAGMA foreign_keys=OFF')
     conn.execute('PRAGMA journal_mode=WAL')
 
     # 1. 상품 및 재고 마스터 (Products / SKU)
@@ -355,7 +355,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         courier_name TEXT DEFAULT '나르다',
         customer_code TEXT DEFAULT '정마무역',
-        api_key TEXT DEFAULT 'e1df1b2a432106cd6f4c886dfb9c3ca24fbf27e9',
+        api_key TEXT DEFAULT '',
         sender_name TEXT DEFAULT 'TOA',
         sender_phone TEXT DEFAULT '02-1234-5678',
         sender_address TEXT DEFAULT '서울특별시 강남구 테헤란로 123 물류빌딩 3층',
@@ -385,10 +385,11 @@ def init_db():
     # 초기 기본 택배사 설정 확인 및 삽입
     cur.execute('SELECT COUNT(*) as cnt FROM courier_settings')
     if cur.fetchone()['cnt'] == 0:
+        import os
         cur.execute('''
         INSERT INTO courier_settings (courier_name, customer_code, api_key, narda_id, sender_name, sender_phone, sender_address, is_mock)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', ('나르다', 'TOA', '5a65132fee9b4780c350b1942db432afd3232b30', 'calroid', 'TOA', '02-1234-5678', '서울특별시 강남구 테헤란로 123 물류센터', 1))
+        ''', ('나르다', os.environ.get('NARDA_CUSTOMER_CODE', ''), os.environ.get('NARDA_API_KEY', ''), os.environ.get('NARDA_ID', ''), '', '', '', 0))
 
     # 7. 옵션 자동 분할 구분 기호 설정 (Split Delimiters)
     cur.execute('''
@@ -397,6 +398,11 @@ def init_db():
         symbol TEXT UNIQUE NOT NULL
     )
     ''')
+
+    _ensure_tenant_schema(cur, postgres=False)
+    _assign_legacy_tenant(cur)
+    _rebuild_sqlite_tenant_uniques(cur)
+    _bootstrap_legacy_owner(cur)
     try:
         cur.execute('SELECT COUNT(*) as cnt FROM split_delimiters')
         if cur.fetchone()['cnt'] == 0:
@@ -416,6 +422,176 @@ def init_db():
     conn.commit()
     conn.close()
     print("Database initialized successfully at", DB_PATH)
+
+
+def _ensure_tenant_schema(cur, postgres):
+    id_type = 'BIGSERIAL PRIMARY KEY' if postgres else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+    cur.execute(f'''CREATE TABLE IF NOT EXISTS companies (
+        id {id_type},
+        name TEXT NOT NULL UNIQUE,
+        invite_code TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        active INTEGER NOT NULL DEFAULT 1
+    )''')
+    cur.execute(f'''CREATE TABLE IF NOT EXISTS users (
+        id {id_type},
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        company_id INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        active INTEGER NOT NULL DEFAULT 1
+    )''')
+
+    tenant_tables = (
+        'products', 'product_options', 'orders', 'order_items', 'inventory_logs',
+        'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
+        'unregistered_products'
+    )
+    for table in tenant_tables:
+        if postgres:
+            cur.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id INTEGER')
+        else:
+            cur.execute(f'PRAGMA table_info({table})')
+            columns = [row[1] for row in cur.fetchall()]
+            if 'tenant_id' not in columns:
+                cur.execute(f'ALTER TABLE {table} ADD COLUMN tenant_id INTEGER')
+
+
+def _assign_legacy_tenant(cur):
+    cur.execute("SELECT id FROM companies WHERE name = ?", ('젬마 (기존 데이터)',))
+    row = cur.fetchone()
+    if row:
+        tenant_id = row['id'] if hasattr(row, 'keys') else row[0]
+    else:
+        invite_code = secrets.token_urlsafe(8).replace('-', '').replace('_', '')[:10].upper()
+        cur.execute('INSERT INTO companies (name, invite_code) VALUES (?, ?)', ('젬마 (기존 데이터)', invite_code))
+        tenant_id = cur.lastrowid
+    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
+        cur.execute(f'UPDATE {table} SET tenant_id = ? WHERE tenant_id IS NULL', (tenant_id,))
+    return tenant_id
+
+
+def _bootstrap_legacy_owner(cur):
+    """Allow the operator to claim migrated data using an explicit deployment secret."""
+    username = os.environ.get('LEGACY_OWNER_USERNAME', '').strip()
+    password = os.environ.get('LEGACY_OWNER_PASSWORD', '')
+    if not username or not password:
+        return
+    cur.execute('SELECT id FROM companies WHERE name = ?', ('젬마 (기존 데이터)',))
+    company = cur.fetchone()
+    if not company:
+        return
+    company_id = company['id'] if hasattr(company, 'keys') else company[0]
+    cur.execute('SELECT id FROM users WHERE LOWER(username) = LOWER(?)', (username,))
+    if cur.fetchone():
+        return
+    from werkzeug.security import generate_password_hash
+    cur.execute('INSERT INTO users (username, password_hash, company_id, role) VALUES (?, ?, ?, ?)',
+                (username, generate_password_hash(password), company_id, 'owner'))
+
+
+def _ensure_tenant_indexes(cur):
+    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
+        cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_tenant_id ON {table} (tenant_id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_tenant_status_id ON orders (tenant_id, status, id)')
+
+    for table, constraint in (
+        ('products', 'products_sku_key'),
+        ('upload_profiles', 'upload_profiles_pkey'),
+        ('unregistered_products', 'unregistered_products_combined_name_key'),
+        ('split_delimiters', 'split_delimiters_symbol_key')
+    ):
+        cur.execute(f'ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {constraint}')
+    for table, columns in (
+        ('products', 'tenant_id, sku'),
+        ('upload_profiles', 'tenant_id, profile_name'),
+        ('unregistered_products', 'tenant_id, combined_name'),
+        ('split_delimiters', 'tenant_id, symbol')
+    ):
+        index_name = f'ux_{table}_tenant_key'
+        cur.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} ({columns})')
+    # Product options can reuse a SKU across separate companies as well.
+    cur.execute('ALTER TABLE product_options DROP CONSTRAINT IF EXISTS product_options_sku_key')
+    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_product_options_tenant_sku ON product_options (tenant_id, sku)')
+
+
+def _rebuild_sqlite_tenant_uniques(cur):
+    """Replace old global unique keys with per-company unique keys for local SQLite installs."""
+    def unique_key_exists(table, expected_columns):
+        cur.execute(f'PRAGMA index_list({table})')
+        for index in cur.fetchall():
+            if not index[2]:
+                continue
+            cur.execute(f'PRAGMA index_info({index[1]})')
+            columns = [row[2] for row in cur.fetchall()]
+            if columns == expected_columns:
+                return True
+        return False
+
+    if unique_key_exists('products', ['sku']):
+        cur.execute('''CREATE TABLE products_tenant_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, sku TEXT, product_name TEXT NOT NULL,
+            option_name TEXT DEFAULT '', english_name TEXT DEFAULT '', hs_code TEXT DEFAULT '',
+            unit_price REAL DEFAULT 0.0, stock_quantity INTEGER DEFAULT 0, product_url TEXT DEFAULT '',
+            safety_stock INTEGER DEFAULT 10, location TEXT DEFAULT 'A-01', dispatched_quantity INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        cur.execute('''INSERT INTO products_tenant_new
+            (id, tenant_id, sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity,
+             product_url, safety_stock, location, dispatched_quantity, created_at, updated_at)
+            SELECT id, tenant_id, sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity,
+                   product_url, safety_stock, location, dispatched_quantity, created_at, updated_at FROM products''')
+        cur.execute('''CREATE TABLE product_options_tenant_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, product_id INTEGER, sku TEXT NOT NULL,
+            option_name TEXT NOT NULL, unit_price REAL DEFAULT 0.0, dispatched_quantity INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES products_tenant_new(id) ON DELETE CASCADE
+        )''')
+        cur.execute('''INSERT INTO product_options_tenant_new
+            (id, tenant_id, product_id, sku, option_name, unit_price, dispatched_quantity, created_at, updated_at)
+            SELECT id, tenant_id, product_id, sku, option_name, unit_price, dispatched_quantity, created_at, updated_at FROM product_options''')
+        cur.execute('DROP TABLE product_options')
+        cur.execute('DROP TABLE products')
+        cur.execute('ALTER TABLE products_tenant_new RENAME TO products')
+        cur.execute('ALTER TABLE product_options_tenant_new RENAME TO product_options')
+
+    if unique_key_exists('upload_profiles', ['profile_name']):
+        cur.execute('''CREATE TABLE upload_profiles_tenant_new (
+            tenant_id INTEGER NOT NULL, profile_name TEXT NOT NULL, mapping_json TEXT NOT NULL DEFAULT '{}',
+            header_row INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, profile_name)
+        )''')
+        cur.execute('''INSERT INTO upload_profiles_tenant_new
+            SELECT tenant_id, profile_name, mapping_json, header_row, created_at FROM upload_profiles''')
+        cur.execute('DROP TABLE upload_profiles')
+        cur.execute('ALTER TABLE upload_profiles_tenant_new RENAME TO upload_profiles')
+
+    if unique_key_exists('unregistered_products', ['combined_name']):
+        cur.execute('''CREATE TABLE unregistered_products_tenant_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, product_name TEXT NOT NULL,
+            option_name TEXT DEFAULT '', combined_name TEXT NOT NULL, order_count INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (tenant_id, combined_name)
+        )''')
+        cur.execute('''INSERT INTO unregistered_products_tenant_new
+            SELECT id, tenant_id, product_name, option_name, combined_name, order_count, status, created_at
+            FROM unregistered_products''')
+        cur.execute('DROP TABLE unregistered_products')
+        cur.execute('ALTER TABLE unregistered_products_tenant_new RENAME TO unregistered_products')
+
+    if unique_key_exists('split_delimiters', ['symbol']):
+        cur.execute('''CREATE TABLE split_delimiters_tenant_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, symbol TEXT NOT NULL,
+            UNIQUE (tenant_id, symbol)
+        )''')
+        cur.execute('''INSERT INTO split_delimiters_tenant_new SELECT id, tenant_id, symbol FROM split_delimiters''')
+        cur.execute('DROP TABLE split_delimiters')
+        cur.execute('ALTER TABLE split_delimiters_tenant_new RENAME TO split_delimiters')
+
+    for table in ('products', 'product_options', 'upload_profiles', 'unregistered_products', 'split_delimiters'):
+        cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_tenant_id ON {table} (tenant_id)')
+    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_products_tenant_sku ON products (tenant_id, sku)')
 
 if __name__ == '__main__':
     init_db()

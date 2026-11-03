@@ -81,8 +81,10 @@ def call_narda_regist_order(ord_row, items, settings):
 
     # 송하인은 택배설정의 고객사 코드(customer_code) 값으로 전송
     sender = (settings.get('customer_code') or '').strip() or "정마무역"
-    narda_id = (settings.get('narda_id') or '').strip() or "feelcoach33"
-    narda_api_key = (settings.get('api_key') or '').strip() or "e1df1b2a432106cd6f4c886dfb9c3ca24fbf27e9"
+    narda_id = (settings.get('narda_id') or '').strip()
+    narda_api_key = (settings.get('api_key') or '').strip()
+    if not narda_id or not narda_api_key:
+        return {"success": False, "error": "나르다 ID 또는 API 키가 설정되지 않았습니다. 설정 페이지에서 입력해주세요."}
 
     payload = {
         "order_no": ord_row['order_no'],
@@ -133,12 +135,15 @@ def call_narda_regist_order(ord_row, items, settings):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-def issue_tracking_numbers(order_ids):
+def issue_tracking_numbers(order_ids, tenant_id=None):
     conn = get_connection()
     cur = conn.cursor()
 
     # 택배사 설정 조회
-    cur.execute('SELECT * FROM courier_settings LIMIT 1')
+    if tenant_id is None:
+        conn.close()
+        raise ValueError('업체 정보가 없어 송장 발급을 진행할 수 없습니다.')
+    cur.execute('SELECT * FROM courier_settings WHERE tenant_id = ? ORDER BY id LIMIT 1', (tenant_id,))
     settings_row = cur.fetchone()
     settings = dict(settings_row) if settings_row else {}
 
@@ -148,7 +153,7 @@ def issue_tracking_numbers(order_ids):
     aggregated_deductions = {}
 
     # 전체 상품 마스터 캐시 (SKU 및 상품명 매칭용)
-    cur.execute('SELECT id, sku, product_name, option_name, english_name, hs_code, unit_price, product_url, stock_quantity FROM products')
+    cur.execute('SELECT id, sku, product_name, option_name, english_name, hs_code, unit_price, product_url, stock_quantity FROM products WHERE tenant_id = ?', (tenant_id,))
     prod_rows = [dict(r) for r in cur.fetchall()]
     prod_by_sku = {r['sku']: r for r in prod_rows if r['sku']}
     prod_by_name = {r['product_name']: r for r in prod_rows if r['product_name']}
@@ -160,9 +165,9 @@ def issue_tracking_numbers(order_ids):
         conn.close()
         return {'updated_orders': [], 'failed_orders': []}
     placeholders = ','.join(['?'] * len(order_ids))
-    cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders})', order_ids)
+    cur.execute(f'SELECT * FROM orders WHERE tenant_id = ? AND id IN ({placeholders})', [tenant_id] + order_ids)
     orders_by_id = {int(row['id']): dict(row) for row in cur.fetchall()}
-    cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
+    cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders}) ORDER BY id ASC', [tenant_id] + order_ids)
     items_by_order = {}
     for row in cur.fetchall():
         row_dict = dict(row)
@@ -263,8 +268,8 @@ def issue_tracking_numbers(order_ids):
                 )
                 cur.execute('''
                     UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
-                    WHERE id = ?
-                ''', (error, order_data['oid']))
+                    WHERE id = ? AND tenant_id = ?
+                ''', (error, order_data['oid'], tenant_id))
                 failed_orders.append({
                     'order_id': order_data['oid'],
                     'order_no': order.get('order_no'),
@@ -286,8 +291,8 @@ def issue_tracking_numbers(order_ids):
         cur.execute(f'''
             UPDATE orders
             SET api_dispatch_status = '전송중', api_dispatch_message = '나르다 API 응답 대기 중'
-            WHERE id IN ({active_placeholders})
-        ''', active_ids)
+            WHERE tenant_id = ? AND id IN ({active_placeholders})
+        ''', [tenant_id] + active_ids)
     conn.commit()
 
     if not orders_data:
@@ -318,8 +323,8 @@ def issue_tracking_numbers(order_ids):
             print(f"나르다 API 발급 실패 (주문번호 {ord_dict['order_no']}): {err_msg}")
             cur.execute('''
                 UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
-                WHERE id = ?
-            ''', (str(err_msg), oid))
+                WHERE id = ? AND tenant_id = ?
+            ''', (str(err_msg), oid, tenant_id))
             failed_orders.append({
                 'order_id': oid,
                 'order_no': ord_dict['order_no'],
@@ -334,8 +339,8 @@ def issue_tracking_numbers(order_ids):
             err_msg = '나르다 응답에 송장번호가 없어 발송 완료로 처리하지 않았습니다.'
             cur.execute('''
                 UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
-                WHERE id = ?
-            ''', (err_msg, oid))
+                WHERE id = ? AND tenant_id = ?
+            ''', (err_msg, oid, tenant_id))
             failed_orders.append({
                 'order_id': oid,
                 'order_no': ord_dict['order_no'],
@@ -349,8 +354,8 @@ def issue_tracking_numbers(order_ids):
             UPDATE orders
             SET tracking_no = ?, courier = ?, invoice_pdf_url = ?, status = '출고완료', dispatched_at = ?,
                 api_dispatch_status = '성공', api_dispatch_message = ''
-            WHERE id = ?
-        ''', (tracking_no, target_courier, pdf_url, now_str, oid))
+            WHERE id = ? AND tenant_id = ?
+        ''', (tracking_no, target_courier, pdf_url, now_str, oid, tenant_id))
 
         # ==========================================
         # 품목별 재고 차감 및 바코드별 집계 (중복 차감 방지)
@@ -364,7 +369,7 @@ def issue_tracking_numbers(order_ids):
             item_sku = it.get('sku')
             matched_prod = prod_by_sku.get(item_sku) or prod_by_name.get(it.get('item_product_name'))
             if not matched_prod and item_sku:
-                cur.execute('SELECT id, sku, product_name, option_name, stock_quantity FROM products WHERE sku = ?', (item_sku,))
+                cur.execute('SELECT id, sku, product_name, option_name, stock_quantity FROM products WHERE tenant_id = ? AND sku = ?', (tenant_id, item_sku))
                 pr = cur.fetchone()
                 if pr:
                     matched_prod = dict(pr)
@@ -374,7 +379,7 @@ def issue_tracking_numbers(order_ids):
                 cur_stock = matched_prod.get('stock_quantity') or 0
                 new_stock = cur_stock - deduct_qty
 
-                cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, matched_prod['id']))
+                cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ? AND tenant_id = ?', (new_stock, matched_prod['id'], tenant_id))
                 matched_prod['stock_quantity'] = new_stock
 
                 # 바코드(SKU) 기준 일괄 집계 누적 (개별 주문마다 기록하지 않고 묶음당 1건만 기록)
@@ -394,7 +399,7 @@ def issue_tracking_numbers(order_ids):
                 aggregated_deductions[log_key]['total_qty'] += deduct_qty
                 aggregated_deductions[log_key]['final_stock'] = new_stock
 
-            cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ?", (it['id'],))
+            cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ? AND tenant_id = ?", (it['id'], tenant_id))
 
         updated_orders.append({
             'order_id': oid,
@@ -413,11 +418,11 @@ def issue_tracking_numbers(order_ids):
         memo_text = f"주문 출고 ({agg['courier']} 송장발급)"
         cur.execute('''
             INSERT INTO inventory_logs (
-                product_id, sku, product_name, option_name,
+                tenant_id, product_id, sku, product_name, option_name,
                 change_type, change_qty, resulting_stock, reference_no, memo, created_at
-            ) VALUES (?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)
         ''', (
-            agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
+            tenant_id, agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
             -agg['total_qty'], agg['final_stock'], agg['order_no'], memo_text, now_log_str
         ))
 
@@ -428,7 +433,7 @@ def issue_tracking_numbers(order_ids):
         'failed_orders': failed_orders
     }
 
-def complete_dispatch(order_ids):
+def complete_dispatch(order_ids, tenant_id=None):
     """
     발송 완료 처리:
     1. 주문 상태를 '출고완료'로 변경
@@ -437,30 +442,33 @@ def complete_dispatch(order_ids):
     """
     conn = get_connection()
     cur = conn.cursor()
+    if tenant_id is None:
+        conn.close()
+        raise ValueError('업체 정보가 없어 출고 처리를 진행할 수 없습니다.')
     dispatched_count = 0
     deducted_items = 0
     aggregated_deductions = {}
 
     for oid in order_ids:
-        cur.execute('SELECT * FROM orders WHERE id = ?', (oid,))
+        cur.execute('SELECT * FROM orders WHERE id = ? AND tenant_id = ?', (oid, tenant_id))
         ord_row = cur.fetchone()
         if not ord_row:
             continue
 
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
-        cur.execute("UPDATE orders SET status = '출고완료', dispatched_at = ? WHERE id = ?", (now_str, oid))
+        cur.execute("UPDATE orders SET status = '출고완료', dispatched_at = ? WHERE id = ? AND tenant_id = ?", (now_str, oid, tenant_id))
         dispatched_count += 1
 
-        cur.execute('SELECT * FROM order_items WHERE order_id = ? AND stock_deducted = 0', (oid,))
+        cur.execute('SELECT * FROM order_items WHERE order_id = ? AND tenant_id = ? AND stock_deducted = 0', (oid, tenant_id))
         items = cur.fetchall()
 
         for it in items:
-            cur.execute('SELECT * FROM products WHERE sku = ?', (it['sku'],))
+            cur.execute('SELECT * FROM products WHERE sku = ? AND tenant_id = ?', (it['sku'], tenant_id))
             prod = cur.fetchone()
             if prod:
                 qty = it['quantity']
                 new_stock = prod['stock_quantity'] - qty
-                cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ?', (new_stock, prod['id']))
+                cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ? AND tenant_id = ?', (new_stock, prod['id'], tenant_id))
                 
                 sku_key = prod['sku'] or str(prod['id'])
                 if sku_key not in aggregated_deductions:
@@ -477,7 +485,7 @@ def complete_dispatch(order_ids):
                 aggregated_deductions[sku_key]['final_stock'] = new_stock
                 aggregated_deductions[sku_key]['order_nos'].add(ord_row['order_no'])
 
-            cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ?", (it['id'],))
+            cur.execute("UPDATE order_items SET stock_deducted = 1, status = '출고완료' WHERE id = ? AND tenant_id = ?", (it['id'], tenant_id))
             deducted_items += 1
 
     # 바코드 기준 1건만 기록
@@ -488,11 +496,11 @@ def complete_dispatch(order_ids):
         ref_no = f"{cnt}건 일괄출고"
         cur.execute('''
             INSERT INTO inventory_logs (
-                product_id, sku, product_name, option_name,
+                tenant_id, product_id, sku, product_name, option_name,
                 change_type, change_qty, resulting_stock, reference_no, memo, created_at
-            ) VALUES (?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)
         ''', (
-            agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
+            tenant_id, agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
             -agg['total_qty'], agg['final_stock'], ref_no, memo_text, now_log_str
         ))
 
@@ -500,31 +508,34 @@ def complete_dispatch(order_ids):
     conn.close()
     return {'dispatched_orders': dispatched_count, 'deducted_items': deducted_items}
 
-def export_shipping_excel(order_ids=None, column_order=None):
+def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
     """
     발송 완료된 주문 목록을 원본 엑셀 형식에 송장번호가 채워진 파일로 다운로드
     """
     conn = get_connection()
     cur = conn.cursor()
+    if tenant_id is None:
+        conn.close()
+        raise ValueError('업체 정보가 없어 발송 내역을 내보낼 수 없습니다.')
 
     if order_ids and len(order_ids) > 0:
         placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        cur.execute(f'SELECT * FROM orders WHERE tenant_id = ? AND id IN ({placeholders}) ORDER BY id ASC', [tenant_id] + order_ids)
         orders = cur.fetchall()
     else:
         cur.execute('''
             SELECT * FROM orders
-            WHERE (status IN ('출고완료', '송장발급')
+            WHERE tenant_id = ? AND (status IN ('출고완료', '송장발급')
                OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))
             ORDER BY id DESC
-        ''')
+        ''', (tenant_id,))
         orders = cur.fetchall()
 
     order_ids_for_items = [row['id'] for row in orders]
     items_by_order = {}
     if order_ids_for_items:
         placeholders = ','.join(['?'] * len(order_ids_for_items))
-        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids_for_items)
+        cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders}) ORDER BY id ASC', [tenant_id] + order_ids_for_items)
         for item in cur.fetchall():
             items_by_order.setdefault(item['order_id'], []).append(dict(item))
     conn.close()

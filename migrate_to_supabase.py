@@ -4,10 +4,10 @@ import psycopg2
 from psycopg2.extras import DictCursor
 
 PG_CONFIG = {
-    "host": "aws-0-ap-south-1.pooler.supabase.com",
-    "port": 5432,
-    "user": "postgres.qazeqzbajdlrddfvmtxy",
-    "password": "-WHkmP9pnRbT+V%",
+    "host": os.environ.get("PGHOST", ""),
+    "port": int(os.environ.get("PGPORT", "5432")),
+    "user": os.environ.get("PGUSER", ""),
+    "password": os.environ.get("PGPASSWORD", ""),
     "dbname": "postgres",
     "sslmode": "require"
 }
@@ -130,7 +130,7 @@ def migrate():
         id SERIAL PRIMARY KEY,
         courier_name TEXT DEFAULT '나르다',
         customer_code TEXT DEFAULT 'TOA',
-        api_key TEXT DEFAULT '5a65132fee9b4780c350b1942db432afd3232b30',
+        api_key TEXT DEFAULT '',
         narda_id TEXT DEFAULT 'calroid',
         sender_name TEXT DEFAULT 'TOA',
         sender_phone TEXT DEFAULT '02-1234-5678',

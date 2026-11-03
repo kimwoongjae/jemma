@@ -8,3 +8,23 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
+      - key: DATABASE_URL
+        sync: false
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: SESSION_COOKIE_SECURE
+        value: "1"
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: LEGACY_OWNER_USERNAME
+        sync: false
+      - key: LEGACY_OWNER_PASSWORD
+        sync: false
+      - key: NARDA_CUSTOMER_CODE
+        sync: false
+      - key: NARDA_API_KEY
+        sync: false
+      - key: NARDA_ID
+        sync: false

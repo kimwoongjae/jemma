@@ -260,7 +260,7 @@ def find_matching_barcode(product_name, option_name, conn=None):
     res = find_matching_product_info(product_name, option_name, conn)
     return res['sku'] if res['matched'] else None
 
-def sync_order_items_sku(conn=None):
+def sync_order_items_sku(conn=None, tenant_id=None):
     """기존 바코드를 우선 유지하고, 없는 경우 상품명/옵션명으로 SKU와 기본 옵션수량을 동기화합니다."""
     close_after = False
     if not conn:
@@ -269,17 +269,19 @@ def sync_order_items_sku(conn=None):
         close_after = True
 
     try:
+        if tenant_id is None:
+            raise ValueError('업체 정보가 없어 주문 상품 동기화를 진행할 수 없습니다.')
         cur = conn.cursor()
         try:
-            cur.execute('SELECT product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options')
+            cur.execute('SELECT product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options WHERE tenant_id = ?', (tenant_id,))
             opt_rows = [dict(r) for r in cur.fetchall()]
         except Exception:
             opt_rows = []
 
-        cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
+        cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products WHERE tenant_id = ?', (tenant_id,))
         prod_rows = [dict(r) for r in cur.fetchall()]
 
-        cur.execute('SELECT id, item_product_name, item_option_name, sku, option_quantity FROM order_items')
+        cur.execute('SELECT id, item_product_name, item_option_name, sku, option_quantity FROM order_items WHERE tenant_id = ?', (tenant_id,))
         items = cur.fetchall()
         for it in items:
             # 업로드에서 바코드로 지정된 품목은 이후 상품명 동기화가 다른 SKU로 덮어쓰지 않게 합니다.
@@ -290,7 +292,7 @@ def sync_order_items_sku(conn=None):
                 new_sku = info['sku']
                 new_opt_qty = info['dispatched_quantity'] or 1
                 if new_sku != it['sku'] or (it['option_quantity'] == 1 and new_opt_qty > 1):
-                    cur.execute('UPDATE order_items SET sku = ?, option_quantity = ? WHERE id = ?', (new_sku, new_opt_qty, it['id']))
+                    cur.execute('UPDATE order_items SET sku = ?, option_quantity = ? WHERE id = ? AND tenant_id = ?', (new_sku, new_opt_qty, it['id'], tenant_id))
         conn.commit()
     finally:
         if close_after and conn:
@@ -407,7 +409,7 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
 
     return items
 
-def process_excel_file(file_path, batch_name=None, column_mapping=None, header_row=1):
+def process_excel_file(file_path, batch_name=None, column_mapping=None, header_row=1, tenant_id=None):
     if not batch_name:
         batch_name = os.path.basename(file_path)
 
@@ -429,24 +431,26 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
     if invalid_profile_columns:
         raise ValueError('업로드 형식에서 지정한 열을 파일에서 찾을 수 없습니다: ' + ', '.join(invalid_profile_columns))
 
+    if tenant_id is None:
+        raise ValueError('업체 정보가 없어 주문 파일을 처리할 수 없습니다.')
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute('SELECT product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options')
+        cur.execute('SELECT product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options WHERE tenant_id = ?', (tenant_id,))
         opt_rows = [dict(r) for r in cur.fetchall()]
     except Exception:
         opt_rows = []
-    cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
+    cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products WHERE tenant_id = ?', (tenant_id,))
     prod_rows = [dict(r) for r in cur.fetchall()]
 
     try:
-        cur.execute('SELECT target_product_name, target_option_name, target_sku, multiplier, source_product_name, source_option_name FROM bundle_rules WHERE is_active = 1')
+        cur.execute('SELECT target_product_name, target_option_name, target_sku, multiplier, source_product_name, source_option_name FROM bundle_rules WHERE tenant_id = ? AND is_active = 1', (tenant_id,))
         rules_cache = [dict(r) for r in cur.fetchall()]
     except Exception:
         rules_cache = []
 
     try:
-        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        cur.execute('SELECT symbol FROM split_delimiters WHERE tenant_id = ? ORDER BY id ASC', (tenant_id,))
         delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
         if not delimiters:
             delimiters = ['+', '-', '/', ',', '?', '&']
@@ -562,7 +566,9 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
     preview_data['unregistered_items'] = list(unregistered_dict.values())
     return preview_data
 
-def save_orders_to_db(parsed_data, batch_name):
+def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
+    if tenant_id is None:
+        raise ValueError('업체 정보가 없어 주문을 저장할 수 없습니다.')
     conn = get_connection()
     cur = conn.cursor()
     saved_count = 0
@@ -572,12 +578,12 @@ def save_orders_to_db(parsed_data, batch_name):
     for unreg in parsed_data.get('unregistered_items', []):
         try:
             cur.execute('''
-                INSERT INTO unregistered_products (product_name, option_name, combined_name, order_count, status)
-                VALUES (?, ?, ?, ?, 'pending')
-                ON CONFLICT(combined_name) DO UPDATE SET
+                INSERT INTO unregistered_products (tenant_id, product_name, option_name, combined_name, order_count, status)
+                VALUES (?, ?, ?, ?, ?, 'pending')
+                ON CONFLICT(tenant_id, combined_name) DO UPDATE SET
                     order_count = unregistered_products.order_count + EXCLUDED.order_count,
                     status = 'pending'
-            ''', (unreg['product_name'], unreg['option_name'], unreg['combined_name'], unreg['count']))
+            ''', (tenant_id, unreg['product_name'], unreg['option_name'], unreg['combined_name'], unreg['count']))
         except Exception:
             pass
 
@@ -591,8 +597,9 @@ def save_orders_to_db(parsed_data, batch_name):
         val_placeholders = []
         params = []
         for ord_data in chunk:
-            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
             params.extend([
+                tenant_id,
                 ord_data['order_no'], ord_data['courier'], ord_data['tracking_no'], ord_data['shipping_method'],
                 ord_data['original_product_name'], ord_data['original_option_name'], ord_data['original_quantity'],
                 ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
@@ -602,7 +609,7 @@ def save_orders_to_db(parsed_data, batch_name):
         
         insert_sql = f'''
             INSERT INTO orders (
-                order_no, courier, tracking_no, shipping_method,
+                tenant_id, order_no, courier, tracking_no, shipping_method,
                 original_product_name, original_option_name, original_quantity,
                 recipient_name, recipient_phone1, recipient_phone2,
                 customs_id, postal_code, address, shipping_memo,
@@ -626,13 +633,13 @@ def save_orders_to_db(parsed_data, batch_name):
     ITEM_CHUNK_SIZE = 100
     for i in range(0, len(all_order_items), ITEM_CHUNK_SIZE):
         chunk_items = all_order_items[i:i + ITEM_CHUNK_SIZE]
-        val_placeholders = ['(?, ?, ?, ?, ?, ?, ?, ?)' for _ in chunk_items]
+        val_placeholders = ['(?, ?, ?, ?, ?, ?, ?, ?, ?)' for _ in chunk_items]
         item_params = []
         for it in chunk_items:
-            item_params.extend(it)
+            item_params.extend([tenant_id] + list(it))
         cur.execute(f'''
             INSERT INTO order_items (
-                order_id, order_no, sku, item_product_name, item_option_name, option_quantity, quantity, status
+                tenant_id, order_id, order_no, sku, item_product_name, item_option_name, option_quantity, quantity, status
             ) VALUES {', '.join(val_placeholders)}
         ''', item_params)
         item_count += len(chunk_items)

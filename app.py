@@ -3,10 +3,12 @@ import json
 import re
 import uuid
 import time
+import secrets
 import requests
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from flask import Flask, request, jsonify, render_template, send_file, redirect
+from flask import Flask, request, jsonify, render_template, send_file, redirect, session, g
+from werkzeug.security import generate_password_hash, check_password_hash
 
 from werkzeug.utils import secure_filename
 
@@ -18,12 +20,237 @@ from shipping_api import (
 )
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
+app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', '0') == '1',
+    PERMANENT_SESSION_LIFETIME=60 * 60 * 12
+)
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 30 * 1024 * 1024  # 30MB
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # DB 초기화
 init_db()
+
+
+@app.before_request
+def require_account_session():
+    public_endpoints = {'auth_page', 'auth_login', 'auth_register', 'auth_join', 'auth_logout'}
+    if request.endpoint == 'static' or request.endpoint in public_endpoints:
+        return None
+
+    role = session.get('account_role')
+    if role == 'admin':
+        if request.endpoint == 'admin_page' or request.endpoint and request.endpoint.startswith('admin_'):
+            return None
+        if request.path.startswith('/api/'):
+            return jsonify({'error': '업체 계정으로 로그인해주세요.'}), 403
+        return redirect('/admin')
+
+    company_id = session.get('company_id')
+    if not company_id:
+        if request.path.startswith('/api/'):
+            return jsonify({'error': '로그인이 필요합니다.'}), 401
+        return redirect('/login')
+    try:
+        g.company_id = int(company_id)
+    except (TypeError, ValueError):
+        session.clear()
+        return jsonify({'error': '로그인 정보가 올바르지 않습니다.'}), 401
+    if request.endpoint == 'admin_page' or request.endpoint and request.endpoint.startswith('admin_'):
+        return jsonify({'error': '관리자 계정으로 로그인해주세요.'}), 403
+    return None
+
+
+@app.route('/login', methods=['GET'])
+def auth_page():
+    return render_template('auth.html')
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    data = request.get_json() or {}
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    admin_username = os.environ.get('ADMIN_USERNAME', '').strip()
+    admin_password = os.environ.get('ADMIN_PASSWORD', '')
+    if admin_username and username == admin_username and admin_password and secrets.compare_digest(password, admin_password):
+        session.clear()
+        session.permanent = True
+        session['account_role'] = 'admin'
+        session['username'] = username
+        return jsonify({'status': 'success', 'role': 'admin', 'redirect': '/admin'})
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''SELECT users.id, users.username, users.password_hash, users.company_id, users.role,
+                          companies.name AS company_name, companies.active AS company_active
+                   FROM users JOIN companies ON companies.id = users.company_id
+                   WHERE users.username = ? AND users.active = 1''', (username,))
+    user = cur.fetchone()
+    conn.close()
+    if not user or not user['company_active'] or not check_password_hash(user['password_hash'], password):
+        return jsonify({'error': '아이디 또는 비밀번호가 올바르지 않습니다.'}), 401
+    session.clear()
+    session.permanent = True
+    session['account_role'] = 'user'
+    session['user_id'] = user['id']
+    session['username'] = user['username']
+    session['company_id'] = user['company_id']
+    session['company_name'] = user['company_name']
+    return jsonify({'status': 'success', 'role': 'user', 'redirect': '/'})
+
+
+def _create_company_account(company_name, username, password, join_code=None):
+    company_name = str(company_name or '').strip()
+    username = str(username or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{3,40}', username):
+        return None, '아이디는 영문·숫자·밑줄·마침표·하이픈으로 3~40자 입력해주세요.'
+    if len(password) < 10:
+        return None, '비밀번호는 10자 이상 입력해주세요.'
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM users WHERE LOWER(username) = LOWER(?)', (username,))
+    if cur.fetchone():
+        conn.close()
+        return None, '이미 사용 중인 아이디입니다.'
+    if join_code:
+        cur.execute('SELECT id, name FROM companies WHERE invite_code = ? AND active = 1', (str(join_code).strip().upper(),))
+        company = cur.fetchone()
+        if not company:
+            conn.close()
+            return None, '초대 코드가 올바르지 않거나 사용할 수 없습니다.'
+        company_id, company_name = company['id'], company['name']
+    else:
+        if not company_name or len(company_name) > 100:
+            return None, '업체명을 1~100자로 입력해주세요.'
+        cur.execute('SELECT id FROM companies WHERE LOWER(name) = LOWER(?)', (company_name,))
+        if cur.fetchone():
+            conn.close()
+            return None, '이미 등록된 업체명입니다. 해당 업체의 초대 코드로 가입해주세요.'
+        invite_code = secrets.token_urlsafe(9).replace('-', '').replace('_', '').upper()[:12]
+        cur.execute('INSERT INTO companies (name, invite_code) VALUES (?, ?)', (company_name, invite_code))
+        company_id = cur.lastrowid
+
+        api_key = os.environ.get('NARDA_API_KEY', '')
+        customer_code = os.environ.get('NARDA_CUSTOMER_CODE', 'TOA')
+        narda_id = os.environ.get('NARDA_ID', 'calroid')
+        cur.execute('''INSERT INTO courier_settings
+            (tenant_id, courier_name, customer_code, api_key, narda_id, sender_name, sender_phone, sender_address, is_mock, stock_only_dispatch)
+            VALUES (?, '나르다', ?, ?, ?, '', '', '', 0, 0)''', (company_id, customer_code, api_key, narda_id))
+        cur.execute('INSERT INTO split_delimiters (tenant_id, symbol) VALUES (?, ?)', (company_id, '+'))
+        for symbol in ['-', '/', ',', '?', '&']:
+            cur.execute('INSERT INTO split_delimiters (tenant_id, symbol) VALUES (?, ?)', (company_id, symbol))
+
+    role = 'owner' if not join_code else 'user'
+    cur.execute('INSERT INTO users (username, password_hash, company_id, role) VALUES (?, ?, ?, ?)',
+                (username, generate_password_hash(password), company_id, role))
+    user_id = cur.lastrowid
+    conn.commit()
+    cur.execute('SELECT invite_code FROM companies WHERE id = ?', (company_id,))
+    code_row = cur.fetchone()
+    invite_code = code_row['invite_code'] if code_row else ''
+    conn.close()
+    return {'user_id': user_id, 'company_id': company_id, 'company_name': company_name, 'username': username, 'invite_code': invite_code}, None
+
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    data = request.get_json() or {}
+    account, error = _create_company_account(data.get('company_name'), data.get('username'), str(data.get('password') or ''))
+    if error:
+        return jsonify({'error': error}), 400
+    session.clear()
+    session.permanent = True
+    session['account_role'] = 'user'
+    session['user_id'] = account['user_id']
+    session['username'] = account['username']
+    session['company_id'] = account['company_id']
+    session['company_name'] = account['company_name']
+    return jsonify({'status': 'success', 'redirect': '/', 'invite_code': account['invite_code']})
+
+
+@app.route('/api/auth/join', methods=['POST'])
+def auth_join():
+    data = request.get_json() or {}
+    account, error = _create_company_account('', data.get('username'), str(data.get('password') or ''), data.get('invite_code'))
+    if error:
+        return jsonify({'error': error}), 400
+    session.clear()
+    session.permanent = True
+    session['account_role'] = 'user'
+    session['user_id'] = account['user_id']
+    session['username'] = account['username']
+    session['company_id'] = account['company_id']
+    session['company_name'] = account['company_name']
+    return jsonify({'status': 'success', 'redirect': '/'})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    session.clear()
+    return jsonify({'status': 'success', 'redirect': '/login'})
+
+
+@app.route('/admin', methods=['GET'])
+def admin_page():
+    if session.get('account_role') != 'admin':
+        return redirect('/login')
+    return render_template('admin.html')
+
+
+@app.route('/api/admin/companies', methods=['GET'])
+def admin_companies():
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''SELECT c.id, c.name, c.invite_code, c.active, c.created_at,
+                          COUNT(DISTINCT o.id) AS order_count,
+                          COUNT(DISTINCT CASE WHEN o.status = '출고완료' THEN o.id END) AS dispatched_count,
+                          COUNT(DISTINCT u.id) AS user_count
+                   FROM companies c
+                   LEFT JOIN orders o ON o.tenant_id = c.id
+                   LEFT JOIN users u ON u.company_id = c.id
+                   GROUP BY c.id, c.name, c.invite_code, c.active, c.created_at
+                   ORDER BY c.id ASC''')
+    companies = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return jsonify(companies)
+
+
+@app.route('/api/admin/orders', methods=['GET'])
+def admin_company_orders():
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    company_id = request.args.get('company_id', '').strip()
+    conn = get_connection()
+    cur = conn.cursor()
+    if company_id and company_id.isdigit():
+        cur.execute('''SELECT o.*, c.name AS company_name FROM orders o
+                       JOIN companies c ON c.id = o.tenant_id WHERE o.tenant_id = ?
+                       AND (o.status IN ('출고완료', '송장발급') OR TRIM(COALESCE(o.tracking_no, '')) != '')
+                       ORDER BY COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)) DESC LIMIT 1000''', (int(company_id),))
+    else:
+        cur.execute('''SELECT o.*, c.name AS company_name FROM orders o
+                       JOIN companies c ON c.id = o.tenant_id
+                       WHERE (o.status IN ('출고완료', '송장발급') OR TRIM(COALESCE(o.tracking_no, '')) != '')
+                       ORDER BY COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)) DESC LIMIT 1000''')
+    orders = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return jsonify(orders)
+
+
+@app.route('/api/company', methods=['GET'])
+def get_current_company():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, name, invite_code FROM companies WHERE id = ?', (g.company_id,))
+    company = cur.fetchone()
+    conn.close()
+    return jsonify(dict(company) if company else {})
 
 
 def format_inventory_log_datetime(value):
@@ -53,25 +280,25 @@ def get_dashboard_stats():
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute('SELECT COUNT(*) as cnt FROM orders')
+    cur.execute('SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ?', (g.company_id,))
     total_orders = cur.fetchone()['cnt']
 
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE status IN ('주문접수', '출고대기')")
+    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status IN ('주문접수', '출고대기')", (g.company_id,))
     pending_tracking = cur.fetchone()['cnt']
 
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE status = '송장발급'")
+    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status = '송장발급'", (g.company_id,))
     issued_tracking = cur.fetchone()['cnt']
 
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE status = '출고완료'")
+    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status = '출고완료'", (g.company_id,))
     completed_dispatch = cur.fetchone()['cnt']
 
-    cur.execute('SELECT COUNT(*) as cnt FROM products WHERE stock_quantity <= safety_stock')
+    cur.execute('SELECT COUNT(*) as cnt FROM products WHERE tenant_id = ? AND stock_quantity <= safety_stock', (g.company_id,))
     low_stock_count = cur.fetchone()['cnt']
 
-    cur.execute('SELECT COUNT(*) as cnt FROM order_items')
+    cur.execute('SELECT COUNT(*) as cnt FROM order_items WHERE tenant_id = ?', (g.company_id,))
     total_items = cur.fetchone()['cnt']
 
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE status = '통관오류'")
+    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status = '통관오류'", (g.company_id,))
     customs_error_count = cur.fetchone()['cnt']
 
     conn.close()
@@ -126,7 +353,7 @@ def get_order_sort_key(o):
 def get_upload_profiles():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT profile_name, mapping_json, header_row FROM upload_profiles ORDER BY profile_name ASC')
+    cur.execute('SELECT profile_name, mapping_json, header_row FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name ASC', (g.company_id,))
     profiles = []
     for row in cur.fetchall():
         profile = dict(row)
@@ -171,13 +398,13 @@ def save_upload_profile():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute('''
-        INSERT INTO upload_profiles (profile_name, mapping_json, header_row)
-        VALUES (?, ?, ?)
-        ON CONFLICT(profile_name) DO UPDATE SET
+        INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(tenant_id, profile_name) DO UPDATE SET
             mapping_json = excluded.mapping_json,
             header_row = excluded.header_row
         RETURNING profile_name
-    ''', (profile_name, json.dumps(clean_mapping, ensure_ascii=False), header_row))
+    ''', (g.company_id, profile_name, json.dumps(clean_mapping, ensure_ascii=False), header_row))
     cur.fetchone()
     conn.commit()
     conn.close()
@@ -192,7 +419,7 @@ def delete_upload_profile():
         return jsonify({'error': '삭제할 업로드 형식을 선택해주세요.'}), 400
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('DELETE FROM upload_profiles WHERE profile_name = ?', (profile_name,))
+    cur.execute('DELETE FROM upload_profiles WHERE profile_name = ? AND tenant_id = ?', (profile_name, g.company_id))
     deleted = cur.rowcount > 0
     conn.commit()
     conn.close()
@@ -294,7 +521,7 @@ def upload_preview():
     if profile_name:
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute('SELECT mapping_json, header_row FROM upload_profiles WHERE profile_name = ?', (profile_name,))
+        cur.execute('SELECT mapping_json, header_row FROM upload_profiles WHERE profile_name = ? AND tenant_id = ?', (profile_name, g.company_id))
         profile_row = cur.fetchone()
         conn.close()
         if not profile_row:
@@ -319,6 +546,7 @@ def upload_preview():
                 parsed = process_excel_file(
                     filepath,
                     batch_name=orig_name,
+                    tenant_id=g.company_id,
                     column_mapping=profile_mapping,
                     header_row=profile_header_row
                 )
@@ -367,7 +595,7 @@ def upload_confirm():
 
     batch_name = data.get('batch_name', '배치주문')
     try:
-        result = save_orders_to_db(data, batch_name)
+        result = save_orders_to_db(data, batch_name, tenant_id=g.company_id)
         return jsonify({
             'status': 'success',
             'message': f"{result['saved_orders']}건의 주문({result['saved_items']}개 품목)이 성공적으로 등록되었습니다.",
@@ -391,8 +619,8 @@ def get_orders():
     conn = get_connection()
     cur = conn.cursor()
 
-    query = 'SELECT * FROM orders WHERE 1=1'
-    params = []
+    query = 'SELECT * FROM orders WHERE tenant_id = ?'
+    params = [g.company_id]
 
     if status == '출고대기':
         query += " AND status IN ('주문접수', '출고대기')"
@@ -419,11 +647,11 @@ def get_orders():
         if search_field == 'product_name':
             query += ''' AND (
                 original_product_name LIKE ? OR original_option_name LIKE ? 
-                OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ?)
+                OR id IN (SELECT order_id FROM order_items WHERE tenant_id = orders.tenant_id AND (item_product_name LIKE ? OR item_option_name LIKE ?))
             )'''
             params.extend([wild, wild, wild, wild])
         elif search_field == 'sku':
-            query += ' AND (id IN (SELECT order_id FROM order_items WHERE sku LIKE ?))'
+            query += ' AND (id IN (SELECT order_id FROM order_items WHERE tenant_id = orders.tenant_id AND sku LIKE ?))'
             params.append(wild)
         elif search_field == 'recipient_name':
             query += ' AND recipient_name LIKE ?'
@@ -445,7 +673,7 @@ def get_orders():
                 order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ? 
                 OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ? OR postal_code LIKE ?
                 OR original_product_name LIKE ? OR original_option_name LIKE ?
-                OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?)
+                OR id IN (SELECT order_id FROM order_items WHERE tenant_id = orders.tenant_id AND (item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?))
             )'''
             params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
 
@@ -461,7 +689,7 @@ def get_orders():
     if orders:
         order_ids = [o['id'] for o in orders]
         placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders}) ORDER BY id ASC', [g.company_id] + order_ids)
         items_by_order = {}
         for it in cur.fetchall():
             oid = it['order_id']
@@ -480,7 +708,7 @@ def get_orders():
 
     # 재고 필터는 같은 요청에서 계산해 브라우저와 DB 왕복을 줄입니다.
     if dispatch_filter in ('출고가능', '재고부족') and orders:
-        cur.execute("SELECT sku, stock_quantity FROM products WHERE sku IS NOT NULL AND sku != ''")
+        cur.execute("SELECT sku, stock_quantity FROM products WHERE tenant_id = ? AND sku IS NOT NULL AND sku != ''", (g.company_id,))
         stock_map = {row['sku']: (row['stock_quantity'] or 0) for row in cur.fetchall()}
 
         for order in orders:
@@ -549,9 +777,9 @@ def get_picking_list():
                    oi.option_quantity, oi.quantity
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
-            WHERE o.status IN ('주문접수', '출고대기')
+            WHERE o.tenant_id = ? AND o.status IN ('주문접수', '출고대기')
             ORDER BY oi.sku ASC, oi.item_product_name ASC, oi.item_option_name ASC, o.id ASC
-        ''')
+        ''', (g.company_id,))
 
         per_order_items = {}
         for row in cur.fetchall():
@@ -639,9 +867,9 @@ def get_dispatched_orders():
     cur = conn.cursor()
 
     query = """SELECT * FROM orders
-        WHERE (status IN ('출고완료', '송장발급')
+        WHERE tenant_id = ? AND (status IN ('출고완료', '송장발급')
            OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))"""
-    params = []
+    params = [g.company_id]
 
     if courier and courier != '전체':
         query += ' AND courier = ?'
@@ -652,7 +880,7 @@ def get_dispatched_orders():
             order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ? 
             OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ?
             OR original_product_name LIKE ? OR original_option_name LIKE ?
-            OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?)
+            OR id IN (SELECT order_id FROM order_items WHERE tenant_id = orders.tenant_id AND (item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?))
         )'''
         wild = f'%{search}%'
         params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
@@ -674,7 +902,7 @@ def get_dispatched_orders():
     if orders:
         order_ids = [o['id'] for o in orders]
         placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', order_ids)
+        cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders}) ORDER BY id ASC', [g.company_id] + order_ids)
         items_by_order = {}
         for it in cur.fetchall():
             oid = it['order_id']
@@ -699,9 +927,9 @@ def get_dispatched_order_dates():
     query = """SELECT COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''),
                     SUBSTR(CAST(created_at AS TEXT), 1, 10)) AS date, COUNT(*) AS count
                FROM orders
-               WHERE (status IN ('출고완료', '송장발급')
+               WHERE tenant_id = ? AND (status IN ('출고완료', '송장발급')
                   OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))"""
-    params = []
+    params = [g.company_id]
     if courier and courier != '전체':
         query += ' AND courier = ?'
         params.append(courier)
@@ -710,7 +938,7 @@ def get_dispatched_order_dates():
             order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ?
             OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ?
             OR original_product_name LIKE ? OR original_option_name LIKE ?
-            OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?)
+            OR id IN (SELECT order_id FROM order_items WHERE tenant_id = orders.tenant_id AND (item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?))
         )'''
         wild = f'%{search}%'
         params.extend([wild] * 11)
@@ -730,7 +958,7 @@ def update_order_weight(order_id):
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('UPDATE orders SET weight = ? WHERE id = ?', (weight, order_id))
+    cur.execute('UPDATE orders SET weight = ? WHERE id = ? AND tenant_id = ?', (weight, order_id, g.company_id))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'weight': weight})
@@ -756,8 +984,8 @@ def edit_order(order_id):
         UPDATE orders 
         SET recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?,
             customs_id = ?, postal_code = ?, address = ?, shipping_memo = ?, weight = ?
-        WHERE id = ?
-    ''', (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code, address, shipping_memo, weight, order_id))
+        WHERE id = ? AND tenant_id = ?
+    ''', (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code, address, shipping_memo, weight, order_id, g.company_id))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'message': '주문 정보가 성공적으로 수정되었습니다.'})
@@ -774,23 +1002,23 @@ def check_dispatch_availability():
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute('SELECT sku, stock_quantity FROM products')
+    cur.execute('SELECT sku, stock_quantity FROM products WHERE tenant_id = ?', (g.company_id,))
     stock_map = {r['sku']: (r['stock_quantity'] or 0) for r in cur.fetchall() if r['sku']}
 
     if order_ids:
         placeholders = ','.join('?' for _ in order_ids)
-        cur.execute(f"SELECT * FROM orders WHERE id IN ({placeholders})", order_ids)
+        cur.execute(f"SELECT * FROM orders WHERE tenant_id = ? AND id IN ({placeholders})", [g.company_id] + order_ids)
         raw_orders = {r['id']: dict(r) for r in cur.fetchall()}
         orders = [raw_orders[oid] for oid in order_ids if oid in raw_orders]
     else:
-        cur.execute("SELECT * FROM orders WHERE status IN ('주문접수', '출고대기', '송장발급') ORDER BY id DESC")
+        cur.execute("SELECT * FROM orders WHERE tenant_id = ? AND status IN ('주문접수', '출고대기', '송장발급') ORDER BY id DESC", (g.company_id,))
         orders = [dict(r) for r in cur.fetchall()]
 
     items_by_order = {}
     if orders:
         o_ids = [o['id'] for o in orders]
         placeholders = ','.join(['?'] * len(o_ids))
-        cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', o_ids)
+        cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders}) ORDER BY id ASC', [g.company_id] + o_ids)
         for it in cur.fetchall():
             oid = it['order_id']
             if oid not in items_by_order:
@@ -868,13 +1096,13 @@ def validate_customs_batch():
             placeholders = ','.join('?' for _ in order_ids)
             cur.execute(f'''
                 SELECT id, order_no, recipient_name, customs_id, recipient_phone1, postal_code
-                FROM orders WHERE id IN ({placeholders})
-            ''', order_ids)
+                FROM orders WHERE tenant_id = ? AND id IN ({placeholders})
+            ''', [g.company_id] + order_ids)
         else:
             cur.execute('''
                 SELECT id, order_no, recipient_name, customs_id, recipient_phone1, postal_code
-                FROM orders WHERE status IN ('주문접수', '출고대기', '송장발급')
-            ''')
+                FROM orders WHERE tenant_id = ? AND status IN ('주문접수', '출고대기', '송장발급')
+            ''', (g.company_id,))
 
         target_orders = [dict(r) for r in cur.fetchall()]
         if not target_orders:
@@ -947,8 +1175,8 @@ def validate_customs_batch():
                             cur.execute('''
                                 UPDATE orders 
                                 SET customs_validation_status = ?, customs_validation_msg = ?
-                                WHERE id = ?
-                            ''', (res_status, res_msg, oid))
+                                WHERE id = ? AND tenant_id = ?
+                            ''', (res_status, res_msg, oid, g.company_id))
                             results.append({
                                 'order_id': oid,
                                 'recipient_name': res_name,
@@ -972,8 +1200,8 @@ def validate_customs_batch():
                         cur.execute('''
                             UPDATE orders 
                             SET customs_validation_status = ?, customs_validation_msg = ?
-                            WHERE id = ?
-                        ''', (fail_status, fail_msg, o['id']))
+                            WHERE id = ? AND tenant_id = ?
+                        ''', (fail_status, fail_msg, o['id'], g.company_id))
                         results.append({
                             'order_id': o['id'],
                             'recipient_name': o['recipient_name'],
@@ -987,8 +1215,8 @@ def validate_customs_batch():
                     cur.execute('''
                         UPDATE orders 
                         SET customs_validation_status = ?, customs_validation_msg = ?
-                        WHERE id = ?
-                    ''', ('장애', f'통신 오류: {str(e)}', o['id']))
+                        WHERE id = ? AND tenant_id = ?
+                    ''', ('장애', f'통신 오류: {str(e)}', o['id'], g.company_id))
                     results.append({
                         'order_id': o['id'],
                         'status': '장애',
@@ -1017,8 +1245,8 @@ def delete_orders():
     conn = get_connection()
     cur = conn.cursor()
     placeholders = ','.join(['?'] * len(order_ids))
-    cur.execute(f'DELETE FROM order_items WHERE order_id IN ({placeholders})', order_ids)
-    cur.execute(f'DELETE FROM orders WHERE id IN ({placeholders})', order_ids)
+    cur.execute(f'DELETE FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders})', [g.company_id] + order_ids)
+    cur.execute(f'DELETE FROM orders WHERE tenant_id = ? AND id IN ({placeholders})', [g.company_id] + order_ids)
     conn.commit()
     conn.close()
 
@@ -1039,7 +1267,7 @@ def bulk_update_weight():
     conn = get_connection()
     cur = conn.cursor()
     placeholders = ','.join(['?'] * len(order_ids))
-    cur.execute(f'UPDATE orders SET weight = ? WHERE id IN ({placeholders})', [weight] + order_ids)
+    cur.execute(f'UPDATE orders SET weight = ? WHERE tenant_id = ? AND id IN ({placeholders})', [weight, g.company_id] + order_ids)
     conn.commit()
     conn.close()
 
@@ -1053,7 +1281,7 @@ def api_issue_tracking():
     if not order_ids:
         return jsonify({'error': '송장을 발급할 주문을 선택하세요.'}), 400
 
-    res = issue_tracking_numbers(order_ids)
+    res = issue_tracking_numbers(order_ids, tenant_id=g.company_id)
     if isinstance(res, dict):
         updated = res.get('updated_orders', [])
         failed = res.get('failed_orders', [])
@@ -1077,7 +1305,7 @@ def api_dispatch():
     if not order_ids:
         return jsonify({'error': '출고 완료할 주문을 선택하세요.'}), 400
 
-    res = complete_dispatch(order_ids)
+    res = complete_dispatch(order_ids, tenant_id=g.company_id)
     return jsonify({
         'status': 'success',
         'message': f"{res['dispatched_orders']}건 발송 완료 처리 및 {res['deducted_items']}개 품목 재고가 자동 차감되었습니다.",
@@ -1089,7 +1317,7 @@ def api_export_excel():
     order_ids_str = request.args.get('order_ids', '')
     order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
     column_order = [key.strip() for key in request.args.get('column_order', '').split(',') if key.strip()]
-    excel_buf = export_shipping_excel(order_ids if order_ids else None, column_order=column_order or None)
+    excel_buf = export_shipping_excel(order_ids if order_ids else None, column_order=column_order or None, tenant_id=g.company_id)
     return send_file(
         excel_buf,
         as_attachment=True,
@@ -1110,10 +1338,10 @@ def api_shipping_batches():
             SELECT id, order_no, courier, tracking_no, invoice_pdf_url, recipient_name,
                    created_at, dispatched_at, status
             FROM orders
-            WHERE LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+            WHERE tenant_id = ? AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
               AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
             ORDER BY id DESC
-        ''')
+        ''', (g.company_id,))
         orders = [dict(r) for r in cur.fetchall()]
         if not orders:
             return jsonify([])
@@ -1160,7 +1388,7 @@ def api_shipping_labels():
 
     try:
         # 발송자 정보
-        cur.execute('SELECT * FROM courier_settings LIMIT 1')
+        cur.execute('SELECT * FROM courier_settings WHERE tenant_id = ? ORDER BY id LIMIT 1', (g.company_id,))
         sender = cur.fetchone()
         sender_info = dict(sender) if sender else {
             'sender_name': 'TOA',
@@ -1171,24 +1399,24 @@ def api_shipping_labels():
         if order_ids:
             placeholders = ','.join(['?'] * len(order_ids))
             cur.execute(f'''SELECT * FROM orders
-                WHERE id IN ({placeholders})
+                WHERE tenant_id = ? AND id IN ({placeholders})
                   AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
                   AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
-                ORDER BY id ASC''', order_ids)
+                ORDER BY id ASC''', [g.company_id] + order_ids)
         else:
             cur.execute('''
                 SELECT * FROM orders
-                WHERE LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+                WHERE tenant_id = ? AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
                   AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
                 ORDER BY id DESC LIMIT 150
-            ''')
+            ''', (g.company_id,))
 
         orders = [dict(row) for row in cur.fetchall()]
 
         if orders:
             oids = [o['id'] for o in orders]
             placeholders = ','.join(['?'] * len(oids))
-            cur.execute(f'SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY id ASC', oids)
+            cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders}) ORDER BY id ASC', [g.company_id] + oids)
             items_by_order = {}
             for it in cur.fetchall():
                 oid = it['order_id']
@@ -1215,15 +1443,15 @@ def api_narda_pdf_bundle():
             return "유효한 주문 ID가 없습니다.", 400
         placeholders = ','.join(['?'] * len(order_ids))
         cur.execute(f'''SELECT id, order_no, invoice_pdf_url FROM orders
-            WHERE id IN ({placeholders})
+            WHERE tenant_id = ? AND id IN ({placeholders})
               AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
-              AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != '' ''', order_ids)
+              AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != '' ''', [g.company_id] + order_ids)
     else:
         # 지정되지 않은 경우 최근 발급된 나르다 PDF 송장 주문 최대 200건 조회
         cur.execute('''SELECT id, order_no, invoice_pdf_url FROM orders
-            WHERE LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
+            WHERE tenant_id = ? AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
               AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
-            ORDER BY id DESC LIMIT 200''')
+            ORDER BY id DESC LIMIT 200''', (g.company_id,))
 
     raw_rows = cur.fetchall()
     conn.close()
@@ -1354,17 +1582,17 @@ def get_inventory():
                  SELECT SUM(oi.quantity)
                  FROM order_items oi 
                  JOIN orders o ON oi.order_id = o.id 
-                 WHERE oi.sku = p.sku AND o.status = '출고완료'
+                 WHERE oi.tenant_id = ? AND o.tenant_id = ? AND oi.sku = p.sku AND o.status = '출고완료'
              ), 0)
             ) AS total_dispatched_quantity
-        FROM products p 
+        FROM products p WHERE p.tenant_id = ?
         ORDER BY p.id DESC
-    ''')
+    ''', (g.company_id, g.company_id, g.company_id))
     import math
     raw_products = [dict(p) for p in cur.fetchall()]
     products = []
     for p in raw_products:
-        cur.execute('SELECT * FROM product_options WHERE sku = ? OR product_id = ? ORDER BY id ASC', (p['sku'], p['id']))
+        cur.execute('SELECT * FROM product_options WHERE tenant_id = ? AND (sku = ? OR product_id = ?) ORDER BY id ASC', (g.company_id, p['sku'], p['id']))
         raw_options = [dict(row) for row in cur.fetchall()]
         cleaned_options = []
         for opt in raw_options:
@@ -1405,7 +1633,7 @@ def search_product_by_barcode():
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM products WHERE sku = ? LIMIT 1', (barcode,))
+    cur.execute('SELECT * FROM products WHERE tenant_id = ? AND sku = ? LIMIT 1', (g.company_id, barcode))
     prod = cur.fetchone()
     conn.close()
 
@@ -1433,7 +1661,7 @@ def barcode_stock_in():
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM products WHERE sku = ?', (sku,))
+    cur.execute('SELECT * FROM products WHERE tenant_id = ? AND sku = ?', (g.company_id, sku))
     prod = cur.fetchone()
 
     if prod:
@@ -1447,8 +1675,8 @@ def barcode_stock_in():
                 product_url = CASE WHEN ? != '' THEN ? ELSE product_url END,
                 unit_price = CASE WHEN ? > 0 THEN ? ELSE unit_price END,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        ''', (new_stock, product_name, product_name, english_name, english_name, hs_code, hs_code, product_url, product_url, unit_price, unit_price, prod['id']))
+            WHERE id = ? AND tenant_id = ?
+        ''', (new_stock, product_name, product_name, english_name, english_name, hs_code, hs_code, product_url, product_url, unit_price, unit_price, prod['id'], g.company_id))
         prod_id = prod['id']
         p_name = product_name or prod['product_name']
     else:
@@ -1456,9 +1684,9 @@ def barcode_stock_in():
             product_name = f"상품_{sku}"
         new_stock = qty
         cur.execute('''
-            INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, product_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (sku, product_name, '', english_name, hs_code, unit_price, new_stock, product_url))
+            INSERT INTO products (tenant_id, sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, product_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (g.company_id, sku, product_name, '', english_name, hs_code, unit_price, new_stock, product_url))
         prod_id = cur.lastrowid
         p_name = product_name
 
@@ -1467,9 +1695,9 @@ def barcode_stock_in():
     # 입고 이력 로그
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     cur.execute('''
-        INSERT INTO inventory_logs (product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (prod_id, sku, p_name, '', '입고', qty, new_stock, memo, now_str))
+        INSERT INTO inventory_logs (tenant_id, product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (g.company_id, prod_id, sku, p_name, '', '입고', qty, new_stock, memo, now_str))
 
     conn.commit()
     conn.close()
@@ -1497,7 +1725,7 @@ def batch_stock_in():
         if not sku or qty <= 0:
             continue
 
-        cur.execute('SELECT * FROM products WHERE sku = ?', (sku,))
+        cur.execute('SELECT * FROM products WHERE tenant_id = ? AND sku = ?', (g.company_id, sku))
         prod = cur.fetchone()
 
         if prod:
@@ -1508,24 +1736,24 @@ def batch_stock_in():
                     product_name = CASE WHEN ? != '' THEN ? ELSE product_name END,
                     unit_price = CASE WHEN ? > 0 THEN ? ELSE unit_price END,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (new_stock, p_name, p_name, unit_price, unit_price, prod['id']))
+                WHERE id = ? AND tenant_id = ?
+            ''', (new_stock, p_name, p_name, unit_price, unit_price, prod['id'], g.company_id))
             prod_id = prod['id']
             actual_name = p_name or prod['product_name']
         else:
             actual_name = p_name or f"상품_{sku}"
             new_stock = qty
             cur.execute('''
-                INSERT INTO products (sku, product_name, option_name, unit_price, stock_quantity)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (sku, actual_name, '', unit_price, new_stock))
+                INSERT INTO products (tenant_id, sku, product_name, option_name, unit_price, stock_quantity)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (g.company_id, sku, actual_name, '', unit_price, new_stock))
             prod_id = cur.lastrowid
 
 
         cur.execute('''
-            INSERT INTO inventory_logs (product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (prod_id, sku, actual_name, '', '입고', qty, new_stock, '일괄 바코드 스캔 입고', now_str))
+            INSERT INTO inventory_logs (tenant_id, product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (g.company_id, prod_id, sku, actual_name, '', '입고', qty, new_stock, '일괄 바코드 스캔 입고', now_str))
 
         success_count += 1
         total_qty += qty
@@ -1669,7 +1897,7 @@ def upload_products_excel():
             if not sku:
                 sku = f"SKU-{abs(hash(name)) % 1000000:06d}"
 
-            cur.execute('SELECT * FROM products WHERE sku = ?', (sku,))
+            cur.execute('SELECT * FROM products WHERE tenant_id = ? AND sku = ?', (g.company_id, sku))
             existing = cur.fetchone()
 
             if existing:
@@ -1682,44 +1910,44 @@ def upload_products_excel():
                         stock_quantity = CASE WHEN ? > 0 THEN ? ELSE stock_quantity END,
                         unit_price = CASE WHEN ? > 0 THEN ? ELSE unit_price END,
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                ''', (name, name, eng, eng, hs, hs, url, url, stock, stock, price, price, existing['id']))
+                    WHERE id = ? AND tenant_id = ?
+                ''', (name, name, eng, eng, hs, hs, url, url, stock, stock, price, price, existing['id'], g.company_id))
                 prod_id = existing['id']
             else:
                 cur.execute('''
-                    INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (sku, name or f"상품_{sku}", '', eng, hs, price, stock, dispatched, url))
+                    INSERT INTO products (tenant_id, sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (g.company_id, sku, name or f"상품_{sku}", '', eng, hs, price, stock, dispatched, url))
                 prod_id = cur.lastrowid
 
                 cur.execute('''
-                    INSERT INTO inventory_logs (product_id, sku, product_name, change_type, change_qty, resulting_stock, memo, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (prod_id, sku, name or sku, '엑셀등록', stock, stock, '엑셀 상품 일괄 등록', now_str))
+                    INSERT INTO inventory_logs (tenant_id, product_id, sku, product_name, change_type, change_qty, resulting_stock, memo, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (g.company_id, prod_id, sku, name or sku, '엑셀등록', stock, stock, '엑셀 상품 일괄 등록', now_str))
 
             # 옵션 마스터(product_options)에 옵션 등록
             if name:
-                cur.execute('SELECT id FROM product_options WHERE sku = ? AND option_name = ?', (sku, name))
+                cur.execute('SELECT id FROM product_options WHERE tenant_id = ? AND sku = ? AND option_name = ?', (g.company_id, sku, name))
                 opt_row = cur.fetchone()
                 if opt_row:
                     cur.execute('''
                         UPDATE product_options
                         SET unit_price = ?, dispatched_quantity = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                    ''', (price, dispatched, opt_row['id']))
+                        WHERE id = ? AND tenant_id = ?
+                    ''', (price, dispatched, opt_row['id'], g.company_id))
                 else:
                     cur.execute('''
-                        INSERT INTO product_options (product_id, sku, option_name, unit_price, dispatched_quantity)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (prod_id, sku, name, price, dispatched))
+                        INSERT INTO product_options (tenant_id, product_id, sku, option_name, unit_price, dispatched_quantity)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (g.company_id, prod_id, sku, name, price, dispatched))
 
                 # 미등록 상품 목록에 있으면 등록 완료 처리
-                cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE combined_name = ? OR product_name = ?", (name, name))
+                cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE tenant_id = ? AND (combined_name = ? OR product_name = ?)", (g.company_id, name, name))
 
             saved_count += 1
 
         from excel_processor import sync_order_items_sku
-        sync_order_items_sku(conn)
+        sync_order_items_sku(conn, tenant_id=g.company_id)
 
         conn.commit()
         conn.close()
@@ -1751,18 +1979,18 @@ def save_product():
             cur.execute('''
                 UPDATE products
                 SET sku = ?, product_name = ?, english_name = ?, hs_code = ?, unit_price = ?, stock_quantity = ?, dispatched_quantity = ?, product_url = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (sku, product_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url, prod_id))
+                WHERE id = ? AND tenant_id = ?
+            ''', (sku, product_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url, prod_id, g.company_id))
         else:
             cur.execute('''
-                INSERT INTO products (sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (sku, product_name, '', english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url))
+                INSERT INTO products (tenant_id, sku, product_name, option_name, english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (g.company_id, sku, product_name, '', english_name, hs_code, unit_price, stock_quantity, dispatched_quantity, product_url))
             prod_id = cur.lastrowid
 
         # 옵션 목록 갱신 (전달된 옵션이 있는 경우)
         if options is not None:
-            cur.execute('DELETE FROM product_options WHERE sku = ? OR product_id = ?', (sku, prod_id))
+            cur.execute('DELETE FROM product_options WHERE tenant_id = ? AND (sku = ? OR product_id = ?)', (g.company_id, sku, prod_id))
             for opt in options:
                 opt_name = str(opt.get('option_name', '')).strip()
                 if not opt_name:
@@ -1777,18 +2005,18 @@ def save_product():
                     opt_qty = 1
 
                 cur.execute('''
-                    INSERT INTO product_options (product_id, sku, option_name, unit_price, dispatched_quantity)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (prod_id, sku, opt_name, opt_price, opt_qty))
+                    INSERT INTO product_options (tenant_id, product_id, sku, option_name, unit_price, dispatched_quantity)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (g.company_id, prod_id, sku, opt_name, opt_price, opt_qty))
 
-                cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE combined_name = ? OR product_name = ?", (opt_name, opt_name))
+                cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE tenant_id = ? AND (combined_name = ? OR product_name = ?)", (g.company_id, opt_name, opt_name))
 
         # 미등록 상품 테이블 상태 업데이트
-        cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE combined_name = ? OR product_name = ?", (product_name, product_name))
+        cur.execute("UPDATE unregistered_products SET status = 'registered' WHERE tenant_id = ? AND (combined_name = ? OR product_name = ?)", (g.company_id, product_name, product_name))
 
         # 주문 품목들의 바코드 동기화
         from excel_processor import sync_order_items_sku
-        sync_order_items_sku(conn)
+        sync_order_items_sku(conn, tenant_id=g.company_id)
 
         conn.commit()
         conn.close()
@@ -1806,9 +2034,9 @@ def delete_products_batch():
     conn = get_connection()
     cur = conn.cursor()
     placeholders = ','.join(['?'] * len(product_ids))
-    cur.execute(f'DELETE FROM product_options WHERE product_id IN ({placeholders})', product_ids)
-    cur.execute(f'DELETE FROM inventory_logs WHERE product_id IN ({placeholders})', product_ids)
-    cur.execute(f'DELETE FROM products WHERE id IN ({placeholders})', product_ids)
+    cur.execute(f'DELETE FROM product_options WHERE tenant_id = ? AND product_id IN ({placeholders})', [g.company_id] + product_ids)
+    cur.execute(f'DELETE FROM inventory_logs WHERE tenant_id = ? AND product_id IN ({placeholders})', [g.company_id] + product_ids)
+    cur.execute(f'DELETE FROM products WHERE tenant_id = ? AND id IN ({placeholders})', [g.company_id] + product_ids)
     conn.commit()
     conn.close()
 
@@ -1818,9 +2046,9 @@ def delete_products_batch():
 def delete_product(prod_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('DELETE FROM product_options WHERE product_id = ?', (prod_id,))
-    cur.execute('DELETE FROM inventory_logs WHERE product_id = ?', (prod_id,))
-    cur.execute('DELETE FROM products WHERE id = ?', (prod_id,))
+    cur.execute('DELETE FROM product_options WHERE tenant_id = ? AND product_id = ?', (g.company_id, prod_id))
+    cur.execute('DELETE FROM inventory_logs WHERE tenant_id = ? AND product_id = ?', (g.company_id, prod_id))
+    cur.execute('DELETE FROM products WHERE tenant_id = ? AND id = ?', (g.company_id, prod_id))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
@@ -1829,7 +2057,7 @@ def delete_product(prod_id):
 def get_unregistered_products():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM unregistered_products WHERE status = 'pending' ORDER BY order_count DESC, id DESC")
+    cur.execute("SELECT * FROM unregistered_products WHERE tenant_id = ? AND status = 'pending' ORDER BY order_count DESC, id DESC", (g.company_id,))
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return jsonify(rows)
@@ -1838,7 +2066,7 @@ def get_unregistered_products():
 def ignore_unregistered_product(item_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("UPDATE unregistered_products SET status = 'ignored' WHERE id = ?", (item_id,))
+    cur.execute("UPDATE unregistered_products SET status = 'ignored' WHERE tenant_id = ? AND id = ?", (g.company_id, item_id))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
@@ -1854,7 +2082,7 @@ def move_orders_status():
     conn = get_connection()
     cur = conn.cursor()
     placeholders = ','.join(['?'] * len(order_ids))
-    cur.execute(f'UPDATE orders SET status = ? WHERE id IN ({placeholders})', [target_status] + order_ids)
+    cur.execute(f'UPDATE orders SET status = ? WHERE tenant_id = ? AND id IN ({placeholders})', [target_status, g.company_id] + order_ids)
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'moved_count': len(order_ids), 'target_status': target_status})
@@ -1869,8 +2097,8 @@ def get_inventory_logs():
 
     conn = get_connection()
     cur = conn.cursor()
-    query = 'SELECT * FROM inventory_logs WHERE 1=1'
-    params = []
+    query = 'SELECT * FROM inventory_logs WHERE tenant_id = ?'
+    params = [g.company_id]
 
     if change_type and change_type != '전체':
         if change_type == '출고':
@@ -1910,8 +2138,8 @@ def get_inventory_log_dates():
     change_type = request.args.get('type', '').strip()
     conn = get_connection()
     cur = conn.cursor()
-    query = "SELECT SUBSTR(CAST(created_at AS TEXT), 1, 10) AS date, COUNT(*) AS count FROM inventory_logs WHERE 1=1"
-    params = []
+    query = "SELECT SUBSTR(CAST(created_at AS TEXT), 1, 10) AS date, COUNT(*) AS count FROM inventory_logs WHERE tenant_id = ?"
+    params = [g.company_id]
     if change_type and change_type != '전체':
         if change_type == '출고':
             query += " AND change_type IN ('출고', '주문출고')"
@@ -1940,10 +2168,10 @@ def export_inventory_logs():
     if ids_str:
         ids = [int(x) for x in ids_str.split(',') if x.strip().isdigit()]
         placeholders = ','.join(['?'] * len(ids))
-        cur.execute(f'SELECT * FROM inventory_logs WHERE id IN ({placeholders}) ORDER BY id ASC', ids)
+        cur.execute(f'SELECT * FROM inventory_logs WHERE tenant_id = ? AND id IN ({placeholders}) ORDER BY id ASC', [g.company_id] + ids)
     elif re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date):
-        query = 'SELECT * FROM inventory_logs WHERE SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
-        params = [selected_date]
+        query = 'SELECT * FROM inventory_logs WHERE tenant_id = ? AND SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
+        params = [g.company_id, selected_date]
         if change_type and change_type != '전체':
             if change_type == '출고':
                 query += " AND change_type IN ('출고', '주문출고')"
@@ -1956,7 +2184,7 @@ def export_inventory_logs():
             params.extend([wild, wild, wild])
         cur.execute(query + ' ORDER BY id ASC', params)
     else:
-        cur.execute('SELECT * FROM (SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 1000) recent_logs ORDER BY id ASC')
+        cur.execute('SELECT * FROM (SELECT * FROM inventory_logs WHERE tenant_id = ? ORDER BY id DESC LIMIT 1000) recent_logs ORDER BY id ASC', (g.company_id,))
 
     logs = cur.fetchall()
     conn.close()
@@ -2003,7 +2231,7 @@ def delete_inventory_logs():
     conn = get_connection()
     cur = conn.cursor()
     placeholders = ','.join(['?'] * len(log_ids))
-    cur.execute(f'DELETE FROM inventory_logs WHERE id IN ({placeholders})', log_ids)
+    cur.execute(f'DELETE FROM inventory_logs WHERE tenant_id = ? AND id IN ({placeholders})', [g.company_id] + log_ids)
     conn.commit()
     conn.close()
 
@@ -2014,7 +2242,7 @@ def delete_inventory_logs():
 def get_bundles():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM bundle_rules ORDER BY id DESC')
+    cur.execute('SELECT * FROM bundle_rules WHERE tenant_id = ? ORDER BY id DESC', (g.company_id,))
     rules = [dict(r) for r in cur.fetchall()]
     conn.close()
     return jsonify(rules)
@@ -2037,10 +2265,10 @@ def add_bundle():
     cur = conn.cursor()
     cur.execute('''
         INSERT INTO bundle_rules (
-            rule_name, source_product_name, source_option_name,
+            tenant_id, rule_name, source_product_name, source_option_name,
             target_product_name, target_option_name, target_sku, multiplier
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (rule_name or f"{source_o} -> {target_o}", source_p or '*', source_o, target_p, target_o, target_sku, multiplier))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (g.company_id, rule_name or f"{source_o} -> {target_o}", source_p or '*', source_o, target_p, target_o, target_sku, multiplier))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
@@ -2049,7 +2277,7 @@ def add_bundle():
 def delete_bundle(rule_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('DELETE FROM bundle_rules WHERE id = ?', (rule_id,))
+    cur.execute('DELETE FROM bundle_rules WHERE tenant_id = ? AND id = ?', (g.company_id, rule_id))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success'})
@@ -2060,7 +2288,7 @@ def get_delimiters():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        cur.execute('SELECT symbol FROM split_delimiters WHERE tenant_id = ? ORDER BY id ASC', (g.company_id,))
         delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
         if not delimiters:
             delimiters = ['+', '-', '/', ',', '?', '&']
@@ -2079,9 +2307,9 @@ def add_delimiter():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute('INSERT INTO split_delimiters (symbol) VALUES (?) ON CONFLICT DO NOTHING', (symbol,))
+        cur.execute('INSERT INTO split_delimiters (tenant_id, symbol) VALUES (?, ?) ON CONFLICT DO NOTHING', (g.company_id, symbol))
         conn.commit()
-        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        cur.execute('SELECT symbol FROM split_delimiters WHERE tenant_id = ? ORDER BY id ASC', (g.company_id,))
         delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
         return jsonify({'status': 'success', 'message': f"'{symbol}' 기호가 추가되었습니다.", 'delimiters': delimiters})
     except Exception as e:
@@ -2098,9 +2326,9 @@ def delete_delimiter():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute('DELETE FROM split_delimiters WHERE symbol = ?', (symbol,))
+        cur.execute('DELETE FROM split_delimiters WHERE tenant_id = ? AND symbol = ?', (g.company_id, symbol))
         conn.commit()
-        cur.execute('SELECT symbol FROM split_delimiters ORDER BY id ASC')
+        cur.execute('SELECT symbol FROM split_delimiters WHERE tenant_id = ? ORDER BY id ASC', (g.company_id,))
         delimiters = [r['symbol'] if (isinstance(r, dict) or hasattr(r, '__getitem__')) else r[0] for r in cur.fetchall()]
         return jsonify({'status': 'success', 'message': f"'{symbol}' 기호가 삭제되었습니다.", 'delimiters': delimiters})
     except Exception as e:
@@ -2113,7 +2341,7 @@ def delete_delimiter():
 def get_settings():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM courier_settings LIMIT 1')
+    cur.execute('SELECT * FROM courier_settings WHERE tenant_id = ? ORDER BY id LIMIT 1', (g.company_id,))
     row = cur.fetchone()
     conn.close()
     return jsonify(dict(row) if row else {})
@@ -2127,12 +2355,13 @@ def save_settings():
         UPDATE courier_settings
         SET courier_name = '나르다', customer_code = ?, api_key = ?, narda_id = ?,
             is_mock = 0, stock_only_dispatch = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = (SELECT id FROM courier_settings LIMIT 1)
+        WHERE tenant_id = ?
     ''', (
         data.get('customer_code', ''),
         data.get('api_key', ''),
         data.get('narda_id', 'calroid'),
-        1 if data.get('stock_only_dispatch') else 0
+        1 if data.get('stock_only_dispatch') else 0,
+        g.company_id
     ))
     conn.commit()
     conn.close()
