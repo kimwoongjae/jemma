@@ -4159,7 +4159,9 @@
                 return;
             }
         }
-        window.print();
+        // PDF는 송장센터 진입 시 미리 내려받지 않습니다. 사용자가 인쇄를
+        // 요청했을 때 공식 통합 PDF 탭을 열어 중복 다운로드를 방지합니다.
+        openCurrentBatchNardaPdf();
     }
 
     async function loadShippingLabels(specifiedIds = null) {
@@ -4199,11 +4201,12 @@
             if (hasPdfOrders.length > 0) {
                 const pdfIds = hasPdfOrders.map(o => o.id);
                 currentBatchOrderIds = pdfIds;
-                const bundleUrl = `/api/shipping/narda-pdf-bundle?order_ids=${pdfIds.join(',')}`;
 
                 if (pdfFrame && pdfContainer) {
-                    pdfFrame.src = bundleUrl;
-                    pdfContainer.style.display = 'block';
+                    // 배치 선택 시 무거운 PDF 다운로드/병합을 자동 실행하지 않습니다.
+                    // 통합 출력 버튼을 눌렀을 때 새 탭에서 한 번만 요청합니다.
+                    pdfFrame.src = '';
+                    pdfContainer.style.display = 'none';
                 }
                 if (btnPdf) {
                     btnPdf.style.display = 'inline-block';

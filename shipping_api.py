@@ -252,7 +252,8 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         ''', active_ids)
     conn.commit()
 
-    # 나르다 인증 응답 안정성을 위해 API 동시 요청은 최대 3건으로 제한합니다.
+    # 실제 나르다 API 전송 10건을 동시 5건으로 확인했고 모두 성공하여,
+    # 처리량을 높이되 요청 시간 초과 위험을 줄이도록 동시 요청을 5건으로 제한합니다.
     def call_api_single(item):
         if item.get('is_cached'):
             return (item['oid'], item['ord_dict'], {
@@ -267,7 +268,7 @@ def issue_tracking_numbers(order_ids, courier_name=None):
         api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
         return (item['oid'], item['ord_dict'], api_res)
 
-    workers_count = min(3, len(orders_data)) if orders_data else 1
+    workers_count = min(5, len(orders_data)) if orders_data else 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers_count) as executor:
         api_results = list(executor.map(call_api_single, orders_data))
 
