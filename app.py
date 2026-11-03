@@ -121,6 +121,83 @@ def get_order_sort_key(o):
         -o.get('id', 0)
     )
 
+
+@app.route('/api/upload-profiles', methods=['GET'])
+def get_upload_profiles():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT profile_name, mapping_json, header_row FROM upload_profiles ORDER BY profile_name ASC')
+    profiles = []
+    for row in cur.fetchall():
+        profile = dict(row)
+        try:
+            profile['mapping'] = json.loads(profile.pop('mapping_json') or '{}')
+        except (TypeError, ValueError):
+            profile['mapping'] = {}
+        profiles.append(profile)
+    conn.close()
+    return jsonify(profiles)
+
+
+@app.route('/api/upload-profiles', methods=['POST'])
+def save_upload_profile():
+    data = request.get_json() or {}
+    profile_name = str(data.get('profile_name') or '').strip()
+    mapping = data.get('mapping') or {}
+    try:
+        header_row = int(data.get('header_row', 1))
+    except (TypeError, ValueError):
+        return jsonify({'error': '헤더 행은 0 이상의 숫자로 입력해주세요.'}), 400
+    if not profile_name:
+        return jsonify({'error': '업로드 형식 이름을 입력해주세요.'}), 400
+    if len(profile_name) > 80:
+        return jsonify({'error': '업로드 형식 이름은 80자 이내로 입력해주세요.'}), 400
+    if not isinstance(mapping, dict):
+        return jsonify({'error': '열 연결 설정 형식이 올바르지 않습니다.'}), 400
+    if header_row < 0 or header_row > 100:
+        return jsonify({'error': '헤더 행은 0부터 100 사이로 입력해주세요.'}), 400
+
+    allowed_fields = {
+        'order_no', 'courier', 'tracking_no', 'shipping_method', 'product_name',
+        'option_name', 'quantity', 'recipient_name', 'recipient_phone1',
+        'recipient_phone2', 'customs_id', 'postal_code', 'address', 'shipping_memo'
+    }
+    clean_mapping = {
+        key: str(value).strip()[:120]
+        for key, value in mapping.items()
+        if key in allowed_fields and str(value or '').strip()
+    }
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        INSERT INTO upload_profiles (profile_name, mapping_json, header_row)
+        VALUES (?, ?, ?)
+        ON CONFLICT(profile_name) DO UPDATE SET
+            mapping_json = excluded.mapping_json,
+            header_row = excluded.header_row
+        RETURNING profile_name
+    ''', (profile_name, json.dumps(clean_mapping, ensure_ascii=False), header_row))
+    cur.fetchone()
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success', 'profile_name': profile_name})
+
+
+@app.route('/api/upload-profiles/delete', methods=['POST'])
+def delete_upload_profile():
+    data = request.get_json() or {}
+    profile_name = str(data.get('profile_name') or '').strip()
+    if not profile_name:
+        return jsonify({'error': '삭제할 업로드 형식을 선택해주세요.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM upload_profiles WHERE profile_name = ?', (profile_name,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success', 'deleted': deleted})
+
 @app.route('/api/upload/preview', methods=['POST'])
 def upload_preview():
     # 단일 또는 복수 파일 지원 ('files' 또는 'file')
@@ -141,6 +218,23 @@ def upload_preview():
     batch_names = []
     detected_cols = {}
     all_unregistered = {}
+    profile_name = str(request.form.get('upload_profile') or '').strip()
+    profile_mapping = {}
+    profile_header_row = 1
+
+    if profile_name:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT mapping_json, header_row FROM upload_profiles WHERE profile_name = ?', (profile_name,))
+        profile_row = cur.fetchone()
+        conn.close()
+        if not profile_row:
+            return jsonify({'error': '선택한 업로드 형식을 찾을 수 없습니다. 형식 목록을 새로고침한 뒤 다시 선택해주세요.'}), 400
+        try:
+            profile_mapping = json.loads(profile_row['mapping_json'] or '{}')
+        except (TypeError, ValueError):
+            profile_mapping = {}
+        profile_header_row = profile_row['header_row'] if profile_row['header_row'] is not None else 1
 
     try:
         for idx, file in enumerate(valid_files):
@@ -153,7 +247,12 @@ def upload_preview():
             file.save(filepath)
 
             try:
-                parsed = process_excel_file(filepath, batch_name=orig_name)
+                parsed = process_excel_file(
+                    filepath,
+                    batch_name=orig_name,
+                    column_mapping=profile_mapping,
+                    header_row=profile_header_row
+                )
                 total_excel_rows += parsed.get('total_excel_rows', 0)
                 total_split_items += parsed.get('total_split_items', 0)
                 batch_names.append(orig_name)
@@ -178,6 +277,7 @@ def upload_preview():
 
         preview_data = {
             'batch_name': ', '.join(batch_names) if len(batch_names) <= 2 else f"{batch_names[0]} 외 {len(batch_names)-1}개 파일",
+            'upload_profile': profile_name,
             'total_files': len(valid_files),
             'total_excel_rows': total_excel_rows,
             'total_split_items': total_split_items,

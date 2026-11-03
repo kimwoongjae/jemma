@@ -37,6 +37,26 @@ def detect_columns(df_columns):
         mapping[key] = found
     return mapping
 
+
+def resolve_upload_column(df_columns, reference):
+    """Resolve an Excel column letter (A, H, AA) or an exact header name."""
+    reference = str(reference or '').strip()
+    if not reference:
+        return None
+
+    if re.fullmatch(r'[A-Za-z]+', reference):
+        column_index = 0
+        for char in reference.upper():
+            column_index = column_index * 26 + (ord(char) - ord('A') + 1)
+        column_index -= 1
+        return df_columns[column_index] if 0 <= column_index < len(df_columns) else None
+
+    normalized_reference = re.sub(r'\s+', '', reference).lower()
+    for column in df_columns:
+        if re.sub(r'\s+', '', str(column)).lower() == normalized_reference:
+            return column
+    return None
+
 def generate_sku(product_name, option_name):
     # 영문/숫자/한글 축약으로 고유 SKU 생성
     clean_p = re.sub(r'\[.*?\]|\(.*?\)', '', product_name).strip()
@@ -326,12 +346,27 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
 
     return items
 
-def process_excel_file(file_path, batch_name=None):
+def process_excel_file(file_path, batch_name=None, column_mapping=None, header_row=1):
     if not batch_name:
         batch_name = os.path.basename(file_path)
 
-    df = pd.read_excel(file_path, dtype=str)
+    try:
+        header_row = max(0, int(header_row))
+    except (TypeError, ValueError):
+        header_row = 1
+    df = pd.read_excel(file_path, dtype=str, header=None if header_row == 0 else header_row - 1)
     col_map = detect_columns(df.columns)
+    invalid_profile_columns = []
+    for key, reference in (column_mapping or {}).items():
+        if key not in HEADER_MAP or not str(reference or '').strip():
+            continue
+        resolved = resolve_upload_column(df.columns, reference)
+        if resolved is None:
+            invalid_profile_columns.append(f'{key}={reference}')
+        else:
+            col_map[key] = resolved
+    if invalid_profile_columns:
+        raise ValueError('업로드 형식에서 지정한 열을 파일에서 찾을 수 없습니다: ' + ', '.join(invalid_profile_columns))
 
     conn = get_connection()
     cur = conn.cursor()
@@ -361,7 +396,7 @@ def process_excel_file(file_path, batch_name=None):
     preview_data = {
         'batch_name': batch_name,
         'total_excel_rows': len(df),
-        'detected_columns': {k: v for k, v in col_map.items() if v},
+        'detected_columns': {k: str(v) for k, v in col_map.items() if v is not None and v != ''},
         'orders': []
     }
 

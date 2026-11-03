@@ -371,6 +371,22 @@
             <!-- 엑셀 업로드 구역 -->
             <div class="card mb-4 border-0 shadow-sm">
                 <div class="card-body">
+                    <div class="row g-2 align-items-end mb-3">
+                        <div class="col-md-5">
+                            <label for="uploadProfileSelect" class="form-label fw-bold mb-1">업로드 파일 형식</label>
+                            <select id="uploadProfileSelect" class="form-select" onchange="saveSelectedUploadProfile()">
+                                <option value="">자동 열 인식</option>
+                            </select>
+                        </div>
+                        <div class="col-md-auto">
+                            <button type="button" class="btn btn-outline-primary" onclick="openUploadProfileModal()">
+                                <i class="fa-solid fa-table-columns me-1"></i> 파일 형식 설정
+                            </button>
+                        </div>
+                        <div class="col-md text-muted small pb-1">
+                            파일마다 열 위치가 다르면 형식을 저장하고 업로드할 때 선택하세요. 예: 주문번호=A, 수취인=H, 연락처=I
+                        </div>
+                    </div>
                     <div class="upload-dropzone" id="dropzone" onclick="document.getElementById('excelFileInput').click()">
                         <i class="fa-solid fa-cloud-arrow-up text-primary fs-1 mb-2"></i>
                         <h5 class="fw-bold">발송 리스트 엑셀 파일을 여기에 끌어다 놓거나 클릭하여 선택하세요 (여러 파일 동시 선택 가능)</h5>
@@ -1195,6 +1211,45 @@
     </div>
 </div>
 
+<!-- 업로드 파일 형식 설정 -->
+<div class="modal fade" id="uploadProfileModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold"><i class="fa-solid fa-table-columns text-primary me-2"></i>업로드 파일 형식 설정</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-8">
+                        <label for="uploadProfileName" class="form-label fw-bold">형식 이름</label>
+                        <input type="text" class="form-control" id="uploadProfileName" maxlength="80" placeholder="예: 쇼핑몰 A 주문 파일">
+                    </div>
+                    <div class="col-md-4">
+                        <label for="uploadProfileHeaderRow" class="form-label fw-bold">헤더 행</label>
+                        <input type="number" class="form-control" id="uploadProfileHeaderRow" min="0" max="100" value="1">
+                    </div>
+                    <div class="col-12 small text-muted">
+                        각 사이트 항목에 엑셀 열 문자(A, H, I 등) 또는 정확한 열 제목을 입력하세요. 헤더가 없는 파일은 헤더 행을 0으로 설정합니다. 비워둔 항목은 자동 인식을 사용합니다.
+                    </div>
+                </div>
+                <div class="row g-2" id="uploadProfileMappingFields"></div>
+            </div>
+            <div class="modal-footer justify-content-between">
+                <button type="button" class="btn btn-outline-danger" id="btnDeleteUploadProfile" onclick="deleteUploadProfile()" style="display:none;">
+                    <i class="fa-solid fa-trash me-1"></i> 형식 삭제
+                </button>
+                <div class="ms-auto d-flex gap-2">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                    <button type="button" class="btn btn-primary" onclick="saveUploadProfile()">
+                        <i class="fa-solid fa-floppy-disk me-1"></i> 형식 저장
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ================= 모달 1: 엑셀 파싱 및 분할 미리보기 모달 ================= -->
 <div class="modal fade" id="previewModal" tabindex="-1" data-bs-backdrop="static">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
@@ -1512,6 +1567,14 @@
 
 <script>
     let currentPreviewData = null;
+    let uploadProfilesCache = [];
+    const UPLOAD_PROFILE_FIELDS = [
+        ['order_no', '주문번호'], ['recipient_name', '수취인'], ['recipient_phone1', '연락처'],
+        ['recipient_phone2', '보조 연락처'], ['customs_id', '개인통관고유부호'], ['postal_code', '우편번호'],
+        ['address', '주소'], ['product_name', '상품명'], ['option_name', '옵션명'], ['quantity', '수량'],
+        ['shipping_memo', '배송요청/메모'], ['courier', '택배사'], ['tracking_no', '송장번호'],
+        ['shipping_method', '배송방법']
+    ];
     let ordersList = [];
     const orderDispatchStatusCache = new Map();
     let customsErrorOrdersList = [];
@@ -1547,6 +1610,8 @@
     document.addEventListener('DOMContentLoaded', () => {
         refreshAllData();
         setupDragAndDrop();
+        renderUploadProfileMappingFields();
+        loadUploadProfiles();
         initBatchScanRows();
     });
 
@@ -1578,6 +1643,101 @@
             'tab-settings': loadSettingsAndBundles
         }[activeTabId] || loadOrders;
         refreshCurrentTab();
+    }
+
+    function renderUploadProfileMappingFields() {
+        const container = document.getElementById('uploadProfileMappingFields');
+        if (!container) return;
+        container.innerHTML = UPLOAD_PROFILE_FIELDS.map(([key, label]) => `
+            <div class="col-sm-6 col-md-4">
+                <label class="form-label small fw-bold mb-1" for="uploadMap_${key}">${escapeHtml(label)}</label>
+                <input type="text" class="form-control form-control-sm upload-profile-column" id="uploadMap_${key}" placeholder="예: A">
+            </div>
+        `).join('');
+    }
+
+    async function loadUploadProfiles(selectName = null) {
+        const select = document.getElementById('uploadProfileSelect');
+        if (!select) return;
+        const previous = selectName !== null
+            ? selectName
+            : (select.value || localStorage.getItem('selectedUploadProfile') || '');
+        try {
+            const res = await fetch('/api/upload-profiles');
+            const profiles = await res.json();
+            if (!res.ok) throw new Error(profiles.error || '업로드 형식 목록을 불러오지 못했습니다.');
+            uploadProfilesCache = Array.isArray(profiles) ? profiles : [];
+            select.innerHTML = '<option value="">자동 열 인식</option>' + uploadProfilesCache.map(profile =>
+                `<option value="${escapeHtml(profile.profile_name)}">${escapeHtml(profile.profile_name)}</option>`
+            ).join('');
+            const selected = uploadProfilesCache.some(profile => profile.profile_name === previous) ? previous : '';
+            select.value = selected;
+            localStorage.setItem('selectedUploadProfile', selected);
+        } catch (e) {
+            console.error('Upload profile load error:', e);
+        }
+    }
+
+    function saveSelectedUploadProfile() {
+        const value = document.getElementById('uploadProfileSelect')?.value || '';
+        localStorage.setItem('selectedUploadProfile', value);
+    }
+
+    function openUploadProfileModal() {
+        renderUploadProfileMappingFields();
+        const select = document.getElementById('uploadProfileSelect');
+        const selectedName = select?.value || '';
+        const profile = uploadProfilesCache.find(item => item.profile_name === selectedName);
+        document.getElementById('uploadProfileName').value = profile?.profile_name || '';
+        document.getElementById('uploadProfileName').readOnly = !!profile;
+        document.getElementById('uploadProfileHeaderRow').value = profile?.header_row ?? 1;
+        UPLOAD_PROFILE_FIELDS.forEach(([key]) => {
+            document.getElementById(`uploadMap_${key}`).value = profile?.mapping?.[key] || '';
+        });
+        document.getElementById('btnDeleteUploadProfile').style.display = profile ? 'inline-block' : 'none';
+        new bootstrap.Modal(document.getElementById('uploadProfileModal')).show();
+    }
+
+    async function saveUploadProfile() {
+        const profileName = document.getElementById('uploadProfileName').value.trim();
+        const mapping = {};
+        UPLOAD_PROFILE_FIELDS.forEach(([key]) => {
+            mapping[key] = document.getElementById(`uploadMap_${key}`).value.trim();
+        });
+        const payload = {
+            profile_name: profileName,
+            header_row: parseInt(document.getElementById('uploadProfileHeaderRow').value, 10),
+            mapping
+        };
+        try {
+            const res = await fetch('/api/upload-profiles', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || '업로드 형식을 저장하지 못했습니다.');
+            await loadUploadProfiles(profileName);
+            bootstrap.Modal.getInstance(document.getElementById('uploadProfileModal'))?.hide();
+        } catch (e) {
+            alert('업로드 형식 저장 오류: ' + e.message);
+        }
+    }
+
+    async function deleteUploadProfile() {
+        const profileName = document.getElementById('uploadProfileName').value.trim();
+        if (!profileName || !confirm(`'${profileName}' 업로드 형식을 삭제할까요?`)) return;
+        try {
+            const res = await fetch('/api/upload-profiles/delete', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ profile_name: profileName })
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) throw new Error(data.error || '업로드 형식을 삭제하지 못했습니다.');
+            await loadUploadProfiles('');
+            bootstrap.Modal.getInstance(document.getElementById('uploadProfileModal'))?.hide();
+        } catch (e) {
+            alert('업로드 형식 삭제 오류: ' + e.message);
+        }
     }
 
     // 통계 요약
@@ -1647,6 +1807,8 @@
         for (let i = 0; i < files.length; i++) {
             formData.append('files', files[i]);
         }
+        const selectedProfile = document.getElementById('uploadProfileSelect')?.value || '';
+        formData.append('upload_profile', selectedProfile);
 
         try {
             const res = await fetch('/api/upload/preview', {
@@ -1662,7 +1824,7 @@
             currentPreviewData = data;
             document.getElementById('previewExcelRows').textContent = data.total_excel_rows;
             document.getElementById('previewSplitItems').textContent = data.total_split_items;
-            document.getElementById('previewBatchName').textContent = data.batch_name;
+            document.getElementById('previewBatchName').textContent = `${data.batch_name} · 형식: ${data.upload_profile || '자동 열 인식'}`;
 
             const tbody = document.getElementById('previewTableBody');
             tbody.innerHTML = '';

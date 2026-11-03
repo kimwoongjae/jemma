@@ -159,6 +159,14 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
         cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS stock_only_dispatch INTEGER NOT NULL DEFAULT 0")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS upload_profiles (
+                profile_name TEXT PRIMARY KEY,
+                mapping_json TEXT NOT NULL DEFAULT '{}',
+                header_row INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
@@ -364,6 +372,15 @@ def init_db():
         cur.execute("ALTER TABLE courier_settings ADD COLUMN narda_id TEXT DEFAULT 'calroid'")
     if 'stock_only_dispatch' not in settings_cols:
         cur.execute("ALTER TABLE courier_settings ADD COLUMN stock_only_dispatch INTEGER NOT NULL DEFAULT 0")
+
+    cur.execute('''
+    CREATE TABLE IF NOT EXISTS upload_profiles (
+        profile_name TEXT PRIMARY KEY,
+        mapping_json TEXT NOT NULL DEFAULT '{}',
+        header_row INTEGER NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
 
     # 초기 기본 택배사 설정 확인 및 삽입
     cur.execute('SELECT COUNT(*) as cnt FROM courier_settings')
