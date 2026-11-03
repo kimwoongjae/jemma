@@ -7,6 +7,7 @@ import concurrent.futures
 import threading
 from datetime import datetime
 import openpyxl
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from io import BytesIO
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -545,7 +546,12 @@ def export_shipping_excel(order_ids=None, column_order=None):
         cur.execute(f'SELECT * FROM orders WHERE id IN ({placeholders}) ORDER BY id ASC', order_ids)
         orders = cur.fetchall()
     else:
-        cur.execute('SELECT * FROM orders ORDER BY id DESC')
+        cur.execute('''
+            SELECT * FROM orders
+            WHERE (status IN ('출고완료', '송장발급')
+               OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))
+            ORDER BY id DESC
+        ''')
         orders = cur.fetchall()
 
     order_ids_for_items = [row['id'] for row in orders]
@@ -575,6 +581,21 @@ def export_shipping_excel(order_ids=None, column_order=None):
         except (TypeError, ValueError):
             return 1
 
+    def product_names(order, items):
+        if not items:
+            return ' '.join(value for value in [order['original_product_name'] or '', order['original_option_name'] or ''] if value)
+        names = []
+        for item in items:
+            product = str(item.get('item_product_name') or '').strip()
+            option = str(item.get('item_option_name') or '').strip()
+            names.append(' '.join(value for value in [product, option] if value and value not in product))
+        return '\n'.join(names)
+
+    def quantity_lines(items, value_getter, fallback):
+        if not items:
+            return f'{fallback}개'
+        return '\n'.join(f'{value_getter(item)}개' for item in items)
+
     column_definitions = {
         'weight': ('무게 (kg)', lambda o, its: o['weight'] if ('weight' in o.keys() and o['weight']) else 0.0),
         'order_no': ('주문번호', lambda o, its: o['order_no'] or ''),
@@ -582,25 +603,70 @@ def export_shipping_excel(order_ids=None, column_order=None):
         'recipient': ('수취인 / 연락처', lambda o, its: ' / '.join(value for value in [o['recipient_name'] or '', o['recipient_phone1'] or ''] if value)),
         'customs_id': ('통관부호', lambda o, its: o['customs_id'] or ''),
         'address': ('배송지 주소', lambda o, its: o['address'] or ''),
-        'product': ('상품명 + 옵션명', lambda o, its: ' | '.join(
-            ' '.join(value for value in [str(item.get('item_product_name') or '').strip(), str(item.get('item_option_name') or '').strip()] if value and value not in str(item.get('item_product_name') or ''))
-            for item in its
-        ) if its else ' '.join(value for value in [o['original_product_name'] or '', o['original_option_name'] or ''] if value)),
-        'product_quantity': ('상품수량', lambda o, its: ' | '.join(str(product_quantity(o, item)) for item in its) if its else str(o['original_quantity'] or 1)),
-        'option_quantity': ('옵션수량', lambda o, its: ' | '.join(str(item.get('option_quantity') or 1) for item in its) if its else '1'),
-        'buy_quantity': ('구매수량', lambda o, its: ' | '.join(str(item.get('quantity') or 1) for item in its) if its else str(o['original_quantity'] or 1)),
-        'courier_tracking': ('택배사 / 송장번호', lambda o, its: ' / '.join(value for value in [o['courier'] or '', o['tracking_no'] or ''] if value)),
+        'product': ('상품명 + 옵션명', product_names),
+        'product_quantity': ('상품수량', lambda o, its: quantity_lines(its, lambda item: product_quantity(o, item), o['original_quantity'] or 1)),
+        'option_quantity': ('옵션수량', lambda o, its: quantity_lines(its, lambda item: item.get('option_quantity') or 1, 1)),
+        'buy_quantity': ('구매수량', lambda o, its: quantity_lines(its, lambda item: item.get('quantity') or 1, o['original_quantity'] or 1)),
+        'courier': ('택배사', lambda o, its: o['courier'] or ''),
+        'tracking_no': ('송장번호', lambda o, its: o['tracking_no'] or ''),
         'status': ('상태', lambda o, its: o['status'] or '')
     }
     requested_order = column_order or list(column_definitions)
-    ordered_keys = [key for key in requested_order if key in column_definitions]
+    ordered_keys = []
+    for key in requested_order:
+        if key == 'courier_tracking':
+            ordered_keys.extend(['courier', 'tracking_no'])
+        elif key in column_definitions and key not in ordered_keys:
+            ordered_keys.append(key)
     ordered_keys.extend(key for key in column_definitions if key not in ordered_keys)
-    headers = [column_definitions[key][0] for key in ordered_keys]
-    ws.append(headers)
 
+    header_fill = PatternFill(fill_type='solid', fgColor='24476B')
+    header_font = Font(name='맑은 고딕', size=10, bold=True, color='FFFFFF')
+    body_font = Font(name='맑은 고딕', size=10, color='202833')
+    thin_gray = Side(style='thin', color='D7DEE7')
+    cell_border = Border(left=thin_gray, right=thin_gray, top=thin_gray, bottom=thin_gray)
+    column_widths = {
+        'weight': 11, 'order_no': 24, 'dispatched_at': 19, 'recipient': 23,
+        'customs_id': 19, 'address': 42, 'product': 52,
+        'product_quantity': 13, 'option_quantity': 13, 'buy_quantity': 13,
+        'courier': 16, 'tracking_no': 19, 'status': 14
+    }
+
+    for col_idx, key in enumerate(ordered_keys, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=column_definitions[key][0])
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.border = cell_border
+        ws.column_dimensions[cell.column_letter].width = column_widths.get(key, 16)
+    ws.row_dimensions[1].height = 26
+
+    centered_keys = {'weight', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier', 'tracking_no', 'status'}
     for o in orders:
         row_items = items_by_order.get(o['id'], [])
-        ws.append([column_definitions[key][1](o, row_items) for key in ordered_keys])
+        row_idx = ws.max_row + 1
+        product_text = product_names(o, row_items)
+        for col_idx, key in enumerate(ordered_keys, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=column_definitions[key][1](o, row_items))
+            cell.font = body_font
+            cell.border = cell_border
+            cell.alignment = Alignment(
+                horizontal='center' if key in centered_keys else 'left',
+                vertical='center', wrap_text=True
+            )
+            if row_idx % 2 == 1:
+                cell.fill = PatternFill(fill_type='solid', fgColor='F4F7FA')
+
+        estimated_product_lines = max(
+            (max(1, (len(line) + 25) // 26) for line in product_text.splitlines()),
+            default=1
+        )
+        ws.row_dimensions[row_idx].height = min(240, max(22, 19 * max(len(row_items), estimated_product_lines, 1)))
+
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = ws.dimensions
+    ws.sheet_view.showGridLines = False
+    ws.print_title_rows = '1:1'
 
     output = BytesIO()
     wb.save(output)
