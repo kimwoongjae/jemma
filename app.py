@@ -198,6 +198,74 @@ def delete_upload_profile():
     conn.close()
     return jsonify({'status': 'success', 'deleted': deleted})
 
+
+@app.route('/api/upload/template', methods=['GET'])
+def download_order_upload_template():
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    headers = [
+        '주문번호', '택배사', '송장번호', '배송방법', '상품명', '옵션명', '상품수량',
+        '수취인', '수취인전화번호1', '수취인전화번호2', '개인통관고유부호',
+        '우편번호', '주소', '배송요청사항'
+    ]
+    descriptions = [
+        ('주문번호', '주문을 구분하는 번호입니다. 비워두면 사이트에서 임시 번호를 만듭니다.'),
+        ('택배사', '택배사명입니다. 예: 나르다'),
+        ('송장번호', '기존 송장번호가 있는 경우 입력합니다. 신규 송장 발급 예정이면 비워둡니다.'),
+        ('배송방법', '배송 방식입니다. 예: 택배'),
+        ('상품명', '주문 상품명입니다. 재고 상품명과 맞춰 입력해주세요.'),
+        ('옵션명', '상품 옵션명입니다. 옵션이 없으면 비워도 됩니다.'),
+        ('상품수량', '주문한 상품 수량입니다.'),
+        ('수취인', '받는 분 성명입니다.'),
+        ('수취인전화번호1', '받는 분 연락처입니다.'),
+        ('수취인전화번호2', '보조 연락처입니다. 없으면 비워도 됩니다.'),
+        ('개인통관고유부호', '해외 배송에 필요한 개인통관고유부호입니다.'),
+        ('우편번호', '배송지 우편번호입니다.'),
+        ('주소', '배송지 전체 주소입니다.'),
+        ('배송요청사항', '배송 요청 또는 문 앞 요청사항입니다.')
+    ]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '주문업로드양식'
+    ws.append(headers)
+    header_fill = PatternFill(fill_type='solid', fgColor='24476B')
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = Font(name='맑은 고딕', bold=True, color='FFFFFF')
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = f'A1:{ws.cell(row=1, column=len(headers)).column_letter}1'
+    ws.row_dimensions[1].height = 32
+    for index, header in enumerate(headers, start=1):
+        ws.column_dimensions[ws.cell(row=1, column=index).column_letter].width = max(16, min(26, len(header) + 6))
+
+    guide = wb.create_sheet('작성안내')
+    guide.append(['엑셀 열 제목', '작성 안내'])
+    for row in descriptions:
+        guide.append(list(row))
+    for cell in guide[1]:
+        cell.fill = header_fill
+        cell.font = Font(name='맑은 고딕', bold=True, color='FFFFFF')
+    for row in guide.iter_rows(min_row=1):
+        for cell in row:
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
+    guide.column_dimensions['A'].width = 28
+    guide.column_dimensions['B'].width = 85
+    guide.freeze_panes = 'A2'
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='주문업로드_자동열인식_기본양식.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
 @app.route('/api/upload/preview', methods=['POST'])
 def upload_preview():
     # 단일 또는 복수 파일 지원 ('files' 또는 'file')
