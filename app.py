@@ -71,6 +71,9 @@ def get_dashboard_stats():
     cur.execute('SELECT COUNT(*) as cnt FROM order_items')
     total_items = cur.fetchone()['cnt']
 
+    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE status = '통관오류'")
+    customs_error_count = cur.fetchone()['cnt']
+
     conn.close()
     return jsonify({
         'total_orders': total_orders,
@@ -78,7 +81,8 @@ def get_dashboard_stats():
         'issued_tracking': issued_tracking,
         'completed_dispatch': completed_dispatch,
         'low_stock_count': low_stock_count,
-        'total_items': total_items
+        'total_items': total_items,
+        'customs_error_count': customs_error_count
     })
 
 # ----------------- 2. 엑셀 업로드 및 주문 분할 -----------------
@@ -1870,7 +1874,7 @@ def save_settings():
         UPDATE courier_settings
         SET courier_name = ?, customer_code = ?, api_key = ?, narda_id = ?,
             sender_name = ?, sender_phone = ?, sender_address = ?,
-            is_mock = ?, updated_at = CURRENT_TIMESTAMP
+            is_mock = ?, stock_only_dispatch = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = (SELECT id FROM courier_settings LIMIT 1)
     ''', (
         data.get('courier_name', '나르다'),
@@ -1880,7 +1884,8 @@ def save_settings():
         data.get('sender_name', ''),
         data.get('sender_phone', ''),
         data.get('sender_address', ''),
-        1 if data.get('is_mock') else 0
+        1 if data.get('is_mock') else 0,
+        1 if data.get('stock_only_dispatch') else 0
     ))
     conn.commit()
     conn.close()

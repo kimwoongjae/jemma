@@ -241,6 +241,73 @@ def issue_tracking_numbers(order_ids, courier_name=None):
                 'is_mock': True
             })
 
+    stock_only_dispatch = str(settings.get('stock_only_dispatch') or '0').strip().lower() in ('1', 'true', 't', 'yes', 'on')
+    if stock_only_dispatch and orders_data:
+        # 선택 주문 전체의 필요 수량을 주문 순서대로 예약 계산해, 같은 SKU를
+        # 여러 주문이 함께 선택해도 보유 재고를 초과하는 주문은 API에 보내지 않습니다.
+        remaining_stock = {
+            int(p['id']): max(0, int(float(p.get('stock_quantity') or 0)))
+            for p in prod_rows if p.get('id') is not None
+        }
+        dispatchable_orders = []
+        for order_data in orders_data:
+            order = order_data['ord_dict']
+            requirements = {}
+            product_labels = {}
+            shortage_messages = []
+
+            for item in order_data.get('deduct_items', []):
+                if int(item.get('stock_deducted') or 0):
+                    continue
+                sku = str(item.get('sku') or '').strip()
+                product = prod_by_sku.get(sku) or prod_by_name.get(item.get('item_product_name'))
+                try:
+                    needed = max(1, int(float(item.get('quantity') or 1)))
+                except (TypeError, ValueError):
+                    needed = 1
+                name = str(item.get('item_product_name') or item.get('item_option_name') or sku or '상품').strip()
+
+                if not product:
+                    shortage_messages.append(f'{name} (재고 미등록, 필요 {needed}개)')
+                    continue
+
+                product_id = int(product['id'])
+                requirements[product_id] = requirements.get(product_id, 0) + needed
+                product_labels[product_id] = (name, sku or str(product.get('sku') or ''))
+
+            for product_id, needed in requirements.items():
+                available = remaining_stock.get(product_id, 0)
+                if needed > available:
+                    name, sku = product_labels[product_id]
+                    barcode_note = f' / 바코드 {sku}' if sku else ''
+                    shortage_messages.append(f'{name}{barcode_note} (필요 {needed}개, 현재고 {available}개)')
+
+            if shortage_messages:
+                shown = '; '.join(shortage_messages[:3])
+                if len(shortage_messages) > 3:
+                    shown += f' 외 {len(shortage_messages) - 3}개 품목'
+                error = (
+                    f'재고 부족으로 송장을 발급하지 않았습니다: {shown}. '
+                    "출고가 필요하면 [설정]에서 '재고가 있을 때만 출고' 스위치를 끄고 다시 시도하세요."
+                )
+                cur.execute('''
+                    UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
+                    WHERE id = ?
+                ''', (error, order_data['oid']))
+                failed_orders.append({
+                    'order_id': order_data['oid'],
+                    'order_no': order.get('order_no'),
+                    'recipient_name': order.get('recipient_name'),
+                    'error': error
+                })
+                continue
+
+            for product_id, needed in requirements.items():
+                remaining_stock[product_id] = remaining_stock.get(product_id, 0) - needed
+            dispatchable_orders.append(order_data)
+
+        orders_data = dispatchable_orders
+
     # 전송 중 상태를 먼저 저장합니다. API 실패가 나도 주문상태와 재고는 건드리지 않습니다.
     if orders_data:
         active_ids = [item['oid'] for item in orders_data]
@@ -251,6 +318,10 @@ def issue_tracking_numbers(order_ids, courier_name=None):
             WHERE id IN ({active_placeholders})
         ''', active_ids)
     conn.commit()
+
+    if not orders_data:
+        conn.close()
+        return {'updated_orders': [], 'failed_orders': failed_orders}
 
     # 실제 나르다 API 전송 10건을 동시 5건으로 확인했고 모두 성공하여,
     # 처리량을 높이되 요청 시간 초과 위험을 줄이도록 동시 요청을 5건으로 제한합니다.

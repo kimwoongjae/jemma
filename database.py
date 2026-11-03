@@ -158,6 +158,7 @@ def init_db():
     if isinstance(conn, PgConnectionWrapper):
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS stock_only_dispatch INTEGER NOT NULL DEFAULT 0")
         cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
@@ -351,6 +352,7 @@ def init_db():
         sender_phone TEXT DEFAULT '02-1234-5678',
         sender_address TEXT DEFAULT '서울특별시 강남구 테헤란로 123 물류빌딩 3층',
         is_mock INTEGER DEFAULT 0,
+        stock_only_dispatch INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -360,6 +362,8 @@ def init_db():
     settings_cols = [row[1] for row in cur.fetchall()]
     if 'narda_id' not in settings_cols:
         cur.execute("ALTER TABLE courier_settings ADD COLUMN narda_id TEXT DEFAULT 'calroid'")
+    if 'stock_only_dispatch' not in settings_cols:
+        cur.execute("ALTER TABLE courier_settings ADD COLUMN stock_only_dispatch INTEGER NOT NULL DEFAULT 0")
 
     # 초기 기본 택배사 설정 확인 및 삽입
     cur.execute('SELECT COUNT(*) as cnt FROM courier_settings')
