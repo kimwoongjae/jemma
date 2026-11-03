@@ -632,6 +632,7 @@ def get_picking_list():
 def get_dispatched_orders():
     courier = request.args.get('courier', '').strip()
     search = request.args.get('search', '').strip()
+    selected_date = request.args.get('date', '').strip()
     limit_param = request.args.get('limit', '').strip()
 
     conn = get_connection()
@@ -655,6 +656,10 @@ def get_dispatched_orders():
         )'''
         wild = f'%{search}%'
         params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
+
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date):
+        query += " AND COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10)) = ?"
+        params.append(selected_date)
 
     # PostgreSQL에서는 dispatched_at(TEXT)와 created_at(TIMESTAMP)의
     # COALESCE가 타입 오류를 내므로 양쪽을 TEXT로 맞춰 정렬합니다.
@@ -684,6 +689,36 @@ def get_dispatched_orders():
 
     conn.close()
     return jsonify(orders)
+
+@app.route('/api/dispatched-orders/dates', methods=['GET'])
+def get_dispatched_order_dates():
+    courier = request.args.get('courier', '').strip()
+    search = request.args.get('search', '').strip()
+    conn = get_connection()
+    cur = conn.cursor()
+    query = """SELECT COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''),
+                    SUBSTR(CAST(created_at AS TEXT), 1, 10)) AS date, COUNT(*) AS count
+               FROM orders
+               WHERE (status IN ('출고완료', '송장발급')
+                  OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))"""
+    params = []
+    if courier and courier != '전체':
+        query += ' AND courier = ?'
+        params.append(courier)
+    if search:
+        query += ''' AND (
+            order_no LIKE ? OR recipient_name LIKE ? OR recipient_phone1 LIKE ?
+            OR tracking_no LIKE ? OR customs_id LIKE ? OR address LIKE ?
+            OR original_product_name LIKE ? OR original_option_name LIKE ?
+            OR id IN (SELECT order_id FROM order_items WHERE item_product_name LIKE ? OR item_option_name LIKE ? OR sku LIKE ?)
+        )'''
+        wild = f'%{search}%'
+        params.extend([wild] * 11)
+    query += ' GROUP BY date ORDER BY date DESC'
+    cur.execute(query, params)
+    dates = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return jsonify(dates)
 
 @app.route('/api/orders/<int:order_id>/weight', methods=['POST'])
 def update_order_weight(order_id):
@@ -1827,6 +1862,7 @@ def move_orders_status():
 
 @app.route('/api/inventory/logs', methods=['GET'])
 def get_inventory_logs():
+    selected_date = request.args.get('date', '').strip()
     limit = int(request.args.get('limit', 200))
     search = request.args.get('search', '').strip()
     change_type = request.args.get('type', '').strip()
@@ -1848,9 +1884,17 @@ def get_inventory_logs():
         wild = f'%{search}%'
         params.extend([wild, wild, wild])
 
-    # 최근 내역을 먼저 제한한 뒤, 화면에는 재고가 차감되는 흐름대로 오래된 항목부터 표시합니다.
-    query += ' ORDER BY id DESC LIMIT ?'
-    params.append(limit)
+    has_valid_date = bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date))
+    if has_valid_date:
+        query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
+        params.append(selected_date)
+
+    # 날짜를 선택하면 그 날짜의 전체 내역을 표시하고, 날짜를 선택하지 않은 경우 최근 내역만 표시합니다.
+    if has_valid_date:
+        query += ' ORDER BY id DESC'
+    else:
+        query += ' ORDER BY id DESC LIMIT ?'
+        params.append(limit)
 
     cur.execute(query, params)
     logs = [dict(l) for l in cur.fetchall()]
@@ -1860,9 +1904,36 @@ def get_inventory_logs():
         log['created_at'] = format_inventory_log_datetime(log.get('created_at'))
     return jsonify(logs)
 
+@app.route('/api/inventory/logs/dates', methods=['GET'])
+def get_inventory_log_dates():
+    search = request.args.get('search', '').strip()
+    change_type = request.args.get('type', '').strip()
+    conn = get_connection()
+    cur = conn.cursor()
+    query = "SELECT SUBSTR(CAST(created_at AS TEXT), 1, 10) AS date, COUNT(*) AS count FROM inventory_logs WHERE 1=1"
+    params = []
+    if change_type and change_type != '전체':
+        if change_type == '출고':
+            query += " AND change_type IN ('출고', '주문출고')"
+        else:
+            query += ' AND change_type = ?'
+            params.append(change_type)
+    if search:
+        query += ' AND (sku LIKE ? OR product_name LIKE ? OR memo LIKE ?)'
+        wild = f'%{search}%'
+        params.extend([wild, wild, wild])
+    query += ' GROUP BY date ORDER BY date DESC'
+    cur.execute(query, params)
+    dates = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return jsonify(dates)
+
 @app.route('/api/inventory/export-logs', methods=['GET'])
 def export_inventory_logs():
     ids_str = request.args.get('ids', '').strip()
+    selected_date = request.args.get('date', '').strip()
+    search = request.args.get('search', '').strip()
+    change_type = request.args.get('type', '').strip()
     conn = get_connection()
     cur = conn.cursor()
 
@@ -1870,6 +1941,20 @@ def export_inventory_logs():
         ids = [int(x) for x in ids_str.split(',') if x.strip().isdigit()]
         placeholders = ','.join(['?'] * len(ids))
         cur.execute(f'SELECT * FROM inventory_logs WHERE id IN ({placeholders}) ORDER BY id ASC', ids)
+    elif re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date):
+        query = 'SELECT * FROM inventory_logs WHERE SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
+        params = [selected_date]
+        if change_type and change_type != '전체':
+            if change_type == '출고':
+                query += " AND change_type IN ('출고', '주문출고')"
+            else:
+                query += ' AND change_type = ?'
+                params.append(change_type)
+        if search:
+            query += ' AND (sku LIKE ? OR product_name LIKE ? OR memo LIKE ?)'
+            wild = f'%{search}%'
+            params.extend([wild, wild, wild])
+        cur.execute(query + ' ORDER BY id ASC', params)
     else:
         cur.execute('SELECT * FROM (SELECT * FROM inventory_logs ORDER BY id DESC LIMIT 1000) recent_logs ORDER BY id ASC')
 
@@ -1904,7 +1989,7 @@ def export_inventory_logs():
     return send_file(
         output,
         as_attachment=True,
-        download_name='입출고내역리스트.xlsx',
+        download_name=f'입출고내역_{selected_date}.xlsx' if re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date) else '입출고내역리스트.xlsx',
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 

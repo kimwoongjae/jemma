@@ -647,6 +647,14 @@
         <div class="tab-pane fade" id="dispatched-pane" role="tabpanel">
             <div class="card border-0 shadow-sm mb-3">
                 <div class="card-body p-3">
+                    <div class="fw-bold mb-2"><i class="fa-regular fa-calendar-days me-1 text-primary"></i> 날짜별 발송 목록</div>
+                    <div id="dispatchedDateList" class="d-flex flex-wrap gap-2" style="max-height: 150px; overflow-y: auto;">
+                        <span class="text-muted small">날짜 목록을 불러오는 중입니다.</span>
+                    </div>
+                </div>
+            </div>
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-body p-3">
                     <div class="row g-2 align-items-center mb-2">
                         <div class="col-md-3">
                             <div class="input-group">
@@ -673,7 +681,7 @@
                                 <i class="fa-solid fa-file-excel me-1"></i> 선택 발송내역 엑셀 다운로드
                             </button>
                             <button class="btn btn-outline-secondary" onclick="exportDispatchedExcel(false)">
-                                <i class="fa-solid fa-download me-1"></i> 전체 발송내역 엑셀 다운로드
+                                <i class="fa-solid fa-download me-1"></i> 선택 날짜 발송내역 엑셀 다운로드
                             </button>
                             <button class="btn btn-outline-dark" onclick="openPrintModalForDispatched()">
                                 <i class="fa-solid fa-print me-1"></i> 선택 송장 재인쇄
@@ -953,6 +961,14 @@
         <div class="tab-pane fade" id="logs-pane" role="tabpanel">
             <div class="card border-0 shadow-sm mb-3">
                 <div class="card-body p-3">
+                    <div class="fw-bold mb-2"><i class="fa-regular fa-calendar-days me-1 text-primary"></i> 날짜별 입출고 목록</div>
+                    <div id="inventoryLogDateList" class="d-flex flex-wrap gap-2" style="max-height: 150px; overflow-y: auto;">
+                        <span class="text-muted small">날짜 목록을 불러오는 중입니다.</span>
+                    </div>
+                </div>
+            </div>
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-body p-3">
                     <div class="row g-2 align-items-center">
                         <div class="col-md-3">
                             <div class="input-group">
@@ -976,7 +992,7 @@
                                 <i class="fa-solid fa-file-excel me-1"></i> 선택 내역 엑셀 다운로드
                             </button>
                             <button class="btn btn-outline-secondary" onclick="exportAllLogs()">
-                                <i class="fa-solid fa-download me-1"></i> 전체 내역 엑셀 다운로드
+                                <i class="fa-solid fa-download me-1"></i> 선택 날짜 엑셀 다운로드
                             </button>
                         </div>
                     </div>
@@ -1554,8 +1570,10 @@
     const orderDispatchStatusCache = new Map();
     let customsErrorOrdersList = [];
     let dispatchedOrdersList = [];
+    let dispatchedSelectedDate = '';
     let inventoryList = [];
     let inventoryLogsList = [];
+    let inventorySelectedDate = '';
     let barcodeCameraStream = null;
     let barcodeCameraControls = null;
     let barcodeCameraDetector = null;
@@ -3002,11 +3020,44 @@
     // ==========================================
     // 2. 신규 [발송 내역 목록] 기능
     // ==========================================
+    function renderDispatchedDateList(dateGroups) {
+        const container = document.getElementById('dispatchedDateList');
+        if (!container) return;
+        if (!dateGroups.length) {
+            container.innerHTML = '<span class="text-muted small">발송 내역이 없습니다.</span>';
+            return;
+        }
+        container.innerHTML = dateGroups.map(group => `
+            <button type="button" class="btn btn-sm ${group.date === dispatchedSelectedDate ? 'btn-primary' : 'btn-outline-primary'}" onclick="selectDispatchedDate('${escapeHtml(group.date)}')">
+                <i class="fa-regular fa-calendar me-1"></i>${escapeHtml(group.date)} <span class="badge ${group.date === dispatchedSelectedDate ? 'bg-light text-primary' : 'bg-secondary'} ms-1">${Number(group.count || 0).toLocaleString()}건</span>
+            </button>
+        `).join('');
+    }
+
+    async function selectDispatchedDate(date) {
+        dispatchedSelectedDate = date;
+        await loadDispatchedOrders();
+    }
+
     async function loadDispatchedOrders() {
         const courier = document.getElementById('dispatchedCourierFilter')?.value || '전체';
         const search = document.getElementById('dispatchedSearchInput')?.value || '';
         try {
-            const res = await fetch(`/api/dispatched-orders?courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}`);
+            const datesRes = await fetch(`/api/dispatched-orders/dates?courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}`);
+            if (!datesRes.ok) throw new Error(`발송 날짜 조회 실패 (${datesRes.status})`);
+            const dateGroups = await datesRes.json();
+            if (!Array.isArray(dateGroups)) throw new Error('발송 날짜 응답 형식이 올바르지 않습니다.');
+            if (!dateGroups.some(group => group.date === dispatchedSelectedDate)) {
+                dispatchedSelectedDate = dateGroups[0]?.date || '';
+            }
+            renderDispatchedDateList(dateGroups);
+            if (!dispatchedSelectedDate) {
+                dispatchedOrdersList = [];
+                renderDispatchedTable(dispatchedOrdersList);
+                return;
+            }
+
+            const res = await fetch(`/api/dispatched-orders?courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}&date=${encodeURIComponent(dispatchedSelectedDate)}`);
             if (!res.ok) throw new Error(`발송내역 조회 실패 (${res.status})`);
             const data = await res.json();
             if (!Array.isArray(data)) throw new Error(data.error || '발송내역 응답 형식이 올바르지 않습니다.');
@@ -3174,11 +3225,14 @@
     }
 
     function exportDispatchedExcel(isSelectedOnly) {
-        let ids = [];
+        let ids = dispatchedOrdersList.map(order => Number(order.id));
         if (isSelectedOnly) {
             const selected = new Set(Array.from(document.querySelectorAll('.dispatched-row-check:checked')).map(ck => String(ck.value)));
             ids = dispatchedOrdersList.filter(order => selected.has(String(order.id))).map(order => Number(order.id));
             if (ids.length === 0) { alert('다운로드할 발송 내역을 선택하세요.'); return; }
+        } else if (ids.length === 0) {
+            alert('다운로드할 날짜별 발송 내역이 없습니다.');
+            return;
         }
         const params = new URLSearchParams();
         if (ids.length > 0) params.set('order_ids', ids.join(','));
@@ -4078,12 +4132,48 @@
     // ==========================================
     // 4. 입출고 내역 목록 및 엑셀 다운로드
     // ==========================================
-    async function loadInventoryLogs() {
+    function renderInventoryLogDateList(dateGroups) {
+        const container = document.getElementById('inventoryLogDateList');
+        if (!container) return;
+        if (!dateGroups.length) {
+            container.innerHTML = '<span class="text-muted small">입출고 내역이 없습니다.</span>';
+            return;
+        }
+        container.innerHTML = dateGroups.map(group => `
+            <button type="button" class="btn btn-sm ${group.date === inventorySelectedDate ? 'btn-primary' : 'btn-outline-primary'}" onclick="selectInventoryLogDate('${escapeHtml(group.date)}')">
+                <i class="fa-regular fa-calendar me-1"></i>${escapeHtml(group.date)} <span class="badge ${group.date === inventorySelectedDate ? 'bg-light text-primary' : 'bg-secondary'} ms-1">${Number(group.count || 0).toLocaleString()}건</span>
+            </button>
+        `).join('');
+    }
+
+    async function selectInventoryLogDate(date) {
+        inventorySelectedDate = date;
+        await loadInventoryLogs();
+    }
+
+    async function loadInventoryLogs(refreshDates = true) {
         const search = document.getElementById('logSearchInput')?.value || '';
         const type = document.getElementById('logTypeFilter')?.value || '전체';
 
         try {
-            const res = await fetch(`/api/inventory/logs?search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}`);
+            if (refreshDates) {
+                const datesRes = await fetch(`/api/inventory/logs/dates?search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}`);
+                if (!datesRes.ok) throw new Error(`입출고 날짜 조회 실패 (${datesRes.status})`);
+                const dateGroups = await datesRes.json();
+                if (!Array.isArray(dateGroups)) throw new Error('입출고 날짜 응답 형식이 올바르지 않습니다.');
+                if (!dateGroups.some(group => group.date === inventorySelectedDate)) {
+                    inventorySelectedDate = dateGroups[0]?.date || '';
+                }
+                renderInventoryLogDateList(dateGroups);
+            }
+
+            if (!inventorySelectedDate) {
+                inventoryLogsList = [];
+                renderLogsTable(inventoryLogsList);
+                return;
+            }
+            const res = await fetch(`/api/inventory/logs?date=${encodeURIComponent(inventorySelectedDate)}&search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}`);
+            if (!res.ok) throw new Error(`입출고 내역 조회 실패 (${res.status})`);
             inventoryLogsList = await res.json();
             renderLogsTable(inventoryLogsList);
         } catch (e) {
@@ -4142,7 +4232,10 @@
         window.location.href = `/api/inventory/export-logs?ids=${ids.join(',')}`;
     }
     function exportAllLogs() {
-        window.location.href = `/api/inventory/export-logs`;
+        if (!inventorySelectedDate) { alert('다운로드할 날짜별 입출고 내역이 없습니다.'); return; }
+        const search = document.getElementById('logSearchInput')?.value || '';
+        const type = document.getElementById('logTypeFilter')?.value || '전체';
+        window.location.href = `/api/inventory/export-logs?date=${encodeURIComponent(inventorySelectedDate)}&search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}`;
     }
 
     async function deleteSelectedLogs() {
