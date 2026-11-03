@@ -266,6 +266,117 @@ def admin_companies():
     return jsonify(companies)
 
 
+@app.route('/api/admin/companies/<int:target_company_id>/copy-legacy-catalog', methods=['POST'])
+def admin_copy_legacy_catalog(target_company_id):
+    """Copy the legacy Jemma product catalog and upload profiles to a new company.
+
+    Existing destination products and upload profiles are preserved, so retries are safe.
+    Orders and shipping data are intentionally not included.
+    """
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, name FROM companies WHERE name = ?", ('젬마 (기존 데이터)',))
+        source = cur.fetchone()
+        cur.execute('SELECT id, name FROM companies WHERE id = ?', (target_company_id,))
+        target = cur.fetchone()
+        if not source:
+            return jsonify({'error': '기존 데이터 업체(젬마 (기존 데이터))를 찾을 수 없습니다.'}), 404
+        if not target:
+            return jsonify({'error': '대상 업체를 찾을 수 없습니다.'}), 404
+        source_id = int(source['id'])
+        if source_id == target_company_id:
+            return jsonify({'error': '기존 업체와 대상 업체가 같습니다.'}), 400
+
+        cur.execute('SELECT * FROM products WHERE tenant_id = ? ORDER BY id', (source_id,))
+        source_products = cur.fetchall()
+        copied_products = skipped_products = copied_options = skipped_options = 0
+        product_id_map = {}
+        product_columns = (
+            'sku', 'product_name', 'option_name', 'english_name', 'hs_code', 'unit_price',
+            'stock_quantity', 'product_url', 'safety_stock', 'location', 'dispatched_quantity',
+            'created_at', 'updated_at'
+        )
+        for product in source_products:
+            sku = product['sku']
+            if sku:
+                cur.execute('SELECT id FROM products WHERE tenant_id = ? AND sku = ?', (target_company_id, sku))
+            else:
+                cur.execute('''SELECT id FROM products WHERE tenant_id = ? AND COALESCE(sku, '') = ''
+                               AND product_name = ? AND COALESCE(option_name, '') = COALESCE(?, '')''',
+                            (target_company_id, product['product_name'], product['option_name']))
+            existing = cur.fetchone()
+            if existing:
+                product_id_map[product['id']] = existing['id']
+                skipped_products += 1
+                continue
+            values = [product[column] for column in product_columns]
+            cur.execute(
+                f"INSERT INTO products (tenant_id, {', '.join(product_columns)}) "
+                f"VALUES ({', '.join(['?'] * (len(product_columns) + 1))})",
+                [target_company_id] + values
+            )
+            product_id_map[product['id']] = cur.lastrowid
+            copied_products += 1
+
+        cur.execute('SELECT * FROM product_options WHERE tenant_id = ? ORDER BY id', (source_id,))
+        source_options = cur.fetchall()
+        for option in source_options:
+            target_product_id = product_id_map.get(option['product_id'])
+            if target_product_id is None:
+                cur.execute('SELECT id FROM products WHERE tenant_id = ? AND sku = ?', (target_company_id, option['sku']))
+                product = cur.fetchone()
+                target_product_id = product['id'] if product else None
+            if target_product_id is None:
+                skipped_options += 1
+                continue
+            cur.execute(
+                'SELECT id FROM product_options WHERE tenant_id = ? AND product_id = ? AND sku = ? AND option_name = ?',
+                (target_company_id, target_product_id, option['sku'], option['option_name'])
+            )
+            if cur.fetchone():
+                skipped_options += 1
+                continue
+            cur.execute('''INSERT INTO product_options
+                (tenant_id, product_id, sku, option_name, unit_price, dispatched_quantity, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (target_company_id, target_product_id, option['sku'], option['option_name'],
+                 option['unit_price'], option['dispatched_quantity'], option['created_at'], option['updated_at']))
+            copied_options += 1
+
+        cur.execute('SELECT profile_name, mapping_json, header_row, created_at FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name', (source_id,))
+        source_profiles = cur.fetchall()
+        copied_profiles = skipped_profiles = 0
+        for profile in source_profiles:
+            cur.execute('SELECT profile_name FROM upload_profiles WHERE tenant_id = ? AND profile_name = ?',
+                        (target_company_id, profile['profile_name']))
+            if cur.fetchone():
+                skipped_profiles += 1
+                continue
+            cur.execute('''INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, created_at)
+                           VALUES (?, ?, ?, ?, ?)''',
+                        (target_company_id, profile['profile_name'], profile['mapping_json'],
+                         profile['header_row'], profile['created_at']))
+            copied_profiles += 1
+
+        conn.commit()
+        return jsonify({
+            'status': 'success', 'source_company': source['name'], 'target_company': target['name'],
+            'copied_products': copied_products, 'skipped_products': skipped_products,
+            'copied_options': copied_options, 'skipped_options': skipped_options,
+            'copied_profiles': copied_profiles, 'skipped_profiles': skipped_profiles
+        })
+    except Exception as error:
+        conn.rollback()
+        app.logger.exception('Legacy product catalog copy failed')
+        return jsonify({'error': '데이터 복사에 실패했습니다. 변경 내용은 저장되지 않았습니다.'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/admin/orders', methods=['GET'])
 def admin_company_orders():
     if session.get('account_role') != 'admin':
