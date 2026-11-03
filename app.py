@@ -158,7 +158,7 @@ def save_upload_profile():
         return jsonify({'error': '헤더 행은 0부터 100 사이로 입력해주세요.'}), 400
 
     allowed_fields = {
-        'order_no', 'courier', 'tracking_no', 'shipping_method', 'product_name',
+        'order_no', 'courier', 'tracking_no', 'shipping_method', 'product_name', 'sku',
         'option_name', 'quantity', 'recipient_name', 'recipient_phone1',
         'recipient_phone2', 'customs_id', 'postal_code', 'address', 'shipping_memo'
     }
@@ -206,7 +206,7 @@ def download_order_upload_template():
     from openpyxl.styles import Alignment, Font, PatternFill
 
     headers = [
-        '주문번호', '택배사', '송장번호', '배송방법', '상품명', '옵션명', '상품수량',
+        '주문번호', '택배사', '송장번호', '배송방법', '상품명', '옵션명', '바코드', '상품수량',
         '수취인', '수취인전화번호1', '수취인전화번호2', '개인통관고유부호',
         '우편번호', '주소', '배송요청사항'
     ]
@@ -217,6 +217,7 @@ def download_order_upload_template():
         ('배송방법', '배송 방식입니다. 예: 택배'),
         ('상품명', '주문 상품명입니다. 재고 상품명과 맞춰 입력해주세요.'),
         ('옵션명', '상품 옵션명입니다. 옵션이 없으면 비워도 됩니다.'),
+        ('바코드', '재고관리의 바코드(SKU)와 정확히 같아야 합니다. 입력하면 상품명/옵션명 대신 바코드로 재고 상품을 찾습니다.'),
         ('상품수량', '주문한 상품 수량입니다.'),
         ('수취인', '받는 분 성명입니다.'),
         ('수취인전화번호1', '받는 분 연락처입니다.'),

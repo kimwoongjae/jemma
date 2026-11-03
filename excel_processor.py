@@ -10,6 +10,7 @@ HEADER_MAP = {
     'shipping_method': ['배송방법', '배송방식', 'shipping_method'],
     'product_name': ['상품명', '주문상품명', '품목명', 'product_name', '상품', '판매상품명'],
     'option_name': ['옵션이름', '옵션명', '선택사항', 'option_name', '옵션정보', '옵션', '상품옵션', '선택옵션'],
+    'sku': ['바코드', '상품바코드', '바코드번호', 'SKU', '상품코드', '옵션코드', 'sku'],
     'quantity': ['상품수량', '수량', '주문수량', 'qty', 'quantity', '구매수량'],
     'recipient_name': ['수취인이름', '수취인', '받는사람', '받는분', '고객명', 'recipient_name', '수취인명'],
     'recipient_phone1': ['수취인전화번호1', '수취인 전화번호1', '전화번호1', '연락처1', '수취인연락처', 'recipient_phone1', '수취인휴대폰', '휴대폰번호', '휴대전화', '수취인연락처1'],
@@ -56,6 +57,63 @@ def resolve_upload_column(df_columns, reference):
         if re.sub(r'\s+', '', str(column)).lower() == normalized_reference:
             return column
     return None
+
+
+def normalize_sku(value):
+    sku = str(value or '').strip()
+    if sku.endswith('.0') and sku[:-2].isdigit():
+        sku = sku[:-2]
+    return sku
+
+
+def find_product_info_by_sku(sku, opt_rows, prod_rows):
+    """Find inventory option/product by exact barcode and return its default pack quantity."""
+    normalized_sku = normalize_sku(sku)
+    if not normalized_sku:
+        return {'sku': None, 'dispatched_quantity': 1, 'unit_price': 0.0, 'matched': False}
+
+    products_by_id = {str(row.get('id')): row for row in prod_rows if row.get('id') is not None}
+    for row in opt_rows:
+        if normalize_sku(row.get('sku')) != normalized_sku:
+            continue
+        parent = products_by_id.get(str(row.get('product_id')))
+        try:
+            option_quantity = max(1, int(row.get('dispatched_quantity') or 1))
+        except (TypeError, ValueError):
+            option_quantity = 1
+        return {
+            'sku': row.get('sku') or normalized_sku,
+            'dispatched_quantity': option_quantity,
+            'unit_price': row.get('unit_price') or (parent.get('unit_price', 0.0) if parent else 0.0),
+            'matched': True,
+            'matched_product_name': parent.get('product_name') if parent else None,
+            'matched_option_name': row.get('option_name') or (parent.get('option_name') if parent else None)
+        }
+
+    for row in prod_rows:
+        if normalize_sku(row.get('sku')) != normalized_sku:
+            continue
+        try:
+            option_quantity = max(1, int(row.get('dispatched_quantity') or 1))
+        except (TypeError, ValueError):
+            option_quantity = 1
+        return {
+            'sku': row.get('sku') or normalized_sku,
+            'dispatched_quantity': option_quantity,
+            'unit_price': row.get('unit_price', 0.0),
+            'matched': True,
+            'matched_product_name': row.get('product_name'),
+            'matched_option_name': row.get('option_name')
+        }
+
+    return {
+        'sku': normalized_sku,
+        'dispatched_quantity': 1,
+        'unit_price': 0.0,
+        'matched': False,
+        'matched_product_name': None,
+        'matched_option_name': None
+    }
 
 def generate_sku(product_name, option_name):
     # 영문/숫자/한글 축약으로 고유 SKU 생성
@@ -203,7 +261,7 @@ def find_matching_barcode(product_name, option_name, conn=None):
     return res['sku'] if res['matched'] else None
 
 def sync_order_items_sku(conn=None):
-    """모든 order_items의 상품명/옵션명에 맞추어 재고관리(products 및 product_options)의 바코드(SKU) 및 옵션출고수량으로 최신 동기화"""
+    """기존 바코드를 우선 유지하고, 없는 경우 상품명/옵션명으로 SKU와 기본 옵션수량을 동기화합니다."""
     close_after = False
     if not conn:
         from database import get_connection
@@ -213,18 +271,21 @@ def sync_order_items_sku(conn=None):
     try:
         cur = conn.cursor()
         try:
-            cur.execute('SELECT sku, option_name, unit_price, dispatched_quantity FROM product_options')
+            cur.execute('SELECT product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options')
             opt_rows = [dict(r) for r in cur.fetchall()]
         except Exception:
             opt_rows = []
 
-        cur.execute('SELECT sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
+        cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
         prod_rows = [dict(r) for r in cur.fetchall()]
 
         cur.execute('SELECT id, item_product_name, item_option_name, sku, option_quantity FROM order_items')
         items = cur.fetchall()
         for it in items:
-            info = find_matching_product_info(it['item_product_name'], it['item_option_name'], conn, opt_rows=opt_rows, prod_rows=prod_rows)
+            # 업로드에서 바코드로 지정된 품목은 이후 상품명 동기화가 다른 SKU로 덮어쓰지 않게 합니다.
+            info = find_product_info_by_sku(it['sku'], opt_rows, prod_rows) if it['sku'] else None
+            if not info or not info['matched']:
+                info = find_matching_product_info(it['item_product_name'], it['item_option_name'], conn, opt_rows=opt_rows, prod_rows=prod_rows)
             if info['matched']:
                 new_sku = info['sku']
                 new_opt_qty = info['dispatched_quantity'] or 1
@@ -371,11 +432,11 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute('SELECT sku, option_name, unit_price, dispatched_quantity FROM product_options')
+        cur.execute('SELECT product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options')
         opt_rows = [dict(r) for r in cur.fetchall()]
     except Exception:
         opt_rows = []
-    cur.execute('SELECT sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
+    cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
     prod_rows = [dict(r) for r in cur.fetchall()]
 
     try:
@@ -405,7 +466,7 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
     for idx, row in df.iterrows():
         def val(k):
             col = col_map.get(k)
-            if col and col in row and pd.notna(row[col]):
+            if col is not None and col in row and pd.notna(row[col]):
                 v = str(row[col]).strip()
                 return '' if v.lower() == 'nan' else v
             return ''
@@ -416,6 +477,7 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
         shipping_method = val('shipping_method') or '택배'
         product_name = val('product_name')
         option_name = val('option_name')
+        barcode = normalize_sku(val('sku'))
         
         try:
             quantity = int(float(val('quantity'))) if val('quantity') else 1
@@ -442,8 +504,25 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
         address = val('address')
         shipping_memo = val('shipping_memo')
 
-        # 분할 처리 (캐시 사용으로 초고속)
-        split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows, rules_cache=rules_cache, delimiters=delimiters)
+        # 업로드 파일에 바코드가 있으면 상품명/옵션명 분할보다 바코드를 우선합니다.
+        if barcode:
+            barcode_info = find_product_info_by_sku(barcode, opt_rows, prod_rows)
+            try:
+                option_quantity = max(1, int(barcode_info.get('dispatched_quantity') or 1))
+            except (TypeError, ValueError):
+                option_quantity = 1
+            split_items = [{
+                'item_product_name': barcode_info.get('matched_product_name') or product_name or '상품명미상',
+                'item_option_name': barcode_info.get('matched_option_name') or option_name or '단일옵션',
+                'sku': barcode_info.get('sku') or barcode,
+                'product_quantity': quantity,
+                'option_quantity': option_quantity,
+                'quantity': quantity * option_quantity,
+                'matched': barcode_info.get('matched', False)
+            }]
+        else:
+            # 바코드가 없으면 기존 상품명/옵션명 분할 및 자동 매칭을 사용합니다.
+            split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows, rules_cache=rules_cache, delimiters=delimiters)
 
         for it in split_items:
             if not it.get('matched', False):
