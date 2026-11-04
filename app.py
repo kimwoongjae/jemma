@@ -216,7 +216,21 @@ def auth_logout():
 def admin_page():
     if session.get('account_role') != 'admin':
         return redirect('/login')
-    return render_template('admin.html')
+    return redirect('/admin/companies')
+
+
+@app.route('/admin/companies', methods=['GET'])
+def admin_companies_page():
+    if session.get('account_role') != 'admin':
+        return redirect('/login')
+    return render_template('admin.html', active_page='companies')
+
+
+@app.route('/admin/shipments', methods=['GET'])
+def admin_shipments_page():
+    if session.get('account_role') != 'admin':
+        return redirect('/login')
+    return render_template('admin.html', active_page='shipments')
 
 
 @app.route('/api/admin/companies/<int:company_id>/access', methods=['POST'])
