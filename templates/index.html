@@ -386,6 +386,7 @@
                             <label for="uploadProfileSelect" class="form-label fw-bold mb-1">업로드 파일 형식</label>
                             <select id="uploadProfileSelect" class="form-select" onchange="saveSelectedUploadProfile()">
                                 <option value="">자동 열 인식</option>
+                                <option value="__narda_manifest__">기본형식</option>
                             </select>
                         </div>
                         <div class="col-md-auto">
@@ -1696,7 +1697,7 @@
             if (!res.ok) throw new Error(profiles.error || '업로드 형식 목록을 불러오지 못했습니다.');
             uploadProfilesCache = Array.isArray(profiles) ? profiles : [];
             select.innerHTML = '<option value="">자동 열 인식</option>'
-                + `<option value="${NARDA_MANIFEST_PROFILE}">나르다 기본형식 (ManifestTemplate)</option>`
+                + `<option value="${NARDA_MANIFEST_PROFILE}">기본형식</option>`
                 + uploadProfilesCache.map(profile =>
                 `<option value="${escapeHtml(profile.profile_name)}">${escapeHtml(profile.profile_name)}</option>`
             ).join('');
@@ -1856,7 +1857,7 @@
             currentPreviewData = data;
             document.getElementById('previewExcelRows').textContent = data.total_excel_rows;
             document.getElementById('previewSplitItems').textContent = data.total_split_items;
-            const uploadFormatLabel = data.manifest_mode ? '나르다 기본형식 (ManifestTemplate)' : (data.upload_profile || '자동 열 인식');
+            const uploadFormatLabel = data.manifest_mode ? '기본형식' : (data.upload_profile || '자동 열 인식');
             document.getElementById('previewBatchName').textContent = `${data.batch_name} · 형식: ${uploadFormatLabel}`;
 
             const tbody = document.getElementById('previewTableBody');
