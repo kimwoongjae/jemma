@@ -1502,6 +1502,21 @@
                             <label class="form-label small fw-bold">배송 요청 메모</label>
                             <input type="text" class="form-control" id="editShippingMemo">
                         </div>
+                        <div class="col-12 d-none" id="editManifestDetailsSection">
+                            <hr class="my-1">
+                            <h6 class="fw-bold mb-2"><i class="fa-solid fa-file-excel me-1 text-success"></i>기본형식 업로드 상세 품목</h6>
+                            <div class="table-responsive border rounded">
+                                <table class="table table-sm table-bordered table-striped align-middle mb-0 text-nowrap">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>CTNS</th><th>HS Code</th><th>Item Name</th><th>아이템상세정보</th>
+                                            <th>Unit Price</th><th>Piece</th><th>Amount</th><th>상품 URL</th><th>원산지</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="editManifestDetailsBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -2165,9 +2180,37 @@
         document.getElementById('editAddress').value = order.address || '';
         document.getElementById('editShippingMemo').value = order.shipping_memo || '';
         document.getElementById('editWeight').value = order.weight && order.weight > 0 ? order.weight : '';
+        renderEditManifestDetails(order);
         
         const modal = new bootstrap.Modal(document.getElementById('editOrderModal'));
         modal.show();
+    }
+
+    function renderEditManifestDetails(order) {
+        const section = document.getElementById('editManifestDetailsSection');
+        const body = document.getElementById('editManifestDetailsBody');
+        const fields = ['CTNS', 'HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'];
+        const items = (order.items || []).map(item => {
+            let data = item.manifest_data || {};
+            if (typeof data === 'string') {
+                try { data = JSON.parse(data || '{}'); } catch (_) { data = {}; }
+            }
+            return { item, data };
+        }).filter(entry => fields.some(field => entry.data[field] !== undefined && entry.data[field] !== null && String(entry.data[field]).trim() !== ''));
+
+        if (!items.length) {
+            section.classList.add('d-none');
+            body.innerHTML = '';
+            return;
+        }
+
+        body.innerHTML = items.map(({ data }) => `
+            <tr>${fields.map(field => {
+                const value = data[field];
+                return `<td>${escapeHtml(value === undefined || value === null || String(value).trim() === '' ? '-' : value)}</td>`;
+            }).join('')}</tr>
+        `).join('');
+        section.classList.remove('d-none');
     }
 
     async function saveOrderEdit() {

@@ -693,6 +693,10 @@ def process_narda_manifest_file(file_path, batch_name=None, tenant_id=None):
             option_price = float(row_fields['Unit Price'] or 0)
         except (TypeError, ValueError):
             option_price = 0
+        try:
+            order_weight = float(row_fields['실무게(kg)'].replace(',', '') or 0)
+        except (TypeError, ValueError):
+            order_weight = 0
 
         order = order_groups.get(order_no)
         if order is None:
@@ -707,6 +711,7 @@ def process_narda_manifest_file(file_path, batch_name=None, tenant_id=None):
                 'original_product_name': '',
                 'original_option_name': '',
                 'original_quantity': 0,
+                'weight': order_weight,
                 'recipient_name': row_fields['받는분'],
                 'recipient_phone1': row_fields['휴대폰번호'] or row_fields['전화번호'],
                 'recipient_phone2': row_fields['전화번호'] if row_fields['휴대폰번호'] else '',
@@ -790,14 +795,15 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
         val_placeholders = []
         params = []
         for ord_data in chunk:
-            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
             params.extend([
                 tenant_id,
                 ord_data['order_no'], ord_data['courier'], ord_data['tracking_no'], ord_data['shipping_method'],
                 ord_data['original_product_name'], ord_data['original_option_name'], ord_data['original_quantity'],
                 ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
                 ord_data['customs_id'], ord_data['postal_code'], ord_data['address'], ord_data['shipping_memo'],
-                '주문접수', batch_name, json.dumps(ord_data.get('manifest_data') or {}, ensure_ascii=False)
+                '주문접수', batch_name, float(ord_data.get('weight') or 0),
+                json.dumps(ord_data.get('manifest_data') or {}, ensure_ascii=False)
             ])
         
         insert_sql = f'''
@@ -806,7 +812,7 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
                 original_product_name, original_option_name, original_quantity,
                 recipient_name, recipient_phone1, recipient_phone2,
                 customs_id, postal_code, address, shipping_memo,
-                status, upload_batch, manifest_data
+                status, upload_batch, weight, manifest_data
             ) VALUES {', '.join(val_placeholders)}
             RETURNING id
         '''
