@@ -212,6 +212,40 @@ def auth_logout():
     return jsonify({'status': 'success', 'redirect': '/login'})
 
 
+@app.route('/api/account/password', methods=['POST'])
+def change_account_password():
+    if session.get('account_role') != 'user' or not session.get('user_id'):
+        return jsonify({'error': '업체 계정으로 로그인해야 비밀번호를 변경할 수 있습니다.'}), 403
+    data = request.get_json() or {}
+    current_password = str(data.get('current_password') or '')
+    new_password = str(data.get('new_password') or '')
+    if not current_password:
+        return jsonify({'error': '현재 비밀번호를 입력해주세요.'}), 400
+    if len(new_password) < 10:
+        return jsonify({'error': '새 비밀번호는 10자 이상 입력해주세요.'}), 400
+    if current_password == new_password:
+        return jsonify({'error': '현재 비밀번호와 다른 비밀번호를 입력해주세요.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id, password_hash FROM users WHERE id = ? AND company_id = ? AND active = 1',
+                    (session['user_id'], session.get('company_id')))
+        user = cur.fetchone()
+        if not user or not check_password_hash(user['password_hash'], current_password):
+            return jsonify({'error': '현재 비밀번호가 올바르지 않습니다.'}), 400
+        cur.execute('UPDATE users SET password_hash = ? WHERE id = ? AND company_id = ?',
+                    (generate_password_hash(new_password), session['user_id'], session.get('company_id')))
+        conn.commit()
+        return jsonify({'status': 'success', 'message': '비밀번호를 변경했습니다.'})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Account password change failed')
+        return jsonify({'error': '비밀번호 변경에 실패했습니다. 다시 시도해주세요.'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/admin', methods=['GET'])
 def admin_page():
     if session.get('account_role') != 'admin':
@@ -298,8 +332,16 @@ def admin_delete_company(company_id):
                       'unregistered_products'):
             cur.execute(f'DELETE FROM {table} WHERE tenant_id = ?', (company_id,))
         cur.execute('DELETE FROM users WHERE company_id = ?', (company_id,))
+        if company['name'] == '젬마 (기존 데이터)':
+            cur.execute('''INSERT INTO system_flags (flag_key, flag_value) VALUES (?, ?)
+                           ON CONFLICT(flag_key) DO UPDATE SET flag_value = excluded.flag_value''',
+                        ('legacy_gemma_deleted', '1'))
         cur.execute('DELETE FROM companies WHERE id = ?', (company_id,))
         conn.commit()
+        if session.get('admin_tenant_id') == company_id:
+            session.pop('admin_tenant_id', None)
+            session.pop('company_id', None)
+            session.pop('company_name', None)
         return jsonify({'status': 'success', 'deleted_company': company['name']})
     except Exception:
         conn.rollback()
@@ -521,9 +563,17 @@ def admin_issue_tracking():
     cur = conn.cursor()
     cur.execute('SELECT id FROM companies WHERE id = ? AND active = 1', (company_id,))
     company = cur.fetchone()
+    if company:
+        placeholders = ','.join(['?'] * len(order_ids))
+        cur.execute(f'SELECT COUNT(*) AS order_count FROM orders WHERE tenant_id = ? AND id IN ({placeholders})', [company_id] + order_ids)
+        owned_count = cur.fetchone()['order_count']
+    else:
+        owned_count = 0
     conn.close()
     if not company:
         return jsonify({'error': '활성 상태의 거래처를 찾을 수 없습니다.'}), 404
+    if owned_count != len(order_ids):
+        return jsonify({'error': '선택한 주문 중 해당 거래처에 속하지 않는 주문이 있습니다. 목록을 새로고침해주세요.'}), 400
 
     result = issue_tracking_numbers(order_ids, tenant_id=company_id)
     updated = result.get('updated_orders', []) if isinstance(result, dict) else result
@@ -536,6 +586,53 @@ def admin_issue_tracking():
         'failed_count': len(failed),
         'message': f"송장 발급 {len(updated)}건 성공, {len(failed)}건 실패"
     })
+
+
+@app.route('/api/admin/orders/<int:order_id>/edit', methods=['POST'])
+def admin_edit_order(order_id):
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    data = request.get_json() or {}
+    company_id = data.get('company_id')
+    if not str(company_id or '').isdigit():
+        return jsonify({'error': '거래처 정보가 올바르지 않습니다.'}), 400
+    company_id = int(company_id)
+    order_no = str(data.get('order_no') or '').strip()
+    recipient_name = str(data.get('recipient_name') or '').strip()
+    recipient_phone1 = str(data.get('recipient_phone1') or '').strip()
+    recipient_phone2 = str(data.get('recipient_phone2') or '').strip()
+    customs_id = str(data.get('customs_id') or '').strip().upper()
+    postal_code = str(data.get('postal_code') or '').strip()
+    address = str(data.get('address') or '').strip()
+    shipping_memo = str(data.get('shipping_memo') or '').strip()
+    try:
+        weight = max(0.0, float(data.get('weight') or 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': '무게는 0 이상의 숫자로 입력해주세요.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id FROM companies WHERE id = ?', (company_id,))
+        if not cur.fetchone():
+            return jsonify({'error': '거래처를 찾을 수 없습니다.'}), 404
+        cur.execute('SELECT id FROM orders WHERE id = ? AND tenant_id = ?', (order_id, company_id))
+        if not cur.fetchone():
+            return jsonify({'error': '해당 거래처의 주문을 찾을 수 없습니다.'}), 404
+        cur.execute('''UPDATE orders
+            SET order_no = ?, recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?, customs_id = ?,
+                postal_code = ?, address = ?, shipping_memo = ?, weight = ?
+            WHERE id = ? AND tenant_id = ?''',
+            (order_no, recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code,
+             address, shipping_memo, weight, order_id, company_id))
+        conn.commit()
+        return jsonify({'status': 'success', 'message': '주문 정보가 수정되었습니다.'})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Admin order edit failed')
+        return jsonify({'error': '주문 정보를 저장하지 못했습니다.'}), 500
+    finally:
+        conn.close()
 
 
 @app.route('/api/company', methods=['GET'])

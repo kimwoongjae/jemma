@@ -1116,6 +1116,22 @@
 
         <!-- 6. 세트 분할 및 배송 설정 탭 -->
         <div class="tab-pane fade" id="settings-pane" role="tabpanel">
+            {% if session.get('account_role') == 'user' %}
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white py-3">
+                    <h5 class="fw-bold mb-1"><i class="fa-solid fa-key text-primary me-2"></i>비밀번호 변경</h5>
+                    <p class="text-muted small mb-0">현재 비밀번호를 확인한 뒤 새 비밀번호를 설정합니다.</p>
+                </div>
+                <div class="card-body">
+                    <form id="changePasswordForm" onsubmit="changeAccountPassword(event)" class="row g-3">
+                        <div class="col-md-4"><label for="currentAccountPassword" class="form-label fw-semibold">현재 비밀번호</label><input id="currentAccountPassword" class="form-control" type="password" autocomplete="current-password" required></div>
+                        <div class="col-md-4"><label for="newAccountPassword" class="form-label fw-semibold">새 비밀번호</label><input id="newAccountPassword" class="form-control" type="password" autocomplete="new-password" minlength="10" required><div class="form-text">10자 이상 입력해주세요.</div></div>
+                        <div class="col-md-4"><label for="confirmAccountPassword" class="form-label fw-semibold">새 비밀번호 확인</label><input id="confirmAccountPassword" class="form-control" type="password" autocomplete="new-password" minlength="10" required></div>
+                        <div class="col-12 d-flex align-items-center gap-3"><button type="submit" class="btn btn-primary" id="changePasswordButton"><i class="fa-solid fa-floppy-disk me-1"></i>비밀번호 저장</button><span id="changePasswordMessage" class="small" aria-live="polite"></span></div>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
             <div class="row g-4">
                 <!-- 세트 상품 분할 규칙 설정 -->
                 <div class="col-lg-7">
@@ -4689,6 +4705,41 @@
         });
         const data = await res.json();
         if (data.status === 'success') alert('설정이 저장되었습니다.');
+    }
+
+    async function changeAccountPassword(e) {
+        e.preventDefault();
+        const form = document.getElementById('changePasswordForm');
+        const button = document.getElementById('changePasswordButton');
+        const message = document.getElementById('changePasswordMessage');
+        const currentPassword = document.getElementById('currentAccountPassword').value;
+        const newPassword = document.getElementById('newAccountPassword').value;
+        const confirmPassword = document.getElementById('confirmAccountPassword').value;
+        message.textContent = '';
+        message.className = 'small';
+        if (newPassword !== confirmPassword) {
+            message.textContent = '새 비밀번호가 서로 다릅니다.';
+            message.classList.add('text-danger');
+            return;
+        }
+        button.disabled = true;
+        try {
+            const res = await fetch('/api/account/password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || '비밀번호를 변경하지 못했습니다.');
+            form.reset();
+            message.textContent = data.message || '비밀번호를 변경했습니다.';
+            message.classList.add('text-success');
+        } catch (error) {
+            message.textContent = error.message;
+            message.classList.add('text-danger');
+        } finally {
+            button.disabled = false;
+        }
     }
 
     function openAddBundleModal() {

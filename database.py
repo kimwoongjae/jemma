@@ -448,6 +448,11 @@ def init_db():
 
 def _ensure_tenant_schema(cur, postgres):
     id_type = 'BIGSERIAL PRIMARY KEY' if postgres else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+    cur.execute(f'''CREATE TABLE IF NOT EXISTS system_flags (
+        id {id_type},
+        flag_key TEXT NOT NULL UNIQUE,
+        flag_value TEXT NOT NULL DEFAULT ''
+    )''')
     cur.execute(f'''CREATE TABLE IF NOT EXISTS companies (
         id {id_type},
         name TEXT NOT NULL UNIQUE,
@@ -486,6 +491,27 @@ def _assign_legacy_tenant(cur):
     if row:
         tenant_id = row['id'] if hasattr(row, 'keys') else row[0]
     else:
+        # A deliberate admin deletion is permanent: old unassigned rows must not
+        # cause this placeholder tenant to be recreated on the next app startup.
+        cur.execute("SELECT flag_value FROM system_flags WHERE flag_key = ?", ('legacy_gemma_deleted',))
+        deleted_marker = cur.fetchone()
+        if deleted_marker:
+            return None
+        # Do not recreate a deliberately deleted legacy company on every startup.
+        # Only create it when rows from the pre-tenant database still need assignment.
+        legacy_tables = (
+            'products', 'product_options', 'orders', 'order_items', 'inventory_logs',
+            'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
+            'unregistered_products'
+        )
+        has_unassigned_legacy_data = False
+        for table in legacy_tables:
+            cur.execute(f'SELECT 1 FROM {table} WHERE tenant_id IS NULL LIMIT 1')
+            if cur.fetchone():
+                has_unassigned_legacy_data = True
+                break
+        if not has_unassigned_legacy_data:
+            return None
         invite_code = secrets.token_urlsafe(8).replace('-', '').replace('_', '')[:10].upper()
         cur.execute('INSERT INTO companies (name, invite_code) VALUES (?, ?)', ('젬마 (기존 데이터)', invite_code))
         tenant_id = cur.lastrowid

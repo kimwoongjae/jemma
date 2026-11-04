@@ -71,16 +71,40 @@
             </div></div>
                 <div class="d-flex flex-wrap align-items-center gap-2 p-3 border-bottom">
                     <span class="badge text-bg-primary py-2 px-3">선택 <strong id="adminSelectedOrderCount">0</strong>건</span>
-                    <button class="btn btn-sm btn-primary" id="adminIssueTrackingButton" onclick="adminIssueTracking()"><i class="bi bi-upc-scan me-1"></i>선택 나르다 송장발급</button>
+                    <button class="btn btn-sm btn-outline-primary" id="adminEditOrderButton" onclick="openSelectedOrderEdit()" disabled><i class="bi bi-pencil-square me-1"></i>선택 건 편집</button>
+                    <button class="btn btn-sm btn-primary" id="adminIssueTrackingButton" onclick="adminIssueTracking()" disabled><i class="bi bi-upc-scan me-1"></i>선택 나르다 송장발급</button>
                     <button class="btn btn-sm btn-outline-danger" id="adminPrintLabelsButton" onclick="adminPrintSelectedLabels()"><i class="bi bi-printer me-1"></i>선택 나르다 송장 출력</button>
                     <button class="btn btn-sm btn-outline-secondary ms-auto" id="adminOpenCompanyButton" onclick="openSelectedCompanyWorkspace()"><i class="bi bi-box-arrow-up-right me-1"></i>선택 업체 주문관리 전체 기능</button>
                 </div>
                 <div class="table-responsive"><table class="table table-hover"><thead><tr><th><input type="checkbox" class="form-check-input" id="checkAllAdminOrders" onchange="toggleAdminOrderSelection(this)"></th><th>거래처</th><th>등록일</th><th>주문번호</th><th>수취인</th><th>택배사</th><th>송장번호</th><th>상품</th><th>상태 / API 결과</th><th>송장</th></tr></thead><tbody id="ordersBody"><tr><td colspan="10" class="empty-state">불러오는 중입니다.</td></tr></tbody></table></div>
             </section>
+            <div class="modal fade" id="adminOrderEditModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-lg modal-dialog-scrollable">
+                    <div class="modal-content">
+                        <div class="modal-header"><div><h5 class="modal-title fw-bold">주문 정보 편집</h5><div class="small text-secondary" id="adminEditOrderSummary"></div></div><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button></div>
+                        <div class="modal-body">
+                            <input type="hidden" id="adminEditOrderId"><input type="hidden" id="adminEditCompanyId">
+                            <div class="row g-3">
+                                <div class="col-md-6"><label class="form-label">주문번호</label><input id="adminEditOrderNo" class="form-control"></div>
+                                <div class="col-md-6"><label class="form-label">수취인</label><input id="adminEditRecipientName" class="form-control"></div>
+                                <div class="col-md-6"><label class="form-label">무게 (kg)</label><input id="adminEditWeight" type="number" min="0" step="0.01" class="form-control"></div>
+                                <div class="col-md-6"><label class="form-label">연락처 1</label><input id="adminEditPhone1" class="form-control"></div>
+                                <div class="col-md-6"><label class="form-label">연락처 2</label><input id="adminEditPhone2" class="form-control"></div>
+                                <div class="col-md-6"><label class="form-label">개인통관고유부호</label><input id="adminEditCustomsId" class="form-control"></div>
+                                <div class="col-md-6"><label class="form-label">우편번호</label><input id="adminEditPostalCode" class="form-control"></div>
+                                <div class="col-12"><label class="form-label">배송지 주소</label><input id="adminEditAddress" class="form-control"></div>
+                                <div class="col-12"><label class="form-label">배송 요청</label><input id="adminEditShippingMemo" class="form-control"></div>
+                            </div>
+                        </div>
+                        <div class="modal-footer"><button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button><button class="btn btn-primary" id="adminSaveOrderButton" onclick="saveAdminOrderEdit()"><i class="bi bi-check2 me-1"></i>저장</button></div>
+                    </div>
+                </div>
+            </div>
             {% endif %}
         </main>
     </section>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 const esc=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const activePage={{ active_page|tojson }};
@@ -153,24 +177,84 @@ function renderShipments(){
         const stateLabel=apiState?`${o.status||'주문접수'} · API ${apiState}`:(o.status||'주문접수');
         const stateClass=apiState==='실패'?'text-bg-danger':(o.status==='출고완료'?'text-bg-success':'text-bg-secondary');
         const pdfLink=o.invoice_pdf_url?`<a class="btn btn-sm btn-outline-danger" target="_blank" rel="noopener" href="/api/admin/shipping/narda-pdf-bundle?company_id=${encodeURIComponent(o.tenant_id)}&order_ids=${encodeURIComponent(o.id)}" title="나르다 공식 PDF 송장"><i class="bi bi-file-pdf"></i></a>`:'–';
-        return `<tr><td><input type="checkbox" class="form-check-input admin-order-check" value="${esc(o.id)}" data-company-id="${esc(o.tenant_id)}" onchange="updateAdminActionButtons()"></td><td><span class="company-name">${esc(o.company_name)}</span></td><td>${esc(String(o.created_at||'').replace('T',' ').slice(0,16))}</td><td>${esc(o.order_no)}</td><td>${esc(o.recipient_name)}</td><td>${esc(o.courier)}</td><td class="fw-semibold text-primary">${esc(o.tracking_no)}</td><td>${esc([o.original_product_name,o.original_option_name].filter(Boolean).join(' / '))}</td><td><span class="badge ${stateClass}" title="${esc(apiMessage)}">${esc(stateLabel)}</span>${apiState==='실패'&&apiMessage?`<div class="small text-danger mt-1">${esc(apiMessage)}</div>`:''}</td><td>${pdfLink}</td></tr>`;
+        return `<tr><td><input type="checkbox" class="form-check-input admin-order-check" value="${esc(o.id)}" data-company-id="${esc(o.tenant_id)}" onclick="handleAdminOrderSelectionClick(event,this)"></td><td><span class="company-name">${esc(o.company_name)}</span></td><td>${esc(String(o.created_at||'').replace('T',' ').slice(0,16))}</td><td>${esc(o.order_no)}</td><td>${esc(o.recipient_name)}</td><td>${esc(o.courier)}</td><td class="fw-semibold text-primary">${esc(o.tracking_no)}</td><td>${esc([o.original_product_name,o.original_option_name].filter(Boolean).join(' / '))}</td><td><span class="badge ${stateClass}" title="${esc(apiMessage)}">${esc(stateLabel)}</span>${apiState==='실패'&&apiMessage?`<div class="small text-danger mt-1">${esc(apiMessage)}</div>`:''}</td><td>${pdfLink}</td></tr>`;
     }).join('')||'<tr><td colspan="10" class="empty-state"><div class="empty-icon"><i class="bi bi-inbox"></i></div>조건에 맞는 주문 내역이 없습니다.</td></tr>';
     const master=document.getElementById('checkAllAdminOrders');if(master)master.checked=false;
+    lastAdminOrderCheckIndex=-1;
+    updateAdminActionButtons();
+}
+let lastAdminOrderCheckIndex=-1;
+function handleAdminOrderSelectionClick(event,checkbox){
+    const checks=[...document.querySelectorAll('.admin-order-check')], current=checks.indexOf(checkbox);
+    if(event.shiftKey&&lastAdminOrderCheckIndex>=0&&current>=0&&current!==lastAdminOrderCheckIndex){
+        const start=Math.min(lastAdminOrderCheckIndex,current),end=Math.max(lastAdminOrderCheckIndex,current),checked=checkbox.checked;
+        for(let i=start;i<=end;i++)checks[i].checked=checked;
+    }
+    lastAdminOrderCheckIndex=current;
     updateAdminActionButtons();
 }
 function getSelectedAdminOrders(){return [...document.querySelectorAll('.admin-order-check:checked')].map(el=>({id:el.value,companyId:el.dataset.companyId}));}
+function getSelectedAdminCompanyId(selected=getSelectedAdminOrders()){
+    if(!selected.length)return '';
+    const ids=[...new Set(selected.map(item=>String(item.companyId)))];
+    if(ids.length!==1)return '';
+    const filtered=document.getElementById('companyFilter')?.value||'';
+    return !filtered||filtered===ids[0]?ids[0]:'';
+}
 function updateAdminActionButtons(){
-    const selected=getSelectedAdminOrders(), companyId=document.getElementById('companyFilter')?.value||'';
+    const selected=getSelectedAdminOrders(), companyId=getSelectedAdminCompanyId(selected);
     document.getElementById('adminSelectedOrderCount').textContent=selected.length.toLocaleString();
-    const validCompany=!!companyId&&selected.every(item=>item.companyId===companyId);
-    document.getElementById('adminIssueTrackingButton').disabled=!validCompany||selected.length===0;
-    document.getElementById('adminPrintLabelsButton').disabled=!validCompany||selected.length===0;
+    document.getElementById('adminEditOrderButton').disabled=selected.length!==1;
+    document.getElementById('adminIssueTrackingButton').disabled=!companyId;
+    document.getElementById('adminPrintLabelsButton').disabled=!companyId;
     document.getElementById('adminOpenCompanyButton').disabled=!companyId;
 }
-function toggleAdminOrderSelection(master){document.querySelectorAll('.admin-order-check').forEach(check=>check.checked=master.checked);updateAdminActionButtons();}
+function toggleAdminOrderSelection(master){document.querySelectorAll('.admin-order-check').forEach(check=>check.checked=master.checked);lastAdminOrderCheckIndex=-1;updateAdminActionButtons();}
+function openSelectedOrderEdit(){
+    const selected=getSelectedAdminOrders();
+    if(selected.length!==1){alert('편집할 주문 한 건만 선택해주세요.');return;}
+    const order=shipmentRows.find(item=>String(item.id)===selected[0].id&&String(item.tenant_id)===selected[0].companyId);
+    if(!order){alert('선택한 주문 정보를 찾지 못했습니다. 새로고침 후 다시 선택해주세요.');return;}
+    document.getElementById('adminEditOrderId').value=order.id;
+    document.getElementById('adminEditCompanyId').value=order.tenant_id;
+    document.getElementById('adminEditOrderSummary').textContent=`${order.company_name} · 주문번호 ${order.order_no}`;
+    document.getElementById('adminEditOrderNo').value=order.order_no||'';
+    document.getElementById('adminEditRecipientName').value=order.recipient_name||'';
+    document.getElementById('adminEditWeight').value=Number(order.weight)>0?order.weight:'';
+    document.getElementById('adminEditPhone1').value=order.recipient_phone1||'';
+    document.getElementById('adminEditPhone2').value=order.recipient_phone2||'';
+    document.getElementById('adminEditCustomsId').value=order.customs_id||'';
+    document.getElementById('adminEditPostalCode').value=order.postal_code||'';
+    document.getElementById('adminEditAddress').value=order.address||'';
+    document.getElementById('adminEditShippingMemo').value=order.shipping_memo||'';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('adminOrderEditModal')).show();
+}
+async function saveAdminOrderEdit(){
+    const id=document.getElementById('adminEditOrderId').value,button=document.getElementById('adminSaveOrderButton');
+    const payload={
+        company_id:document.getElementById('adminEditCompanyId').value,
+        order_no:document.getElementById('adminEditOrderNo').value,
+        recipient_name:document.getElementById('adminEditRecipientName').value,
+        weight:document.getElementById('adminEditWeight').value,
+        recipient_phone1:document.getElementById('adminEditPhone1').value,
+        recipient_phone2:document.getElementById('adminEditPhone2').value,
+        customs_id:document.getElementById('adminEditCustomsId').value,
+        postal_code:document.getElementById('adminEditPostalCode').value,
+        address:document.getElementById('adminEditAddress').value,
+        shipping_memo:document.getElementById('adminEditShippingMemo').value
+    };
+    button.disabled=true;
+    try{
+        const res=await fetch(`/api/admin/orders/${encodeURIComponent(id)}/edit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const data=await res.json();if(!res.ok)throw new Error(data.error||'주문 정보를 저장하지 못했습니다.');
+        bootstrap.Modal.getInstance(document.getElementById('adminOrderEditModal'))?.hide();
+        await loadCompanyOrders();
+    }catch(error){alert(error.message);}
+    finally{button.disabled=false;}
+}
 async function adminIssueTracking(){
-    const companyId=document.getElementById('companyFilter').value, selected=getSelectedAdminOrders();
-    if(!companyId||!selected.length||selected.some(item=>item.companyId!==companyId)){alert('한 거래처를 선택하고 해당 거래처 주문만 선택해주세요.');return;}
+    const selected=getSelectedAdminOrders(),companyId=getSelectedAdminCompanyId(selected);
+    if(!companyId||!selected.length){alert('송장을 발급할 한 거래처의 주문만 선택해주세요.');return;}
     if(!confirm(`선택한 ${selected.length}건을 해당 거래처의 나르다 설정으로 송장 발급할까요?\n\n거래처의 재고 출고 설정에 따라 재고 확인 및 차감도 함께 처리됩니다.`))return;
     const button=document.getElementById('adminIssueTrackingButton');button.disabled=true;button.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>나르다 전송 중…';
     try{
@@ -182,13 +266,13 @@ async function adminIssueTracking(){
     finally{button.innerHTML='<i class="bi bi-upc-scan me-1"></i>선택 나르다 송장발급';updateAdminActionButtons();}
 }
 function adminPrintSelectedLabels(){
-    const companyId=document.getElementById('companyFilter').value,selected=getSelectedAdminOrders();
-    if(!companyId||!selected.length||selected.some(item=>item.companyId!==companyId)){alert('한 거래처를 선택하고 해당 거래처 주문만 선택해주세요.');return;}
+    const selected=getSelectedAdminOrders(),companyId=getSelectedAdminCompanyId(selected);
+    if(!companyId||!selected.length){alert('송장을 출력할 한 거래처의 주문만 선택해주세요.');return;}
     const ids=selected.map(item=>item.id).join(',');
     window.open(`/api/admin/shipping/narda-pdf-bundle?company_id=${encodeURIComponent(companyId)}&order_ids=${encodeURIComponent(ids)}`,'_blank','noopener');
 }
 async function openSelectedCompanyWorkspace(){
-    const companyId=document.getElementById('companyFilter').value;
+    const companyId=document.getElementById('companyFilter').value||getSelectedAdminCompanyId();
     if(!companyId){alert('거래처를 먼저 선택해주세요.');return;}
     const tab=window.open('about:blank','_blank');
     if(!tab){alert('새 탭이 차단되었습니다. 브라우저에서 팝업을 허용해주세요.');return;}
