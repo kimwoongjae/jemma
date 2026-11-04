@@ -35,6 +35,18 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 init_db()
 
 
+def resolve_data_tenant_id(company_id):
+    """Resolve the operational data owner for a login company, if one is linked."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT data_tenant_id FROM companies WHERE id = ?', (company_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return int(company_id)
+    return int(row['data_tenant_id'] or company_id)
+
+
 @app.before_request
 def require_account_session():
     public_endpoints = {'auth_page', 'auth_login', 'auth_register', 'auth_join', 'auth_logout'}
@@ -48,7 +60,7 @@ def require_account_session():
         admin_company_id = session.get('admin_tenant_id')
         if admin_company_id:
             try:
-                g.company_id = int(admin_company_id)
+                g.company_id = resolve_data_tenant_id(int(admin_company_id))
             except (TypeError, ValueError):
                 session.pop('admin_tenant_id', None)
                 session.pop('company_id', None)
@@ -65,7 +77,7 @@ def require_account_session():
             return jsonify({'error': '로그인이 필요합니다.'}), 401
         return redirect('/login')
     try:
-        g.company_id = int(company_id)
+        g.company_id = resolve_data_tenant_id(int(company_id))
     except (TypeError, ValueError):
         session.clear()
         return jsonify({'error': '로그인 정보가 올바르지 않습니다.'}), 401
@@ -266,18 +278,89 @@ def admin_companies():
         return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('''SELECT c.id, c.name, c.invite_code, c.active, c.created_at,
+    cur.execute('''SELECT c.id, c.name, c.invite_code, c.active, c.created_at, c.data_tenant_id,
                           COUNT(DISTINCT o.id) AS order_count,
                           COUNT(DISTINCT CASE WHEN o.status = '출고완료' THEN o.id END) AS dispatched_count,
                           COUNT(DISTINCT u.id) AS user_count
                    FROM companies c
-                   LEFT JOIN orders o ON o.tenant_id = c.id
+                   LEFT JOIN orders o ON o.tenant_id = COALESCE(c.data_tenant_id, c.id)
                    LEFT JOIN users u ON u.company_id = c.id
-                   GROUP BY c.id, c.name, c.invite_code, c.active, c.created_at
+                   GROUP BY c.id, c.name, c.invite_code, c.active, c.created_at, c.data_tenant_id
                    ORDER BY c.id ASC''')
     companies = [dict(row) for row in cur.fetchall()]
     conn.close()
     return jsonify(companies)
+
+
+@app.route('/api/admin/companies/<int:company_id>/link-legacy-data', methods=['POST'])
+def admin_link_legacy_data(company_id):
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    data = request.get_json() or {}
+    connect = bool(data.get('connect', True))
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id, name FROM companies WHERE id = ?', (company_id,))
+        target = cur.fetchone()
+        if not target:
+            return jsonify({'error': '대상 거래처를 찾을 수 없습니다.'}), 404
+        if target['name'] == '젬마 (기존 데이터)':
+            return jsonify({'error': '기존 데이터 업체 자체에는 연결할 수 없습니다.'}), 400
+        if connect:
+            cur.execute("SELECT id, name FROM companies WHERE name = ?", ('젬마 (기존 데이터)',))
+            source = cur.fetchone()
+            if not source:
+                return jsonify({'error': '기존 젬마 데이터 업체를 찾을 수 없습니다.'}), 404
+            if int(source['id']) == company_id:
+                return jsonify({'error': '업체 자신에게 연결할 수 없습니다.'}), 400
+            cur.execute('UPDATE companies SET data_tenant_id = ? WHERE id = ?', (source['id'], company_id))
+            source_name = source['name']
+        else:
+            cur.execute('UPDATE companies SET data_tenant_id = NULL WHERE id = ?', (company_id,))
+            source_name = ''
+        conn.commit()
+        return jsonify({'status': 'success', 'company_name': target['name'], 'data_source': source_name})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Company data link update failed')
+        return jsonify({'error': '데이터 연결 설정을 변경하지 못했습니다.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/admin/companies/<int:company_id>/delete', methods=['POST'])
+def admin_delete_company(company_id):
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id, name, data_tenant_id FROM companies WHERE id = ?', (company_id,))
+        company = cur.fetchone()
+        if not company:
+            return jsonify({'error': '거래처를 찾을 수 없습니다.'}), 404
+        if company['data_tenant_id']:
+            return jsonify({'error': '기존 젬마 데이터가 연결된 거래처입니다. 먼저 연결을 해제한 뒤 삭제해주세요.'}), 409
+        cur.execute('SELECT id FROM companies WHERE data_tenant_id = ? LIMIT 1', (company_id,))
+        if cur.fetchone():
+            return jsonify({'error': '다른 거래처가 이 데이터를 사용 중입니다. 먼저 데이터 연결을 해제한 뒤 삭제해주세요.'}), 409
+
+        # Only records owned by this company are deleted. A linked data source is protected above.
+        for table in ('order_items', 'orders', 'product_options', 'inventory_logs', 'products',
+                      'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
+                      'unregistered_products'):
+            cur.execute(f'DELETE FROM {table} WHERE tenant_id = ?', (company_id,))
+        cur.execute('DELETE FROM users WHERE company_id = ?', (company_id,))
+        cur.execute('DELETE FROM companies WHERE id = ?', (company_id,))
+        conn.commit()
+        return jsonify({'status': 'success', 'deleted_company': company['name']})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Company deletion failed')
+        return jsonify({'error': '거래처 삭제에 실패했습니다. 변경 내용은 저장되지 않았습니다.'}), 500
+    finally:
+        conn.close()
 
 
 @app.route('/api/admin/companies/<int:target_company_id>/copy-legacy-catalog', methods=['POST'])
@@ -454,14 +537,18 @@ def admin_company_orders():
         conditions.append("(o.status IN ('출고완료', '송장발급') OR TRIM(COALESCE(o.tracking_no, '')) != '')")
     if company_id.isdigit():
         conditions.append('o.tenant_id = ?')
-        params.append(int(company_id))
+        params.append(resolve_data_tenant_id(int(company_id)))
     if date_from:
         conditions.append(f'{date_expr} >= ?')
         params.append(date_from)
     if date_to:
         conditions.append(f'{date_expr} <= ?')
         params.append(date_to)
-    cur.execute(f'''SELECT o.*, c.name AS company_name FROM orders o
+    cur.execute(f'''SELECT o.*,
+                           COALESCE((SELECT alias.name FROM companies alias
+                                     WHERE alias.data_tenant_id = o.tenant_id
+                                     ORDER BY alias.id ASC LIMIT 1), c.name) AS company_name
+                    FROM orders o
                     JOIN companies c ON c.id = o.tenant_id
                     WHERE {' AND '.join(conditions)}
                     ORDER BY COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)) DESC
@@ -475,7 +562,7 @@ def admin_company_orders():
 def get_current_company():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT id, name, invite_code FROM companies WHERE id = ?', (g.company_id,))
+    cur.execute('SELECT id, name, invite_code FROM companies WHERE id = ?', (session.get('company_id'),))
     company = cur.fetchone()
     conn.close()
     return jsonify(dict(company) if company else {})
