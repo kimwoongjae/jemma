@@ -431,16 +431,8 @@ def _ensure_tenant_schema(cur, postgres):
         name TEXT NOT NULL UNIQUE,
         invite_code TEXT NOT NULL UNIQUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        active INTEGER NOT NULL DEFAULT 1,
-        data_tenant_id INTEGER
+        active INTEGER NOT NULL DEFAULT 1
     )''')
-    if postgres:
-        cur.execute('ALTER TABLE companies ADD COLUMN IF NOT EXISTS data_tenant_id INTEGER')
-    else:
-        cur.execute('PRAGMA table_info(companies)')
-        company_columns = [row[1] for row in cur.fetchall()]
-        if 'data_tenant_id' not in company_columns:
-            cur.execute('ALTER TABLE companies ADD COLUMN data_tenant_id INTEGER')
     cur.execute(f'''CREATE TABLE IF NOT EXISTS users (
         id {id_type},
         username TEXT NOT NULL UNIQUE,
