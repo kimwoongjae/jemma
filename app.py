@@ -284,7 +284,7 @@ def admin_companies():
 def admin_copy_legacy_catalog(target_company_id):
     """Copy the legacy Jemma product catalog and upload profiles to a new company.
 
-    Existing destination products and upload profiles are preserved, so retries are safe.
+    Existing destination catalog, upload, and split settings are preserved, so retries are safe.
     Orders and shipping data are intentionally not included.
     """
     if session.get('account_role') != 'admin':
@@ -376,12 +376,53 @@ def admin_copy_legacy_catalog(target_company_id):
                          profile['header_row'], profile['created_at']))
             copied_profiles += 1
 
+        cur.execute('SELECT symbol FROM split_delimiters WHERE tenant_id = ? ORDER BY id', (source_id,))
+        source_delimiters = cur.fetchall()
+        copied_delimiters = skipped_delimiters = 0
+        for delimiter in source_delimiters:
+            cur.execute('SELECT id FROM split_delimiters WHERE tenant_id = ? AND symbol = ?',
+                        (target_company_id, delimiter['symbol']))
+            if cur.fetchone():
+                skipped_delimiters += 1
+                continue
+            cur.execute('INSERT INTO split_delimiters (tenant_id, symbol) VALUES (?, ?)',
+                        (target_company_id, delimiter['symbol']))
+            copied_delimiters += 1
+
+        cur.execute('''SELECT rule_name, source_product_name, source_option_name, target_product_name,
+                              target_option_name, target_sku, multiplier, is_active, created_at
+                       FROM bundle_rules WHERE tenant_id = ? ORDER BY id''', (source_id,))
+        source_rules = cur.fetchall()
+        copied_rules = skipped_rules = 0
+        for rule in source_rules:
+            cur.execute('''SELECT id FROM bundle_rules WHERE tenant_id = ? AND COALESCE(rule_name, '') = COALESCE(?, '')
+                           AND source_product_name = ? AND source_option_name = ?
+                           AND target_product_name = ? AND target_option_name = ?
+                           AND COALESCE(target_sku, '') = COALESCE(?, '')
+                           AND multiplier = ? AND is_active = ?''',
+                        (target_company_id, rule['rule_name'], rule['source_product_name'], rule['source_option_name'],
+                         rule['target_product_name'], rule['target_option_name'], rule['target_sku'],
+                         rule['multiplier'], rule['is_active']))
+            if cur.fetchone():
+                skipped_rules += 1
+                continue
+            cur.execute('''INSERT INTO bundle_rules
+                (tenant_id, rule_name, source_product_name, source_option_name, target_product_name,
+                 target_option_name, target_sku, multiplier, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (target_company_id, rule['rule_name'], rule['source_product_name'], rule['source_option_name'],
+                 rule['target_product_name'], rule['target_option_name'], rule['target_sku'],
+                 rule['multiplier'], rule['is_active'], rule['created_at']))
+            copied_rules += 1
+
         conn.commit()
         return jsonify({
             'status': 'success', 'source_company': source['name'], 'target_company': target['name'],
             'copied_products': copied_products, 'skipped_products': skipped_products,
             'copied_options': copied_options, 'skipped_options': skipped_options,
-            'copied_profiles': copied_profiles, 'skipped_profiles': skipped_profiles
+            'copied_profiles': copied_profiles, 'skipped_profiles': skipped_profiles,
+            'copied_delimiters': copied_delimiters, 'skipped_delimiters': skipped_delimiters,
+            'copied_rules': copied_rules, 'skipped_rules': skipped_rules
         })
     except Exception as error:
         conn.rollback()

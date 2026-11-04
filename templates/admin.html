@@ -104,10 +104,10 @@ async function enterCompany(event,id){
 }
 async function copyLegacyCatalog(event,id){
     event.stopPropagation();const targetName=event.currentTarget.closest('tr').cells[0].innerText.trim();
-    if(!confirm(`'젬마 (기존 데이터)'의 상품·현재 재고·상품 옵션·업로드 파일 설정을 '${targetName}' 업체로 복사할까요?\n\n대상 업체의 같은 바코드 상품과 같은 이름의 업로드 설정은 그대로 두고, 주문 및 발송 내역은 복사하지 않습니다.`))return;
+    if(!confirm(`'젬마 (기존 데이터)'의 상품·현재 재고·상품 옵션·업로드 파일 설정·분할 구분 기호·세트 분할 규칙을 '${targetName}' 업체로 복사할까요?\n\n대상 업체의 같은 바코드 상품, 같은 이름의 업로드 설정, 이미 등록된 분할 규칙은 그대로 둡니다. 주문 및 발송 내역은 복사하지 않습니다.`))return;
     const button=event.currentTarget;button.disabled=true;button.textContent='복사 중…';
     try{const res=await fetch(`/api/admin/companies/${encodeURIComponent(id)}/copy-legacy-catalog`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'복사하지 못했습니다.');
-        alert(`복사 완료\n\n상품 ${data.copied_products}개 추가 (기존 ${data.skipped_products}개 유지)\n상품 옵션 ${data.copied_options}개 추가 (기존 ${data.skipped_options}개 유지)\n업로드 설정 ${data.copied_profiles}개 추가 (기존 ${data.skipped_profiles}개 유지)`);await loadAdminData();
+        alert(`복사 완료\n\n상품 ${data.copied_products}개 추가 (기존 ${data.skipped_products}개 유지)\n상품 옵션 ${data.copied_options}개 추가 (기존 ${data.skipped_options}개 유지)\n업로드 설정 ${data.copied_profiles}개 추가 (기존 ${data.skipped_profiles}개 유지)\n분할 기호 ${data.copied_delimiters}개 추가 (기존 ${data.skipped_delimiters}개 유지)\n세트 분할 규칙 ${data.copied_rules}개 추가 (기존 ${data.skipped_rules}개 유지)`);await loadAdminData();
     }catch(error){alert(error.message);button.disabled=false;button.textContent='기존 자료 복사';}
 }
 let shipmentRows=[];
