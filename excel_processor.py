@@ -1,7 +1,18 @@
 import re
 import os
 import pandas as pd
+import json
+from openpyxl import load_workbook
 from database import get_connection
+
+NARDA_MANIFEST_PROFILE = '__narda_manifest__'
+NARDA_MANIFEST_HEADERS = [
+    '서비스', '주문일', '배송구분', '대', '보험', '송장번호', '주문번호', '송하인',
+    '받는분', '주문자e-mail', '통관고유부호/사업자번호', '전화번호', '휴대폰번호',
+    '우편번호', '주소', '기타주소', '실무게(kg)', '부피무게(kg)', '가로(cm)',
+    '세로(cm)', '높이(cm)', 'CTNS', 'HS Code 1', 'Item Name', '아이템상세정보',
+    'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'
+]
 
 HEADER_MAP = {
     'order_no': ['주문번호', '주문 번호', 'order_no', 'Order No', '발주번호', '주문관리코드', '주문식별자'],
@@ -85,6 +96,9 @@ def find_product_info_by_sku(sku, opt_rows, prod_rows):
             'sku': row.get('sku') or normalized_sku,
             'dispatched_quantity': option_quantity,
             'unit_price': row.get('unit_price') or (parent.get('unit_price', 0.0) if parent else 0.0),
+            'english_name': parent.get('english_name', '') if parent else '',
+            'hs_code': parent.get('hs_code', '') if parent else '',
+            'product_url': parent.get('product_url', '') if parent else '',
             'matched': True,
             'matched_product_name': parent.get('product_name') if parent else None,
             'matched_option_name': row.get('option_name') or (parent.get('option_name') if parent else None)
@@ -101,6 +115,9 @@ def find_product_info_by_sku(sku, opt_rows, prod_rows):
             'sku': row.get('sku') or normalized_sku,
             'dispatched_quantity': option_quantity,
             'unit_price': row.get('unit_price', 0.0),
+            'english_name': row.get('english_name', ''),
+            'hs_code': row.get('hs_code', ''),
+            'product_url': row.get('product_url', ''),
             'matched': True,
             'matched_product_name': row.get('product_name'),
             'matched_option_name': row.get('option_name')
@@ -443,7 +460,7 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
         opt_rows = [dict(r) for r in cur.fetchall()]
     except Exception:
         opt_rows = []
-    cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products WHERE tenant_id = ?', (tenant_id,))
+    cur.execute('SELECT id, sku, product_name, option_name, english_name, hs_code, product_url, unit_price, dispatched_quantity FROM products WHERE tenant_id = ?', (tenant_id,))
     prod_rows = [dict(r) for r in cur.fetchall()]
 
     try:
@@ -531,6 +548,16 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
             # 바코드가 없으면 기존 상품명/옵션명 분할 및 자동 매칭을 사용합니다.
             split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows, rules_cache=rules_cache, delimiters=delimiters)
 
+        # 자동 열 인식/저장 형식은 기존 재고 매칭 결과에서 통관용 상품 정보를 보완합니다.
+        # 나르다 기본형식 전용 파서는 이 경로에 들어오지 않아 업로드 값을 그대로 유지합니다.
+        for item in split_items:
+            info = find_product_info_by_sku(item.get('sku'), opt_rows, prod_rows) if item.get('sku') else {}
+            if info.get('matched'):
+                item['english_name'] = info.get('english_name') or ''
+                item['hs_code'] = info.get('hs_code') or ''
+                item['unit_price'] = info.get('unit_price') or 0
+                item['product_url'] = info.get('product_url') or ''
+
         for it in split_items:
             if not it.get('matched', False):
                 comb = f"{it['item_product_name']} {it['item_option_name']}".strip() if (it['item_option_name'] and it['item_option_name'] != '단일옵션') else it['item_product_name']
@@ -569,6 +596,149 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
     preview_data['unregistered_items'] = list(unregistered_dict.values())
     return preview_data
 
+
+def process_narda_manifest_file(file_path, batch_name=None, tenant_id=None):
+    """Parse the fixed NARDA ManifestTemplate layout without inventory enrichment."""
+    if not batch_name:
+        batch_name = os.path.basename(file_path)
+    if tenant_id is None:
+        raise ValueError('업체 정보가 없어 주문 파일을 처리할 수 없습니다.')
+
+    workbook = load_workbook(file_path, read_only=True, data_only=True)
+    sheet = workbook.active
+    if sheet.max_column < 30:
+        workbook.close()
+        raise ValueError('나르다 기본형식 파일의 열 구성이 올바르지 않습니다. ManifestTemplate 파일인지 확인해주세요.')
+
+    def clean(value):
+        if value is None:
+            return ''
+        text = str(value).strip()
+        if text.lower() in ('none', 'nan'):
+            return ''
+        if text.endswith('.0') and text[:-2].isdigit():
+            text = text[:-2]
+        return text
+
+    header_values = [clean(sheet.cell(1, col).value) for col in range(1, 31)]
+    if header_values[6] != '주문번호' or header_values[22] != 'HS Code 1' or header_values[23] != 'Item Name':
+        workbook.close()
+        raise ValueError('나르다 기본형식은 ManifestTemplate 파일만 지원합니다. 업로드 파일 형식을 확인해주세요.')
+
+    # ManifestTemplate2의 열 순서는 고정되어 있어 제목 자동 인식이나 재고 검색을 하지 않습니다.
+    # 주문 단위 정보는 다음 품목 행에서 비어 있을 수 있으므로 주문 그룹 안에서만 이어받습니다.
+    order_level_indices = set(range(22))  # A:V
+    item_name_idx = 23                    # X: Item Name
+    order_groups = {}
+    current_order_no = ''
+    current_order_values = [''] * 30
+    meaningful_rows = 0
+
+    for row in sheet.iter_rows(min_row=2, max_col=30, values_only=True):
+        values = [clean(value) for value in row]
+        if len(values) < 30:
+            values.extend([''] * (30 - len(values)))
+
+        explicit_order_no = values[6]
+        if explicit_order_no:
+            current_order_no = explicit_order_no
+            current_order_values = [''] * 30
+        if not current_order_no:
+            continue
+
+        for col_idx in order_level_indices:
+            if values[col_idx]:
+                current_order_values[col_idx] = values[col_idx]
+
+        # 서식만 적용된 빈 행이나 데이터가 끊긴 꼬리 행은 무시합니다.
+        if not values[item_name_idx] and not values[24] and not values[22]:
+            continue
+
+        order_no = current_order_no
+        row_fields = {}
+        for col_idx, header in enumerate(NARDA_MANIFEST_HEADERS):
+            cell_value = values[col_idx]
+            if col_idx in order_level_indices and not cell_value:
+                cell_value = current_order_values[col_idx]
+            row_fields[header] = cell_value
+
+        if not row_fields['Item Name']:
+            continue
+
+        try:
+            piece = max(1, int(float(row_fields['Piece'] or 1)))
+        except (TypeError, ValueError):
+            piece = 1
+        try:
+            option_price = float(row_fields['Unit Price'] or 0)
+        except (TypeError, ValueError):
+            option_price = 0
+
+        order = order_groups.get(order_no)
+        if order is None:
+            postal = row_fields['우편번호']
+            if postal.isdigit() and len(postal) < 5:
+                postal = postal.zfill(5)
+            order = {
+                'order_no': order_no,
+                'courier': '나르다',
+                'tracking_no': row_fields['송장번호'],
+                'shipping_method': row_fields['배송구분'] or '택배',
+                'original_product_name': '',
+                'original_option_name': '',
+                'original_quantity': 0,
+                'recipient_name': row_fields['받는분'],
+                'recipient_phone1': row_fields['휴대폰번호'] or row_fields['전화번호'],
+                'recipient_phone2': row_fields['전화번호'] if row_fields['휴대폰번호'] else '',
+                'customs_id': row_fields['통관고유부호/사업자번호'],
+                'postal_code': postal,
+                'address': ' '.join(part for part in (row_fields['주소'], row_fields['기타주소']) if part),
+                'shipping_memo': '',
+                'split_items': [],
+                'is_split': False,
+                'manifest_data': {header: row_fields[header] for header in NARDA_MANIFEST_HEADERS[:22]},
+            }
+            order_groups[order_no] = order
+
+        item = {
+            'item_product_name': row_fields['Item Name'],
+            'item_option_name': row_fields['아이템상세정보'],
+            'sku': '',
+            'product_quantity': piece,
+            'option_quantity': 1,
+            'quantity': piece,
+            'matched': False,
+            'english_name': row_fields['Item Name'],
+            'hs_code': row_fields['HS Code 1'],
+            'unit_price': option_price,
+            'manifest_data': row_fields,
+        }
+        order['split_items'].append(item)
+        order['original_quantity'] += piece
+        meaningful_rows += 1
+
+    workbook.close()
+    if not order_groups:
+        raise ValueError('나르다 기본형식 파일에서 주문번호와 Item Name이 포함된 품목을 찾지 못했습니다.')
+
+    for order in order_groups.values():
+        items = order['split_items']
+        order['original_product_name'] = ' / '.join(dict.fromkeys(item['item_product_name'] for item in items))
+        order['original_option_name'] = ' / '.join(dict.fromkeys(item['item_option_name'] for item in items if item['item_option_name']))
+        order['is_split'] = len(items) > 1
+
+    parsed_orders = list(order_groups.values())
+    return {
+        'batch_name': batch_name,
+        'upload_profile': NARDA_MANIFEST_PROFILE,
+        'manifest_mode': True,
+        'total_excel_rows': meaningful_rows,
+        'total_split_items': meaningful_rows,
+        'detected_columns': {f'{chr(65 + i)}': header for i, header in enumerate(NARDA_MANIFEST_HEADERS)},
+        'orders': parsed_orders,
+        'unregistered_items': [],
+    }
+
 def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
     if tenant_id is None:
         raise ValueError('업체 정보가 없어 주문을 저장할 수 없습니다.')
@@ -600,14 +770,14 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
         val_placeholders = []
         params = []
         for ord_data in chunk:
-            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
             params.extend([
                 tenant_id,
                 ord_data['order_no'], ord_data['courier'], ord_data['tracking_no'], ord_data['shipping_method'],
                 ord_data['original_product_name'], ord_data['original_option_name'], ord_data['original_quantity'],
                 ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
                 ord_data['customs_id'], ord_data['postal_code'], ord_data['address'], ord_data['shipping_memo'],
-                '주문접수', batch_name
+                '주문접수', batch_name, json.dumps(ord_data.get('manifest_data') or {}, ensure_ascii=False)
             ])
         
         insert_sql = f'''
@@ -616,7 +786,7 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
                 original_product_name, original_option_name, original_quantity,
                 recipient_name, recipient_phone1, recipient_phone2,
                 customs_id, postal_code, address, shipping_memo,
-                status, upload_batch
+                status, upload_batch, manifest_data
             ) VALUES {', '.join(val_placeholders)}
             RETURNING id
         '''
@@ -629,20 +799,22 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
             for it in ord_data.get('split_items', []):
                 all_order_items.append((
                     oid, ord_data['order_no'], it['sku'], it['item_product_name'],
-                    it['item_option_name'], it.get('option_quantity', 1), it['quantity'], '준비중'
+                    it['item_option_name'], it.get('product_quantity', ord_data.get('original_quantity', 1)),
+                    it.get('option_quantity', 1), it['quantity'], '준비중',
+                    json.dumps(it.get('manifest_data') or {}, ensure_ascii=False)
                 ))
 
     # 3. 분할 품목(order_items) 일괄 청크 삽입 (100건씩 묶어 초고속 삽입)
     ITEM_CHUNK_SIZE = 100
     for i in range(0, len(all_order_items), ITEM_CHUNK_SIZE):
         chunk_items = all_order_items[i:i + ITEM_CHUNK_SIZE]
-        val_placeholders = ['(?, ?, ?, ?, ?, ?, ?, ?, ?)' for _ in chunk_items]
+        val_placeholders = ['(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)' for _ in chunk_items]
         item_params = []
         for it in chunk_items:
             item_params.extend([tenant_id] + list(it))
         cur.execute(f'''
             INSERT INTO order_items (
-                tenant_id, order_id, order_no, sku, item_product_name, item_option_name, option_quantity, quantity, status
+                tenant_id, order_id, order_no, sku, item_product_name, item_option_name, product_quantity, option_quantity, quantity, status, manifest_data
             ) VALUES {', '.join(val_placeholders)}
         ''', item_params)
         item_count += len(chunk_items)

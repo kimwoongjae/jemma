@@ -13,7 +13,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 from database import init_db, get_connection
-from excel_processor import process_excel_file, save_orders_to_db
+from excel_processor import NARDA_MANIFEST_PROFILE, process_excel_file, process_narda_manifest_file, save_orders_to_db
 from shipping_api import (
     issue_tracking_numbers, complete_dispatch,
     export_shipping_excel
@@ -795,7 +795,7 @@ def upload_preview():
     profile_mapping = {}
     profile_header_row = 1
 
-    if profile_name:
+    if profile_name and profile_name != NARDA_MANIFEST_PROFILE:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute('SELECT mapping_json, header_row FROM upload_profiles WHERE profile_name = ? AND tenant_id = ?', (profile_name, g.company_id))
@@ -820,13 +820,16 @@ def upload_preview():
             file.save(filepath)
 
             try:
-                parsed = process_excel_file(
-                    filepath,
-                    batch_name=orig_name,
-                    tenant_id=g.company_id,
-                    column_mapping=profile_mapping,
-                    header_row=profile_header_row
-                )
+                if profile_name == NARDA_MANIFEST_PROFILE:
+                    parsed = process_narda_manifest_file(filepath, batch_name=orig_name, tenant_id=g.company_id)
+                else:
+                    parsed = process_excel_file(
+                        filepath,
+                        batch_name=orig_name,
+                        tenant_id=g.company_id,
+                        column_mapping=profile_mapping,
+                        header_row=profile_header_row
+                    )
                 total_excel_rows += parsed.get('total_excel_rows', 0)
                 total_split_items += parsed.get('total_split_items', 0)
                 batch_names.append(orig_name)
@@ -846,12 +849,14 @@ def upload_preview():
                     except Exception:
                         pass
 
-        # 단품 우선 -> 2개부터 -> 바코드 오름차순 -> 출고수량 오름차순 정렬
-        merged_orders.sort(key=get_order_sort_key)
+        # 나르다 Manifest 업로드는 원본 파일의 주문 순서를 그대로 유지합니다.
+        if profile_name != NARDA_MANIFEST_PROFILE:
+            merged_orders.sort(key=get_order_sort_key)
 
         preview_data = {
             'batch_name': ', '.join(batch_names) if len(batch_names) <= 2 else f"{batch_names[0]} 외 {len(batch_names)-1}개 파일",
             'upload_profile': profile_name,
+            'manifest_mode': profile_name == NARDA_MANIFEST_PROFILE,
             'total_files': len(valid_files),
             'total_excel_rows': total_excel_rows,
             'total_split_items': total_split_items,
@@ -1049,7 +1054,7 @@ def get_picking_list():
             return ' '.join(part for part in (product, option) if part).strip()
 
         cur.execute('''
-            SELECT o.id AS order_id, o.original_quantity, oi.sku,
+            SELECT o.id AS order_id, o.original_quantity, oi.product_quantity, oi.sku,
                    oi.item_product_name, oi.item_option_name,
                    oi.option_quantity, oi.quantity
             FROM orders o
@@ -1068,7 +1073,7 @@ def get_picking_list():
 
             order_id = item.get('order_id')
             try:
-                product_quantity = max(1, int(float(item.get('original_quantity') or 1)))
+                product_quantity = max(1, int(float(item.get('product_quantity') or item.get('original_quantity') or 1)))
             except (TypeError, ValueError):
                 product_quantity = 1
             try:

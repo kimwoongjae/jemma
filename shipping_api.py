@@ -51,20 +51,24 @@ def call_narda_regist_order(ord_row, items, settings):
         prod_qty = int(it.get('product_quantity') or ord_row.get('original_quantity') or 1)
         qty = opt_qty * prod_qty
 
-        price = float(it.get('unit_price') or 10.0)
+        price = float(it.get('unit_price') or 0.0) if it.get('manifest_mode') else float(it.get('unit_price') or 10.0)
         hs = str(it.get('hs_code') or '630690').replace('.', '').strip() or '630690'
         eng_name = (it.get('english_name') or '').strip() or it.get('item_product_name') or 'Product'
         item_url = it.get('product_url') or ''
+        try:
+            total_price = float(it.get('manifest_amount')) if it.get('manifest_amount') not in (None, '') else round(price * qty, 2)
+        except (TypeError, ValueError):
+            total_price = round(price * qty, 2)
 
         api_items.append({
             "hs_code": hs,
             "item_name": eng_name,
             "item_price": price,
             "item_cnt": qty,
-            "item_total_price": round(price * qty, 2),
-            "item_detail": None,
+            "item_total_price": total_price,
+            "item_detail": it.get('item_detail') or None,
             "item_url": item_url,
-            "item_origin": "JP"
+            "item_origin": it.get('item_origin') or "JP"
         })
 
     if not api_items:
@@ -196,17 +200,32 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
         items = []
         for raw_item in raw_items:
             it = dict(raw_item)
-            matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
-            if matched_prod:
-                it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
-                it['hs_code'] = matched_prod.get('hs_code') or '630690'
-                it['unit_price'] = matched_prod.get('unit_price') or 10.0
-                it['product_url'] = matched_prod.get('product_url') or ''
+            try:
+                manifest_item = json.loads(it.get('manifest_data') or '{}')
+            except (TypeError, ValueError):
+                manifest_item = {}
+            if manifest_item.get('Item Name'):
+                # 나르다 기본형식은 업로드에 들어 있는 통관 데이터를 우선 사용합니다.
+                it['english_name'] = manifest_item.get('Item Name') or it.get('item_product_name')
+                it['hs_code'] = manifest_item.get('HS Code 1') or '630690'
+                it['unit_price'] = manifest_item.get('Unit Price') or 10.0
+                it['product_url'] = manifest_item.get('상품 URL') or ''
+                it['item_detail'] = manifest_item.get('아이템상세정보') or ''
+                it['item_origin'] = manifest_item.get('원산지') or ''
+                it['manifest_amount'] = manifest_item.get('Amount') or ''
+                it['manifest_mode'] = True
             else:
-                it['english_name'] = it.get('item_product_name') or 'Product'
-                it['hs_code'] = '630690'
-                it['unit_price'] = 10.0
-                it['product_url'] = ''
+                matched_prod = prod_by_sku.get(it.get('sku')) or prod_by_name.get(it.get('item_product_name'))
+                if matched_prod:
+                    it['english_name'] = matched_prod.get('english_name') or it.get('item_product_name')
+                    it['hs_code'] = matched_prod.get('hs_code') or '630690'
+                    it['unit_price'] = matched_prod.get('unit_price') or 10.0
+                    it['product_url'] = matched_prod.get('product_url') or ''
+                else:
+                    it['english_name'] = it.get('item_product_name') or 'Product'
+                    it['hs_code'] = '630690'
+                    it['unit_price'] = 10.0
+                    it['product_url'] = ''
             items.append(it)
 
         orders_data.append({

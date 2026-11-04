@@ -1281,7 +1281,7 @@
 
                 <div class="table-responsive" style="max-height: 480px;">
                     <table class="table table-bordered table-sm align-middle">
-                        <thead class="table-light">
+                        <thead class="table-light" id="previewTableHead">
                             <tr>
                                 <th>주문번호</th>
                                 <th>수취인</th>
@@ -1289,6 +1289,7 @@
                                 <th>통관부호</th>
                                 <th>원본 주문 상품 (옵션)</th>
                                 <th class="table-primary text-primary">👉 자동 분할된 출고 품목 (SKU)</th>
+                                <th>영문명 / HS Code / 단가 (재고 기준)</th>
                             </tr>
                         </thead>
                         <tbody id="previewTableBody"></tbody>
@@ -1568,6 +1569,14 @@
 
 <script>
     let currentPreviewData = null;
+    const NARDA_MANIFEST_PROFILE = '__narda_manifest__';
+    const NARDA_MANIFEST_HEADERS = [
+        '서비스', '주문일', '배송구분', '대', '보험', '송장번호', '주문번호', '송하인',
+        '받는분', '주문자e-mail', '통관고유부호/사업자번호', '전화번호', '휴대폰번호',
+        '우편번호', '주소', '기타주소', '실무게(kg)', '부피무게(kg)', '가로(cm)', '세로(cm)',
+        '높이(cm)', 'CTNS', 'HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price',
+        'Piece', 'Amount', '상품 URL', '원산지'
+    ];
     let uploadProfilesCache = [];
     const UPLOAD_PROFILE_FIELDS = [
         ['order_no', '주문번호'], ['recipient_name', '수취인'], ['recipient_phone1', '연락처'],
@@ -1686,10 +1695,12 @@
             const profiles = await res.json();
             if (!res.ok) throw new Error(profiles.error || '업로드 형식 목록을 불러오지 못했습니다.');
             uploadProfilesCache = Array.isArray(profiles) ? profiles : [];
-            select.innerHTML = '<option value="">자동 열 인식</option>' + uploadProfilesCache.map(profile =>
+            select.innerHTML = '<option value="">자동 열 인식</option>'
+                + `<option value="${NARDA_MANIFEST_PROFILE}">나르다 기본형식 (ManifestTemplate)</option>`
+                + uploadProfilesCache.map(profile =>
                 `<option value="${escapeHtml(profile.profile_name)}">${escapeHtml(profile.profile_name)}</option>`
             ).join('');
-            const selected = uploadProfilesCache.some(profile => profile.profile_name === previous) ? previous : '';
+            const selected = previous === NARDA_MANIFEST_PROFILE || uploadProfilesCache.some(profile => profile.profile_name === previous) ? previous : '';
             select.value = selected;
             localStorage.setItem('selectedUploadProfile', selected);
         } catch (e) {
@@ -1845,16 +1856,44 @@
             currentPreviewData = data;
             document.getElementById('previewExcelRows').textContent = data.total_excel_rows;
             document.getElementById('previewSplitItems').textContent = data.total_split_items;
-            document.getElementById('previewBatchName').textContent = `${data.batch_name} · 형식: ${data.upload_profile || '자동 열 인식'}`;
+            const uploadFormatLabel = data.manifest_mode ? '나르다 기본형식 (ManifestTemplate)' : (data.upload_profile || '자동 열 인식');
+            document.getElementById('previewBatchName').textContent = `${data.batch_name} · 형식: ${uploadFormatLabel}`;
 
             const tbody = document.getElementById('previewTableBody');
             tbody.innerHTML = '';
+
+            const thead = document.getElementById('previewTableHead');
+            if (data.manifest_mode) {
+                thead.innerHTML = `<tr>${NARDA_MANIFEST_HEADERS.map(header => `<th class="text-nowrap">${escapeHtml(header)}</th>`).join('')}</tr>`;
+                const manifestRows = data.orders.flatMap(order => (order.split_items || []).map(item => item.manifest_data || {}));
+                manifestRows.slice(0, 100).forEach(fields => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = NARDA_MANIFEST_HEADERS.map(header => `<td class="text-nowrap">${escapeHtml(fields[header] || '')}</td>`).join('');
+                    tbody.appendChild(tr);
+                });
+                if (manifestRows.length > 100) {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td colspan="${NARDA_MANIFEST_HEADERS.length}" class="text-center text-muted">... 외 ${manifestRows.length - 100}개 품목 생략 (전체 ${manifestRows.length}개)</td>`;
+                    tbody.appendChild(tr);
+                }
+            } else {
+                thead.innerHTML = `<tr>
+                    <th>주문번호</th><th>수취인</th><th>전화번호</th><th>통관부호</th>
+                    <th>원본 주문 상품 (옵션)</th><th class="table-primary text-primary">👉 자동 분할된 출고 품목 (SKU)</th>
+                    <th>영문명 / HS Code / 단가 (재고 기준)</th>
+                </tr>`;
 
             data.orders.slice(0, 30).forEach(o => {
                 const tr = document.createElement('tr');
                 const splitBadges = o.split_items.map(it => 
                     `<div class="mb-1"><span class="badge bg-primary text-wrap text-start">${escapeHtml(it.item_product_name)} [${escapeHtml(it.item_option_name)}] x ${it.quantity}개 <small class="text-white-50">(${escapeHtml(it.sku)})</small></span></div>`
                 ).join('');
+                const customsDetails = o.split_items.map(it => `
+                    <div class="mb-1 small">
+                        <strong>${escapeHtml(it.english_name || '-')}</strong><br>
+                        <span class="text-muted">HS ${escapeHtml(it.hs_code || '-')} · ${escapeHtml(it.unit_price ?? 0)}</span>
+                    </div>
+                `).join('');
 
                 tr.innerHTML = `
                     <td class="fw-bold">${escapeHtml(o.order_no)}</td>
@@ -1863,14 +1902,16 @@
                     <td><code>${escapeHtml(o.customs_id || '-')}</code></td>
                     <td>${escapeHtml(o.original_product_name)} <br><small class="text-muted">[${escapeHtml(o.original_option_name)}] x ${o.original_quantity}</small></td>
                     <td>${splitBadges}</td>
+                    <td>${customsDetails}</td>
                 `;
                 tbody.appendChild(tr);
             });
 
             if (data.orders.length > 30) {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td colspan="6" class="text-center text-muted">... 외 ${data.orders.length - 30}건 생략 (전체 ${data.orders.length}건 등록 예정) ...</td>`;
+                tr.innerHTML = `<td colspan="7" class="text-center text-muted">... 외 ${data.orders.length - 30}건 생략 (전체 ${data.orders.length}건 등록 예정) ...</td>`;
                 tbody.appendChild(tr);
+            }
             }
 
             new bootstrap.Modal(document.getElementById('previewModal')).show();

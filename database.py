@@ -159,6 +159,13 @@ def init_db():
         _ensure_tenant_schema(cur, postgres=True)
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS manifest_data TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS manifest_data TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_quantity INTEGER NOT NULL DEFAULT 1")
+        cur.execute('''UPDATE order_items SET product_quantity = (
+            SELECT COALESCE(original_quantity, 1) FROM orders WHERE orders.id = order_items.order_id
+        ) WHERE COALESCE(product_quantity, 1) = 1 AND COALESCE(manifest_data, '') = ''
+          AND EXISTS (SELECT 1 FROM orders WHERE orders.id = order_items.order_id AND COALESCE(original_quantity, 1) > 1)''')
         cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS stock_only_dispatch INTEGER NOT NULL DEFAULT 0")
         cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS tenant_id INTEGER")
         for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
@@ -285,6 +292,7 @@ def init_db():
         customs_validation_msg TEXT DEFAULT '',
         api_dispatch_status TEXT DEFAULT '',
         api_dispatch_message TEXT DEFAULT '',
+        manifest_data TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -305,6 +313,8 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN api_dispatch_status TEXT DEFAULT ''")
     if 'api_dispatch_message' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN api_dispatch_message TEXT DEFAULT ''")
+    if 'manifest_data' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN manifest_data TEXT DEFAULT ''")
 
     # 기존 출고대기 상태 주문접수로 통일 정규화
     cur.execute("UPDATE orders SET status = '주문접수' WHERE status = '출고대기'")
@@ -319,10 +329,12 @@ def init_db():
         sku TEXT,
         item_product_name TEXT NOT NULL,
         item_option_name TEXT NOT NULL,
+        product_quantity INTEGER DEFAULT 1,
         option_quantity INTEGER DEFAULT 1,
         quantity INTEGER DEFAULT 1,
         stock_deducted INTEGER DEFAULT 0,
         status TEXT DEFAULT '준비중',
+        manifest_data TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
     )
@@ -332,6 +344,14 @@ def init_db():
     item_cols = [row[1] for row in cur.fetchall()]
     if 'option_quantity' not in item_cols:
         cur.execute("ALTER TABLE order_items ADD COLUMN option_quantity INTEGER DEFAULT 1")
+    if 'product_quantity' not in item_cols:
+        cur.execute("ALTER TABLE order_items ADD COLUMN product_quantity INTEGER DEFAULT 1")
+    if 'manifest_data' not in item_cols:
+        cur.execute("ALTER TABLE order_items ADD COLUMN manifest_data TEXT DEFAULT ''")
+    cur.execute('''UPDATE order_items SET product_quantity = (
+        SELECT COALESCE(original_quantity, 1) FROM orders WHERE orders.id = order_items.order_id
+    ) WHERE COALESCE(product_quantity, 1) = 1 AND COALESCE(manifest_data, '') = ''
+      AND EXISTS (SELECT 1 FROM orders WHERE orders.id = order_items.order_id AND COALESCE(original_quantity, 1) > 1)''')
 
     # 5. 입출고 재고 이력 로그 (Inventory Logs)
     cur.execute('''
