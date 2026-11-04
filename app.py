@@ -437,18 +437,35 @@ def admin_company_orders():
     if session.get('account_role') != 'admin':
         return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
     company_id = request.args.get('company_id', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+    view = request.args.get('view', 'all').strip()
+    if date_from and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
+        return jsonify({'error': '시작 날짜 형식이 올바르지 않습니다.'}), 400
+    if date_to and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
+        return jsonify({'error': '종료 날짜 형식이 올바르지 않습니다.'}), 400
+
     conn = get_connection()
     cur = conn.cursor()
-    if company_id and company_id.isdigit():
-        cur.execute('''SELECT o.*, c.name AS company_name FROM orders o
-                       JOIN companies c ON c.id = o.tenant_id WHERE o.tenant_id = ?
-                       AND (o.status IN ('출고완료', '송장발급') OR TRIM(COALESCE(o.tracking_no, '')) != '')
-                       ORDER BY COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)) DESC LIMIT 1000''', (int(company_id),))
-    else:
-        cur.execute('''SELECT o.*, c.name AS company_name FROM orders o
-                       JOIN companies c ON c.id = o.tenant_id
-                       WHERE (o.status IN ('출고완료', '송장발급') OR TRIM(COALESCE(o.tracking_no, '')) != '')
-                       ORDER BY COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)) DESC LIMIT 1000''')
+    date_expr = "SUBSTR(COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)), 1, 10)"
+    conditions = ['1=1']
+    params = []
+    if view == 'shipments':
+        conditions.append("(o.status IN ('출고완료', '송장발급') OR TRIM(COALESCE(o.tracking_no, '')) != '')")
+    if company_id.isdigit():
+        conditions.append('o.tenant_id = ?')
+        params.append(int(company_id))
+    if date_from:
+        conditions.append(f'{date_expr} >= ?')
+        params.append(date_from)
+    if date_to:
+        conditions.append(f'{date_expr} <= ?')
+        params.append(date_to)
+    cur.execute(f'''SELECT o.*, c.name AS company_name FROM orders o
+                    JOIN companies c ON c.id = o.tenant_id
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)) DESC
+                    LIMIT 1000''', params)
     orders = [dict(row) for row in cur.fetchall()]
     conn.close()
     return jsonify(orders)

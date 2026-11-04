@@ -345,9 +345,24 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
             })
         return items
 
-    # 2. 먼저 전체 옵션명이 재고관리에 등록된 단일 상품과 완전히 일치하는지 확인 (완전 일치만 허용)
-    direct_info = find_matching_product_info(product_name, option_name, conn, opt_rows=opt_rows, prod_rows=prod_rows, exact_only=True)
-    if direct_info['matched']:
+    # 업체 설정에 등록된 기호로 나눌 수 있으면 전체 문자열 일치보다 분할을 우선한다.
+    # 그렇지 않으면 재고 마스터에 합쳐진 옵션명이 있을 때 분할되지 않는 문제가 생긴다.
+    if not delimiters:
+        delimiters = ['+', '-', '/', ',', '?', '&']
+    delimiters_pattern = '|'.join(re.escape(str(s).strip()) for s in delimiters if str(s).strip())
+    option_parts = [p.strip() for p in re.split(delimiters_pattern, option_name) if p.strip()] if delimiters_pattern else [option_name]
+    product_parts = [p.strip() for p in re.split(delimiters_pattern, product_name) if p.strip()] if delimiters_pattern else [product_name]
+    option_is_quantity = bool(re.fullmatch(r'\d+\s*(개|봉|입|세트|box|박스)?', option_name, flags=re.IGNORECASE))
+    is_product_split = len(option_parts) <= 1 and len(product_parts) > 1 and (
+        not option_name or option_name in ('단일옵션', '단일상품') or option_is_quantity
+    )
+    has_configured_split = len(option_parts) > 1 or is_product_split
+
+    # 2. 설정된 기호로 나눌 품목이 없을 때만 전체 옵션명 완전 일치를 확인한다.
+    direct_info = {'matched': False}
+    if not has_configured_split:
+        direct_info = find_matching_product_info(product_name, option_name, conn, opt_rows=opt_rows, prod_rows=prod_rows, exact_only=True)
+    if direct_info.get('matched'):
         opt_qty = direct_info['dispatched_quantity'] or 1
         return [{
             'item_product_name': direct_info.get('matched_product_name') or product_name,
@@ -361,19 +376,7 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
 
     # 3. 구분 기호(+, -, ,, /, ?, & 등)로 자동 다중 품목 분할
     items = []
-    if not delimiters:
-        delimiters = ['+', '-', '/', ',', '?', '&']
-    delimiters_pattern = '|'.join(re.escape(s.strip()) for s in delimiters if s and s.strip())
-
-    parts = [p.strip() for p in re.split(delimiters_pattern, option_name) if p.strip()] if delimiters_pattern else [option_name]
-
-    # 옵션명이 비어있거나 '단일옵션'인데 상품명에 구분 기호가 있는 경우 상품명 분할 지원
-    is_product_split = False
-    if len(parts) <= 1 and (not option_name or option_name in ('단일옵션', '단일상품')):
-        prod_parts = [p.strip() for p in re.split(delimiters_pattern, product_name) if p.strip()] if delimiters_pattern else [product_name]
-        if len(prod_parts) > 1:
-            parts = prod_parts
-            is_product_split = True
+    parts = product_parts if is_product_split else option_parts
 
     if len(parts) > 1:
         for p in parts:
