@@ -641,7 +641,7 @@ def process_narda_manifest_file(file_path, batch_name=None, tenant_id=None):
         return text
 
     header_values = [clean(sheet.cell(1, col).value) for col in range(1, 31)]
-    if header_values[6] != '주문번호' or header_values[22] != 'HS Code 1' or header_values[23] != 'Item Name':
+    if header_values[6] != '주문번호' or header_values[22] not in ('HS Code', 'HS Code 1') or header_values[23] != 'Item Name':
         workbook.close()
         raise ValueError('나르다 기본형식은 ManifestTemplate 파일만 지원합니다. 업로드 파일 형식을 확인해주세요.')
 
