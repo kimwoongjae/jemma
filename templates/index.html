@@ -314,7 +314,7 @@
             <div class="stat-card d-flex align-items-center justify-content-between">
                 <div>
                     <div class="text-muted small fw-bold">등록 상품 수</div>
-                    <div class="fs-4 fw-bold mt-1 text-dark" id="stat-product-count">0</div>
+                    <div class="fs-4 fw-bold mt-1 text-dark" id="stat-product-count">…</div>
                 </div>
                 <div class="stat-icon bg-light text-secondary">
                     <i class="fa-solid fa-box"></i>
@@ -1763,12 +1763,14 @@
     async function loadStats() {
         try {
             const res = await fetch('/api/dashboard/stats');
+            if (!res.ok) throw new Error(`통계 조회 실패 (${res.status})`);
             const data = await res.json();
             document.getElementById('stat-total-orders').textContent = data.total_orders.toLocaleString();
             document.getElementById('stat-pending-tracking').textContent = data.pending_tracking.toLocaleString();
             document.getElementById('stat-issued-tracking').textContent = data.issued_tracking.toLocaleString();
             document.getElementById('stat-completed-dispatch').textContent = data.completed_dispatch.toLocaleString();
             document.getElementById('stat-customs-error-count').textContent = (data.customs_error_count || 0).toLocaleString();
+            document.getElementById('stat-product-count').textContent = (data.product_count || 0).toLocaleString();
         } catch (e) {
             console.error('Stats load error', e);
         }

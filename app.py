@@ -280,57 +280,6 @@ def admin_companies():
     return jsonify(companies)
 
 
-@app.route('/api/admin/companies/<int:target_company_id>/merge-into-legacy-jemma', methods=['POST'])
-def admin_merge_company_into_legacy_jemma(target_company_id):
-    """Keep the legacy Jemma tenant, move the new company's logins to it, and remove the new tenant."""
-    if session.get('account_role') != 'admin':
-        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
-
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT id, name FROM companies WHERE name = ?", ('젬마 (기존 데이터)',))
-        legacy = cur.fetchone()
-        cur.execute('SELECT id, name FROM companies WHERE id = ?', (target_company_id,))
-        target = cur.fetchone()
-        if not legacy:
-            return jsonify({'error': '기존 젬마 데이터를 찾을 수 없습니다.'}), 404
-        if not target:
-            return jsonify({'error': '새 거래처를 찾을 수 없습니다.'}), 404
-        if '젬마' not in target['name'] and 'jemma' not in target['name'].lower():
-            return jsonify({'error': '젬마 업체만 기존 젬마로 통합할 수 있습니다.'}), 400
-        legacy_id = int(legacy['id'])
-        if legacy_id == target_company_id:
-            return jsonify({'error': '기존 젬마를 통합 대상으로 선택할 수 없습니다.'}), 400
-
-        cur.execute('SELECT COUNT(*) AS cnt FROM users WHERE company_id = ?', (target_company_id,))
-        moved_users = int(cur.fetchone()['cnt'] or 0)
-        cur.execute('SELECT COUNT(*) AS cnt FROM orders WHERE tenant_id = ?', (target_company_id,))
-        removed_orders = int(cur.fetchone()['cnt'] or 0)
-
-        # Keep the exact usernames and password hashes, changing only their company ownership.
-        cur.execute('UPDATE users SET company_id = ? WHERE company_id = ?', (legacy_id, target_company_id))
-
-        # The requested new company is retired; its separate tenant data is discarded.
-        for table in ('order_items', 'orders', 'product_options', 'inventory_logs', 'products',
-                      'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
-                      'unregistered_products'):
-            cur.execute(f'DELETE FROM {table} WHERE tenant_id = ?', (target_company_id,))
-        cur.execute('DELETE FROM companies WHERE id = ?', (target_company_id,))
-        cur.execute('UPDATE companies SET name = ? WHERE id = ?', (target['name'], legacy_id))
-        conn.commit()
-        return jsonify({
-            'status': 'success', 'company_name': target['name'], 'moved_users': moved_users,
-            'removed_orders': removed_orders
-        })
-    except Exception:
-        conn.rollback()
-        app.logger.exception('Legacy Jemma account consolidation failed')
-        return jsonify({'error': '통합에 실패했습니다. 변경 내용은 저장되지 않았습니다.'}), 500
-    finally:
-        conn.close()
-
-
 @app.route('/api/admin/companies/<int:company_id>/delete', methods=['POST'])
 def admin_delete_company(company_id):
     if session.get('account_role') != 'admin':
@@ -527,7 +476,7 @@ def admin_company_orders():
 
     conn = get_connection()
     cur = conn.cursor()
-    date_expr = "SUBSTR(COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)), 1, 10)"
+    date_expr = "SUBSTR(CAST(o.created_at AS TEXT), 1, 10)"
     conditions = ['1=1']
     params = []
     if view == 'shipments':
@@ -544,11 +493,49 @@ def admin_company_orders():
     cur.execute(f'''SELECT o.*, c.name AS company_name FROM orders o
                     JOIN companies c ON c.id = o.tenant_id
                     WHERE {' AND '.join(conditions)}
-                    ORDER BY COALESCE(NULLIF(CAST(o.dispatched_at AS TEXT), ''), CAST(o.created_at AS TEXT)) DESC
+                    ORDER BY o.created_at DESC, o.id DESC
                     LIMIT 1000''', params)
     orders = [dict(row) for row in cur.fetchall()]
     conn.close()
     return jsonify(orders)
+
+
+@app.route('/api/admin/shipping/issue-tracking', methods=['POST'])
+def admin_issue_tracking():
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    data = request.get_json() or {}
+    company_id = data.get('company_id')
+    order_ids = data.get('order_ids') or []
+    if not str(company_id or '').isdigit():
+        return jsonify({'error': '거래처를 먼저 선택하세요.'}), 400
+    company_id = int(company_id)
+    if not isinstance(order_ids, list) or not order_ids:
+        return jsonify({'error': '송장을 발급할 주문을 선택하세요.'}), 400
+    try:
+        order_ids = list(dict.fromkeys(int(order_id) for order_id in order_ids))
+    except (TypeError, ValueError):
+        return jsonify({'error': '주문 선택 정보가 올바르지 않습니다.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM companies WHERE id = ? AND active = 1', (company_id,))
+    company = cur.fetchone()
+    conn.close()
+    if not company:
+        return jsonify({'error': '활성 상태의 거래처를 찾을 수 없습니다.'}), 404
+
+    result = issue_tracking_numbers(order_ids, tenant_id=company_id)
+    updated = result.get('updated_orders', []) if isinstance(result, dict) else result
+    failed = result.get('failed_orders', []) if isinstance(result, dict) else []
+    return jsonify({
+        'status': 'success' if updated else 'error',
+        'updated': updated,
+        'failed': failed,
+        'success_count': len(updated),
+        'failed_count': len(failed),
+        'message': f"송장 발급 {len(updated)}건 성공, {len(failed)}건 실패"
+    })
 
 
 @app.route('/api/company', methods=['GET'])
@@ -587,38 +574,20 @@ def index():
 def get_dashboard_stats():
     conn = get_connection()
     cur = conn.cursor()
-
-    cur.execute('SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ?', (g.company_id,))
-    total_orders = cur.fetchone()['cnt']
-
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status IN ('주문접수', '출고대기')", (g.company_id,))
-    pending_tracking = cur.fetchone()['cnt']
-
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status = '송장발급'", (g.company_id,))
-    issued_tracking = cur.fetchone()['cnt']
-
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status = '출고완료'", (g.company_id,))
-    completed_dispatch = cur.fetchone()['cnt']
-
-    cur.execute('SELECT COUNT(*) as cnt FROM products WHERE tenant_id = ? AND stock_quantity <= safety_stock', (g.company_id,))
-    low_stock_count = cur.fetchone()['cnt']
-
-    cur.execute('SELECT COUNT(*) as cnt FROM order_items WHERE tenant_id = ?', (g.company_id,))
-    total_items = cur.fetchone()['cnt']
-
-    cur.execute("SELECT COUNT(*) as cnt FROM orders WHERE tenant_id = ? AND status = '통관오류'", (g.company_id,))
-    customs_error_count = cur.fetchone()['cnt']
-
+    cur.execute('''
+        SELECT
+            (SELECT COUNT(*) FROM orders WHERE tenant_id = ?) AS total_orders,
+            (SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND status IN ('주문접수', '출고대기')) AS pending_tracking,
+            (SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND status = '송장발급') AS issued_tracking,
+            (SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND status = '출고완료') AS completed_dispatch,
+            (SELECT COUNT(*) FROM products WHERE tenant_id = ? AND stock_quantity <= safety_stock) AS low_stock_count,
+            (SELECT COUNT(*) FROM order_items WHERE tenant_id = ?) AS total_items,
+            (SELECT COUNT(*) FROM orders WHERE tenant_id = ? AND status = '통관오류') AS customs_error_count,
+            (SELECT COUNT(*) FROM products WHERE tenant_id = ?) AS product_count
+    ''', (g.company_id,) * 8)
+    stats = dict(cur.fetchone())
     conn.close()
-    return jsonify({
-        'total_orders': total_orders,
-        'pending_tracking': pending_tracking,
-        'issued_tracking': issued_tracking,
-        'completed_dispatch': completed_dispatch,
-        'low_stock_count': low_stock_count,
-        'total_items': total_items,
-        'customs_error_count': customs_error_count
-    })
+    return jsonify(stats)
 
 # ----------------- 2. 엑셀 업로드 및 주문 분할 -----------------
 def extract_sku_sort_key(sku_str):
@@ -1740,6 +1709,27 @@ def api_shipping_labels():
 
 @app.route('/api/shipping/narda-pdf-bundle', methods=['GET'])
 def api_narda_pdf_bundle():
+    return _narda_pdf_bundle_for_tenant(g.company_id)
+
+
+@app.route('/api/admin/shipping/narda-pdf-bundle', methods=['GET'])
+def admin_narda_pdf_bundle():
+    if session.get('account_role') != 'admin':
+        return '관리자 권한이 필요합니다.', 403
+    company_id = request.args.get('company_id', '').strip()
+    if not company_id.isdigit():
+        return '거래처를 선택해주세요.', 400
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM companies WHERE id = ? AND active = 1', (int(company_id),))
+    company = cur.fetchone()
+    conn.close()
+    if not company:
+        return '활성 상태의 거래처를 찾을 수 없습니다.', 404
+    return _narda_pdf_bundle_for_tenant(int(company_id))
+
+
+def _narda_pdf_bundle_for_tenant(tenant_id):
     order_ids_str = request.args.get('order_ids', '').strip()
     conn = get_connection()
     cur = conn.cursor()
@@ -1753,13 +1743,13 @@ def api_narda_pdf_bundle():
         cur.execute(f'''SELECT id, order_no, invoice_pdf_url FROM orders
             WHERE tenant_id = ? AND id IN ({placeholders})
               AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
-              AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != '' ''', [g.company_id] + order_ids)
+              AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != '' ''', [tenant_id] + order_ids)
     else:
         # 지정되지 않은 경우 최근 발급된 나르다 PDF 송장 주문 최대 200건 조회
         cur.execute('''SELECT id, order_no, invoice_pdf_url FROM orders
             WHERE tenant_id = ? AND LOWER(TRIM(COALESCE(courier, ''))) IN ('나르다', 'narda', 'narda air')
               AND invoice_pdf_url IS NOT NULL AND TRIM(invoice_pdf_url) != ''
-            ORDER BY id DESC LIMIT 200''', (g.company_id,))
+            ORDER BY id DESC LIMIT 200''', (tenant_id,))
 
     raw_rows = cur.fetchall()
     conn.close()
@@ -1885,23 +1875,35 @@ def get_inventory():
     cur = conn.cursor()
     cur.execute('''
         SELECT p.*,
-            (COALESCE(p.dispatched_quantity, 0) + 
-             COALESCE((
-                 SELECT SUM(oi.quantity)
-                 FROM order_items oi 
-                 JOIN orders o ON oi.order_id = o.id 
-                 WHERE oi.tenant_id = ? AND o.tenant_id = ? AND oi.sku = p.sku AND o.status = '출고완료'
-             ), 0)
-            ) AS total_dispatched_quantity
-        FROM products p WHERE p.tenant_id = ?
+            (COALESCE(p.dispatched_quantity, 0) + COALESCE(shipped.quantity, 0)) AS total_dispatched_quantity
+        FROM products p
+        LEFT JOIN (
+            SELECT oi.tenant_id, oi.sku, SUM(oi.quantity) AS quantity
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id
+            WHERE oi.tenant_id = ? AND o.status = '출고완료'
+            GROUP BY oi.tenant_id, oi.sku
+        ) shipped ON shipped.tenant_id = p.tenant_id AND shipped.sku = p.sku
+        WHERE p.tenant_id = ?
         ORDER BY p.id DESC
-    ''', (g.company_id, g.company_id, g.company_id))
+    ''', (g.company_id, g.company_id))
     import math
     raw_products = [dict(p) for p in cur.fetchall()]
+    cur.execute('SELECT * FROM product_options WHERE tenant_id = ? ORDER BY id ASC', (g.company_id,))
+    options_by_product = {}
+    options_by_sku = {}
+    for row in cur.fetchall():
+        option = dict(row)
+        options_by_product.setdefault(option.get('product_id'), []).append(option)
+        options_by_sku.setdefault(option.get('sku'), []).append(option)
+
     products = []
     for p in raw_products:
-        cur.execute('SELECT * FROM product_options WHERE tenant_id = ? AND (sku = ? OR product_id = ?) ORDER BY id ASC', (g.company_id, p['sku'], p['id']))
-        raw_options = [dict(row) for row in cur.fetchall()]
+        raw_options_by_id = {
+            opt['id']: opt
+            for opt in options_by_product.get(p['id'], []) + options_by_sku.get(p.get('sku'), [])
+        }
+        raw_options = list(raw_options_by_id.values())
         cleaned_options = []
         for opt in raw_options:
             o_dict = dict(opt)

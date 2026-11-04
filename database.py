@@ -169,6 +169,7 @@ def init_db():
         cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_tenant_sku_order ON order_items (tenant_id, sku, order_id)')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_inventory_logs_created_at ON inventory_logs (created_at)')
         conn.commit()
         conn.close()
@@ -417,6 +418,7 @@ def init_db():
     cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_status_id ON orders (status, id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order_id_id ON order_items (order_id, id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_sku ON order_items (sku)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_tenant_sku_order ON order_items (tenant_id, sku, order_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_inventory_logs_created_at ON inventory_logs (created_at)')
 
     conn.commit()
@@ -495,6 +497,7 @@ def _ensure_tenant_indexes(cur):
     for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
         cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_tenant_id ON {table} (tenant_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_tenant_status_id ON orders (tenant_id, status, id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_tenant_sku_order ON order_items (tenant_id, sku, order_id)')
 
     for table, constraint in (
         ('products', 'products_sku_key'),
