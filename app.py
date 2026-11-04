@@ -980,6 +980,39 @@ def get_orders():
             items_by_order[oid].append(dict(it))
         for o in orders:
             o['items'] = items_by_order.get(o['id'], [])
+
+        # 기존 주문 중 분할 품목명에 원본의 합쳐진 문자열이 저장된 경우에도,
+        # 바코드가 재고 옵션에 연결되어 있으면 품목별 재고 상품명/옵션명을 화면에 제공합니다.
+        item_skus = list(dict.fromkeys(
+            str(item.get('sku') or '').strip()
+            for order in orders for item in order.get('items', [])
+            if str(item.get('sku') or '').strip()
+        ))
+        if item_skus:
+            sku_placeholders = ','.join(['?'] * len(item_skus))
+            display_names_by_sku = {}
+            cur.execute(f'''SELECT po.sku, p.product_name, po.option_name
+                FROM product_options po
+                LEFT JOIN products p ON p.id = po.product_id AND p.tenant_id = po.tenant_id
+                WHERE po.tenant_id = ? AND po.sku IN ({sku_placeholders})
+                ORDER BY po.id ASC''', [g.company_id] + item_skus)
+            for row in cur.fetchall():
+                display_names_by_sku.setdefault(str(row['sku'] or '').strip(), {
+                    'display_product_name': row['product_name'] or '',
+                    'display_option_name': row['option_name'] or ''
+                })
+            cur.execute(f'''SELECT sku, product_name, option_name FROM products
+                WHERE tenant_id = ? AND sku IN ({sku_placeholders})''', [g.company_id] + item_skus)
+            for row in cur.fetchall():
+                display_names_by_sku.setdefault(str(row['sku'] or '').strip(), {
+                    'display_product_name': row['product_name'] or '',
+                    'display_option_name': row['option_name'] or ''
+                })
+            for order in orders:
+                for item in order.get('items', []):
+                    display_names = display_names_by_sku.get(str(item.get('sku') or '').strip())
+                    if display_names:
+                        item.update(display_names)
     else:
         for o in orders:
             o['items'] = []

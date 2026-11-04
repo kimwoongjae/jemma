@@ -2343,16 +2343,28 @@
         }
     }
 
-    function getCleanCombinedName(o, it) {
+    function getCleanCombinedName(o, it, itemIndex = 0) {
         const cleanDispatchLabel = value => String(value || '').replace(/\s*\(출고\s*품목\)\s*/g, ' ').trim();
-        const pName = cleanDispatchLabel(o && o.original_product_name ? o.original_product_name : (it && it.item_product_name ? it.item_product_name : ''));
+        const itemCount = Array.isArray(o && o.items) ? o.items.length : 0;
+        const splitForItem = value => {
+            const parts = cleanDispatchLabel(value).split(/\s*\+\s*/).map(part => part.trim()).filter(Boolean);
+            return itemCount > 1 && parts.length === itemCount ? parts[itemIndex] : '';
+        };
+        const pName = cleanDispatchLabel(
+            (it && it.display_product_name) ||
+            splitForItem(it && it.item_product_name) ||
+            splitForItem(o && o.original_product_name) ||
+            (it && it.item_product_name ? it.item_product_name : (o && o.original_product_name ? o.original_product_name : ''))
+        );
         let origOpt = (o && o.original_option_name ? o.original_option_name : '').trim();
         if (origOpt === '단일옵션' || origOpt.toLowerCase() === 'nan') origOpt = '';
-        let itemOpt = cleanDispatchLabel(it && it.item_option_name ? it.item_option_name : '');
+        let itemOpt = cleanDispatchLabel(it && (it.display_option_name || it.item_option_name) ? (it.display_option_name || it.item_option_name) : '');
+        itemOpt = splitForItem(itemOpt) || itemOpt;
+        origOpt = splitForItem(origOpt) || origOpt;
         origOpt = cleanDispatchLabel(origOpt);
         if (itemOpt === '단일옵션' || itemOpt.toLowerCase() === 'nan') itemOpt = '';
 
-        const opt = origOpt || itemOpt;
+        const opt = itemOpt || origOpt;
         if (!opt) return pName;
         if (opt.includes(pName)) return opt;
         if (pName.includes(opt)) return pName;
@@ -2514,7 +2526,7 @@
                 }
 
                 // 상품명 + 옵션명 결합 (중복 방지)
-                const combinedName = getCleanCombinedName(o, it);
+                const combinedName = getCleanCombinedName(o, it, idx);
                 // 상품수량(엑셀 원본), 옵션수량(세트 낱개수), 구매수량(상품수량 * 옵션수량)
                 const { prodQty, optQty, buyQty } = getOrderQuantities(o, it);
 
@@ -2850,7 +2862,7 @@
                     `;
                 }
 
-                const combinedName = getCleanCombinedName(o, it);
+                const combinedName = getCleanCombinedName(o, it, idx);
                 const { prodQty, optQty, buyQty } = getOrderQuantities(o, it);
 
                 rowHtml += `
@@ -3247,8 +3259,8 @@
                 option_quantity: 1,
                 quantity: o.original_quantity || 1
             }];
-            const productHtml = items.map(it => {
-                const combinedName = getCleanCombinedName(o, it);
+            const productHtml = items.map((it, idx) => {
+                const combinedName = getCleanCombinedName(o, it, idx);
                 return `<div class="fw-bold text-dark">${escapeHtml(combinedName)}</div><div class="small text-muted"><code>${escapeHtml(it.sku || '-')}</code><span class="badge bg-success-subtle text-success py-0 px-1 ms-1">차감완료</span></div>`;
             }).join('<hr class="my-1">');
             const productQtyHtml = items.map(it => `${getDispatchedQuantities(o, it).productQuantity}개`).join('<br>');

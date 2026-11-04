@@ -370,10 +370,17 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
     option_parts = [p.strip() for p in re.split(delimiters_pattern, option_name) if p.strip()] if delimiters_pattern else [option_name]
     product_parts = [p.strip() for p in re.split(delimiters_pattern, product_name) if p.strip()] if delimiters_pattern else [product_name]
     option_is_quantity = bool(re.fullmatch(r'\d+\s*(개|봉|입|세트|box|박스)?', option_name, flags=re.IGNORECASE))
+    # 공동구매 파일처럼 상품명과 옵션명 양쪽이 같은 구분 기호로 나뉜 경우
+    # 같은 순번끼리 짝을 지어 품목별 상품명/옵션명을 보존합니다.
+    paired_product_option_parts = (
+        list(zip(product_parts, option_parts))
+        if len(product_parts) > 1 and len(product_parts) == len(option_parts)
+        else []
+    )
     is_product_split = len(option_parts) <= 1 and len(product_parts) > 1 and (
         not option_name or option_name in ('단일옵션', '단일상품') or option_is_quantity
     )
-    has_configured_split = len(option_parts) > 1 or is_product_split
+    has_configured_split = len(option_parts) > 1 or is_product_split or bool(paired_product_option_parts)
 
     # 2. 설정된 기호로 나눌 품목이 없을 때만 전체 옵션명 완전 일치를 확인한다.
     direct_info = {'matched': False}
@@ -395,7 +402,20 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
     items = []
     parts = product_parts if is_product_split else option_parts
 
-    if len(parts) > 1:
+    if paired_product_option_parts:
+        for product_part, option_part in paired_product_option_parts:
+            info = find_matching_product_info(product_part, option_part, conn, opt_rows=opt_rows, prod_rows=prod_rows)
+            opt_qty = info['dispatched_quantity'] if info['matched'] else 1
+            items.append({
+                'item_product_name': info.get('matched_product_name') or product_part,
+                'item_option_name': info.get('matched_option_name') or option_part,
+                'sku': info['sku'] if info['matched'] else generate_sku(product_part, option_part),
+                'product_quantity': qty,
+                'option_quantity': opt_qty,
+                'quantity': qty * opt_qty,
+                'matched': info['matched']
+            })
+    elif len(parts) > 1:
         for p in parts:
             lookup_p = '' if is_product_split else product_name
             info = find_matching_product_info(lookup_p, p, conn, opt_rows=opt_rows, prod_rows=prod_rows)
