@@ -433,7 +433,7 @@ def admin_copy_legacy_catalog(target_company_id):
                  option['unit_price'], option['dispatched_quantity'], option['created_at'], option['updated_at']))
             copied_options += 1
 
-        cur.execute('SELECT profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, created_at FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name', (source_id,))
+        cur.execute('SELECT profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, sort_rules_json, created_at FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name', (source_id,))
         source_profiles = cur.fetchall()
         copied_profiles = skipped_profiles = 0
         for profile in source_profiles:
@@ -442,10 +442,10 @@ def admin_copy_legacy_catalog(target_company_id):
             if cur.fetchone():
                 skipped_profiles += 1
                 continue
-            cur.execute('''INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, created_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            cur.execute('''INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, sort_rules_json, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                         (target_company_id, profile['profile_name'], profile['mapping_json'],
-                         profile['header_row'], profile['sort_priority'], profile['sort_field'], profile['sort_direction'], profile['created_at']))
+                         profile['header_row'], profile['sort_priority'], profile['sort_field'], profile['sort_direction'], profile['sort_rules_json'], profile['created_at']))
             copied_profiles += 1
 
         cur.execute('SELECT symbol FROM split_delimiters WHERE tenant_id = ? ORDER BY id', (source_id,))
@@ -728,7 +728,7 @@ def get_order_sort_key(o):
 def get_upload_profiles():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name ASC', (g.company_id,))
+    cur.execute('SELECT profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, sort_rules_json FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name ASC', (g.company_id,))
     profiles = []
     for row in cur.fetchall():
         profile = dict(row)
@@ -736,6 +736,12 @@ def get_upload_profiles():
             profile['mapping'] = json.loads(profile.pop('mapping_json') or '{}')
         except (TypeError, ValueError):
             profile['mapping'] = {}
+        try:
+            profile['sort_rules'] = json.loads(profile.pop('sort_rules_json') or '[]')
+            if not isinstance(profile['sort_rules'], list):
+                profile['sort_rules'] = []
+        except (TypeError, ValueError):
+            profile['sort_rules'] = []
         profiles.append(profile)
     conn.close()
     return jsonify(profiles)
@@ -806,17 +812,28 @@ def save_upload_profile_sort():
         sort_priority = int(data.get('sort_priority', 100))
     except (TypeError, ValueError):
         return jsonify({'error': '표시 순서는 숫자로 입력해주세요.'}), 400
-    sort_field = str(data.get('sort_field') or 'upload_order').strip()
-    sort_direction = str(data.get('sort_direction') or 'asc').strip().lower()
+    allowed_sort_fields = {'upload_order', 'order_no', 'recipient', 'product', 'barcode', 'quantity'}
+    sort_rules = data.get('sort_rules')
+    if sort_rules is None:
+        sort_rules = [{'field': data.get('sort_field') or 'upload_order',
+                       'direction': data.get('sort_direction') or 'asc'}]
+    if not isinstance(sort_rules, list) or not 1 <= len(sort_rules) <= 10:
+        return jsonify({'error': '정렬 기준은 1개 이상 10개 이하로 설정해주세요.'}), 400
+    clean_sort_rules = []
+    for rule in sort_rules:
+        if not isinstance(rule, dict):
+            return jsonify({'error': '정렬 기준 형식이 올바르지 않습니다.'}), 400
+        field = str(rule.get('field') or '').strip()
+        direction = str(rule.get('direction') or 'asc').strip().lower()
+        if field not in allowed_sort_fields or direction not in {'asc', 'desc'}:
+            return jsonify({'error': '정렬 기준 또는 방향이 올바르지 않습니다.'}), 400
+        clean_sort_rules.append({'field': field, 'direction': direction})
+    sort_field = clean_sort_rules[0]['field']
+    sort_direction = clean_sort_rules[0]['direction']
     if len(profile_name) > 80:
         return jsonify({'error': '업로드 형식 이름은 80자 이내여야 합니다.'}), 400
     if sort_priority < 1 or sort_priority > 9999:
         return jsonify({'error': '표시 순서는 1부터 9999 사이로 입력해주세요.'}), 400
-    if sort_field not in {'upload_order', 'order_no', 'recipient', 'product', 'barcode', 'quantity'}:
-        return jsonify({'error': '정렬 기준이 올바르지 않습니다.'}), 400
-    if sort_direction not in {'asc', 'desc'}:
-        return jsonify({'error': '정렬 방향이 올바르지 않습니다.'}), 400
-
     conn = get_connection()
     cur = conn.cursor()
     cur.execute('SELECT profile_name FROM upload_profiles WHERE tenant_id = ? AND profile_name = ?',
@@ -827,17 +844,19 @@ def save_upload_profile_sort():
         return jsonify({'error': '업로드 형식을 찾을 수 없습니다. 새로고침 후 다시 시도해주세요.'}), 404
 
     cur.execute('''
-        INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction)
-        VALUES (?, ?, '{}', 1, ?, ?, ?)
+        INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, sort_rules_json)
+        VALUES (?, ?, '{}', 1, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, profile_name) DO UPDATE SET
             sort_priority = excluded.sort_priority,
             sort_field = excluded.sort_field,
-            sort_direction = excluded.sort_direction
-    ''', (g.company_id, profile_name, sort_priority, sort_field, sort_direction))
+            sort_direction = excluded.sort_direction,
+            sort_rules_json = excluded.sort_rules_json
+    ''', (g.company_id, profile_name, sort_priority, sort_field, sort_direction,
+          json.dumps(clean_sort_rules, ensure_ascii=False)))
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'profile_name': profile_name, 'sort_priority': sort_priority,
-                    'sort_field': sort_field, 'sort_direction': sort_direction})
+                    'sort_field': sort_field, 'sort_direction': sort_direction, 'sort_rules': clean_sort_rules})
 
 
 @app.route('/api/upload-profiles/delete', methods=['POST'])

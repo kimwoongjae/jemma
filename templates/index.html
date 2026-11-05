@@ -1360,24 +1360,12 @@
                     <input type="number" class="form-control" id="uploadSortPriority" min="1" max="9999" value="100">
                     <div class="form-text">숫자가 작을수록 목록에서 먼저 표시됩니다.</div>
                 </div>
-                <div class="mb-3">
-                    <label for="uploadSortField" class="form-label fw-bold">정렬 기준</label>
-                    <select class="form-select" id="uploadSortField">
-                        <option value="upload_order">업로드한 순서</option>
-                        <option value="order_no">주문번호</option>
-                        <option value="recipient">수취인</option>
-                        <option value="product">상품명 + 옵션명</option>
-                        <option value="barcode">바코드 (SKU)</option>
-                        <option value="quantity">구매수량</option>
-                    </select>
+                <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
+                    <label class="form-label fw-bold mb-0">정렬 기준</label>
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="addUploadSortRule()"><i class="fa-solid fa-plus me-1"></i>기준 추가</button>
                 </div>
-                <div>
-                    <label for="uploadSortDirection" class="form-label fw-bold">정렬 방향</label>
-                    <select class="form-select" id="uploadSortDirection">
-                        <option value="asc">오름차순</option>
-                        <option value="desc">내림차순</option>
-                    </select>
-                </div>
+                <div id="uploadSortRules" class="d-flex flex-column gap-2"></div>
+                <div class="form-text mt-2">위에서 아래 순서로 적용합니다. 앞 기준이 같을 때 다음 기준을 비교합니다.</div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
@@ -1879,6 +1867,64 @@
         return `${labels[field] || labels.upload_order} · ${direction === 'desc' ? '내림차순' : '오름차순'}`;
     }
 
+    const UPLOAD_SORT_FIELDS = [
+        ['upload_order', '업로드한 순서'], ['order_no', '주문번호'], ['recipient', '수취인'],
+        ['product', '상품명 + 옵션명'], ['barcode', '바코드 (SKU)'], ['quantity', '구매수량']
+    ];
+
+    function getUploadSortRules(profile) {
+        if (Array.isArray(profile?.sort_rules) && profile.sort_rules.length) {
+            return profile.sort_rules.map(rule => ({ field: rule.field, direction: rule.direction === 'desc' ? 'desc' : 'asc' }));
+        }
+        return [{ field: profile?.sort_field || 'upload_order', direction: profile?.sort_direction === 'desc' ? 'desc' : 'asc' }];
+    }
+
+    function renderUploadSortRuleRows(rules) {
+        const container = document.getElementById('uploadSortRules');
+        if (!container) return;
+        const safeRules = Array.isArray(rules) && rules.length ? rules : [{ field: 'upload_order', direction: 'asc' }];
+        container.innerHTML = safeRules.map((rule, index) => `
+            <div class="row g-2 align-items-center upload-sort-rule" data-sort-rule-row>
+                <div class="col-1 text-center text-muted fw-bold">${index + 1}</div>
+                <div class="col-6">
+                    <select class="form-select" data-sort-rule-field aria-label="정렬 기준 ${index + 1}">
+                        ${UPLOAD_SORT_FIELDS.map(([value, label]) => `<option value="${value}" ${rule.field === value ? 'selected' : ''}>${label}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="col-4">
+                    <select class="form-select" data-sort-rule-direction aria-label="정렬 방향 ${index + 1}">
+                        <option value="asc" ${rule.direction !== 'desc' ? 'selected' : ''}>오름차순</option>
+                        <option value="desc" ${rule.direction === 'desc' ? 'selected' : ''}>내림차순</option>
+                    </select>
+                </div>
+                <div class="col-1 text-end">
+                    <button type="button" class="btn btn-sm btn-outline-danger" data-remove-sort-rule aria-label="정렬 기준 ${index + 1} 삭제" title="기준 삭제" ${safeRules.length <= 1 ? 'disabled' : ''}><i class="fa-solid fa-trash"></i></button>
+                </div>
+            </div>
+        `).join('');
+        container.querySelectorAll('[data-remove-sort-rule]').forEach(button => button.addEventListener('click', () => {
+            const current = readUploadSortRules();
+            const rowIndex = [...container.querySelectorAll('[data-sort-rule-row]')].indexOf(button.closest('[data-sort-rule-row]'));
+            if (current.length <= 1) return;
+            current.splice(rowIndex, 1);
+            renderUploadSortRuleRows(current);
+        }));
+    }
+
+    function readUploadSortRules() {
+        return [...document.querySelectorAll('#uploadSortRules [data-sort-rule-row]')].map(row => ({
+            field: row.querySelector('[data-sort-rule-field]').value,
+            direction: row.querySelector('[data-sort-rule-direction]').value
+        }));
+    }
+
+    function addUploadSortRule() {
+        const rules = readUploadSortRules();
+        if (rules.length >= 10) return alert('정렬 기준은 최대 10개까지 추가할 수 있습니다.');
+        rules.push({ field: 'upload_order', direction: 'asc' });
+        renderUploadSortRuleRows(rules);
+    }
+
     function renderUploadSortProfiles() {
         const tbody = document.getElementById('uploadSortProfilesBody');
         if (!tbody) return;
@@ -1889,7 +1935,7 @@
         const rows = uniqueNames.map(profileName => {
             const profile = uploadProfilesCache.find(item => item.profile_name === profileName);
             const defaults = profileName ? { sort_priority: 100, sort_field: 'upload_order', sort_direction: 'asc' }
-                : { sort_priority: 5000, sort_field: 'upload_order', sort_direction: 'asc' };
+            : { sort_priority: 5000, sort_field: 'upload_order', sort_direction: 'asc', sort_rules: [{ field: 'upload_order', direction: 'asc' }] };
             const config = { ...defaults, ...(profile || {}) };
             return { profileName, config, label: uploadSortProfileLabel(profileName) };
         }).sort((a, b) => Number(a.config.sort_priority) - Number(b.config.sort_priority) || a.label.localeCompare(b.label, 'ko'));
@@ -1898,7 +1944,7 @@
             <tr>
                 <td class="fw-semibold">${escapeHtml(label)}</td>
                 <td class="text-center"><span class="badge bg-primary-subtle text-primary">${Number(config.sort_priority)}</span></td>
-                <td>${escapeHtml(uploadSortFieldLabel(config.sort_field, config.sort_direction))}</td>
+                <td>${escapeHtml(getUploadSortRules(config).map((rule, index) => `${index + 1}. ${uploadSortFieldLabel(rule.field, rule.direction)}`).join(' → '))}</td>
                 <td class="text-center"><button type="button" class="btn btn-sm btn-outline-primary" data-sort-profile="${escapeHtml(profileName)}"><i class="fa-solid fa-pen-to-square me-1"></i>정렬 편집</button></td>
             </tr>
         `).join('');
@@ -1912,8 +1958,7 @@
         const profile = uploadProfilesCache.find(item => item.profile_name === profileName);
         document.getElementById('uploadSortProfileLabel').textContent = uploadSortProfileLabel(profileName);
         document.getElementById('uploadSortPriority').value = profile?.sort_priority ?? (profileName ? 100 : 5000);
-        document.getElementById('uploadSortField').value = profile?.sort_field || 'upload_order';
-        document.getElementById('uploadSortDirection').value = profile?.sort_direction || 'asc';
+        renderUploadSortRuleRows(getUploadSortRules(profile));
         bootstrap.Modal.getOrCreateInstance(document.getElementById('uploadSortModal')).show();
     }
 
@@ -1921,8 +1966,7 @@
         const payload = {
             profile_name: currentUploadSortProfileName,
             sort_priority: parseInt(document.getElementById('uploadSortPriority').value, 10),
-            sort_field: document.getElementById('uploadSortField').value,
-            sort_direction: document.getElementById('uploadSortDirection').value
+            sort_rules: readUploadSortRules()
         };
         try {
             const response = await fetch('/api/upload-profiles/sort', {
@@ -2685,14 +2729,15 @@
             if (priorityDiff) return priorityDiff;
             if (aProfileName !== bProfileName) return aProfileName.localeCompare(bProfileName, 'ko');
 
-            const field = aProfile.sort_field || 'upload_order';
-            const direction = aProfile.sort_direction === 'desc' ? -1 : 1;
-            const aValue = orderValue(a, field);
-            const bValue = orderValue(b, field);
-            let comparison = typeof aValue === 'number' && typeof bValue === 'number'
-                ? aValue - bValue
-                : String(aValue).localeCompare(String(bValue), 'ko', { numeric: true, sensitivity: 'base' });
-            if (comparison) return comparison * direction;
+            const rules = getUploadSortRules(aProfile);
+            for (const rule of rules) {
+                const aValue = orderValue(a, rule.field);
+                const bValue = orderValue(b, rule.field);
+                const comparison = typeof aValue === 'number' && typeof bValue === 'number'
+                    ? aValue - bValue
+                    : String(aValue).localeCompare(String(bValue), 'ko', { numeric: true, sensitivity: 'base' });
+                if (comparison) return comparison * (rule.direction === 'desc' ? -1 : 1);
+            }
             return Number(a.id || 0) - Number(b.id || 0);
         });
     }

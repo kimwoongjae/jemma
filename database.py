@@ -164,6 +164,7 @@ def init_db():
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_priority INTEGER NOT NULL DEFAULT 100")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_field TEXT NOT NULL DEFAULT 'upload_order'")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_direction TEXT NOT NULL DEFAULT 'asc'")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_rules_json TEXT NOT NULL DEFAULT '[]'")
         cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS manifest_data TEXT DEFAULT ''")
         cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_quantity INTEGER NOT NULL DEFAULT 1")
         cur.execute('''UPDATE order_items SET product_quantity = (
@@ -409,6 +410,7 @@ def init_db():
         sort_priority INTEGER NOT NULL DEFAULT 100,
         sort_field TEXT NOT NULL DEFAULT 'upload_order',
         sort_direction TEXT NOT NULL DEFAULT 'asc',
+        sort_rules_json TEXT NOT NULL DEFAULT '[]',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -420,6 +422,8 @@ def init_db():
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN sort_field TEXT NOT NULL DEFAULT 'upload_order'")
     if 'sort_direction' not in upload_profile_cols:
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN sort_direction TEXT NOT NULL DEFAULT 'asc'")
+    if 'sort_rules_json' not in upload_profile_cols:
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN sort_rules_json TEXT NOT NULL DEFAULT '[]'")
 
     # 초기 기본 택배사 설정 확인 및 삽입
     cur.execute('SELECT COUNT(*) as cnt FROM courier_settings')
@@ -507,6 +511,7 @@ def _ensure_tenant_schema(cur, postgres):
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_priority INTEGER NOT NULL DEFAULT 100")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_field TEXT NOT NULL DEFAULT 'upload_order'")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_direction TEXT NOT NULL DEFAULT 'asc'")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_rules_json TEXT NOT NULL DEFAULT '[]'")
 
 
 def _assign_legacy_tenant(cur):
@@ -635,11 +640,12 @@ def _rebuild_sqlite_tenant_uniques(cur):
             tenant_id INTEGER NOT NULL, profile_name TEXT NOT NULL, mapping_json TEXT NOT NULL DEFAULT '{}',
             header_row INTEGER NOT NULL DEFAULT 1, sort_priority INTEGER NOT NULL DEFAULT 100,
             sort_field TEXT NOT NULL DEFAULT 'upload_order', sort_direction TEXT NOT NULL DEFAULT 'asc',
+            sort_rules_json TEXT NOT NULL DEFAULT '[]',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (tenant_id, profile_name)
         )''')
         cur.execute('''INSERT INTO upload_profiles_tenant_new
-            SELECT tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, created_at FROM upload_profiles''')
+            SELECT tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, sort_rules_json, created_at FROM upload_profiles''')
         cur.execute('DROP TABLE upload_profiles')
         cur.execute('ALTER TABLE upload_profiles_tenant_new RENAME TO upload_profiles')
 
