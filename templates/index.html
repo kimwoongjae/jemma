@@ -2432,16 +2432,18 @@
             return itemCount > 1 && parts.length === itemCount ? parts[itemIndex] : '';
         };
         const pName = cleanDispatchLabel(
-            (it && it.display_product_name) ||
-            splitForItem(it && it.item_product_name) ||
             splitForItem(o && o.original_product_name) ||
-            (it && it.item_product_name ? it.item_product_name : (o && o.original_product_name ? o.original_product_name : ''))
+            (o && o.original_product_name) ||
+            splitForItem(it && it.item_product_name) ||
+            (it && it.item_product_name) ||
+            (it && it.display_product_name) || ''
         );
         let origOpt = (o && o.original_option_name ? o.original_option_name : '').trim();
         if (origOpt === '단일옵션' || origOpt.toLowerCase() === 'nan') origOpt = '';
-        let itemOpt = cleanDispatchLabel(it && (it.display_option_name || it.item_option_name) ? (it.display_option_name || it.item_option_name) : '');
+        const splitOriginalOption = splitForItem(origOpt);
+        let itemOpt = cleanDispatchLabel(splitOriginalOption || origOpt || (it && it.item_option_name) || (it && it.display_option_name) || '');
         itemOpt = splitForItem(itemOpt) || itemOpt;
-        origOpt = splitForItem(origOpt) || origOpt;
+        origOpt = splitOriginalOption || origOpt;
         origOpt = cleanDispatchLabel(origOpt);
         if (itemOpt === '단일옵션' || itemOpt.toLowerCase() === 'nan') itemOpt = '';
 

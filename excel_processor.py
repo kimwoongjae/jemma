@@ -402,8 +402,9 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
     if direct_info.get('matched'):
         opt_qty = direct_info['dispatched_quantity'] or 1
         return [{
-            'item_product_name': direct_info.get('matched_product_name') or product_name,
-            'item_option_name': direct_info.get('matched_option_name') or option_name,
+            # 화면에는 재고 마스터 이름이 아니라 업로드된 상품/옵션 원문을 보존한다.
+            'item_product_name': product_name,
+            'item_option_name': option_name,
             'sku': direct_info['sku'],
             'product_quantity': qty,
             'option_quantity': opt_qty,
@@ -420,8 +421,8 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
             info = find_matching_product_info(product_part, option_part, conn, opt_rows=opt_rows, prod_rows=prod_rows)
             opt_qty = info['dispatched_quantity'] if info['matched'] else 1
             items.append({
-                'item_product_name': info.get('matched_product_name') or product_part,
-                'item_option_name': info.get('matched_option_name') or option_part,
+                'item_product_name': product_part,
+                'item_option_name': option_part,
                 'sku': info['sku'] if info['matched'] else generate_sku(product_part, option_part),
                 'product_quantity': qty,
                 'option_quantity': opt_qty,
@@ -435,8 +436,8 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
             sku = info['sku'] if info['matched'] else generate_sku(product_name, p)
             opt_qty = info['dispatched_quantity'] if info['matched'] else 1
             items.append({
-                'item_product_name': info.get('matched_product_name') or (product_name if not is_product_split else p),
-                'item_option_name': info.get('matched_option_name') or (p if not is_product_split else '단일옵션'),
+                'item_product_name': product_name if not is_product_split else p,
+                'item_option_name': p if not is_product_split else '단일옵션',
                 'sku': sku,
                 'product_quantity': qty,
                 'option_quantity': opt_qty,
@@ -451,8 +452,8 @@ def split_order_items(product_name, option_name, quantity, conn=None, opt_rows=N
         sku = info['sku'] if info['matched'] else generate_sku(product_name, option_name)
 
         items.append({
-            'item_product_name': info.get('matched_product_name') or product_name,
-            'item_option_name': info.get('matched_option_name') or option_name,
+            'item_product_name': product_name,
+            'item_option_name': option_name,
             'sku': sku,
             'product_quantity': qty,
             'option_quantity': opt_qty,
@@ -569,8 +570,8 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
             except (TypeError, ValueError):
                 option_quantity = 1
             split_items = [{
-                'item_product_name': barcode_info.get('matched_product_name') or product_name or '상품명미상',
-                'item_option_name': barcode_info.get('matched_option_name') or option_name or '단일옵션',
+                'item_product_name': product_name or barcode_info.get('matched_product_name') or '상품명미상',
+                'item_option_name': option_name or barcode_info.get('matched_option_name') or '단일옵션',
                 'sku': barcode_info.get('sku') or barcode,
                 'product_quantity': quantity,
                 'option_quantity': option_quantity,
