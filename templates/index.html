@@ -527,6 +527,32 @@
                             </div>
                         </div>
                     </div>
+                    <div class="row g-2 align-items-center mb-2 pt-2 border-top">
+                        <div class="col-auto"><span class="small fw-bold text-muted"><i class="fa-solid fa-arrow-down-wide-short me-1"></i>목록 정렬</span></div>
+                        <div class="col-md-3 col-sm-5">
+                            <select id="orderListSortField" class="form-select form-select-sm" aria-label="주문 목록 정렬 기준">
+                                <option value="upload_order">업로드 순서</option>
+                                <option value="order_no">주문번호</option>
+                                <option value="recipient">수취인</option>
+                                <option value="product">상품명 + 옵션명</option>
+                                <option value="barcode">바코드 (SKU)</option>
+                                <option value="quantity">구매수량</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3 col-sm-5">
+                            <select id="orderListSortDirection" class="form-select form-select-sm" aria-label="주문 목록 정렬 방향">
+                                <option value="asc">오름차순</option>
+                                <option value="desc">내림차순</option>
+                                <option value="count_asc">개수 기준 오름차순</option>
+                                <option value="count_desc">개수 기준 내림차순</option>
+                            </select>
+                        </div>
+                        <div class="col-auto d-flex gap-2">
+                            <button type="button" class="btn btn-sm btn-primary" onclick="applyOrderListSort()"><i class="fa-solid fa-arrow-down-wide-short me-1"></i>정렬 적용</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetOrderListSort()">기본 정렬</button>
+                        </div>
+                        <div class="col text-muted small">현재 불러온 주문에 적용됩니다. 개수 기준은 품목 행에서 값이 나타난 횟수를 셉니다.</div>
+                    </div>
                     <!-- 액션 버튼 줄 -->
                     <div class="row g-2 align-items-center mb-1">
                         <div class="col-12 d-flex gap-2 justify-content-end flex-wrap order-action-buttons">
@@ -1726,6 +1752,7 @@
         ['shipping_method', '배송방법']
     ];
     let ordersList = [];
+    let orderListManualSortApplied = false;
     const orderDispatchStatusCache = new Map();
     let customsErrorOrdersList = [];
     let dispatchedOrdersList = [];
@@ -2797,10 +2824,71 @@
         });
     }
 
+    function applyManualOrderListSort(list) {
+        if (!orderListManualSortApplied || !Array.isArray(list)) return list;
+        const field = document.getElementById('orderListSortField')?.value || 'upload_order';
+        const direction = document.getElementById('orderListSortDirection')?.value || 'asc';
+        const getValue = order => {
+            const items = Array.isArray(order.items) && order.items.length ? order.items : [];
+            if (field === 'order_no') return String(order.order_no || '');
+            if (field === 'recipient') return String(order.recipient_name || '');
+            if (field === 'product') return items.map((item, index) => getCleanCombinedName(order, item, index)).join(' / ') || String(order.original_product_name || '');
+            if (field === 'barcode') return items.map(item => String(item.sku || '')).join(' / ');
+            if (field === 'quantity') return items.reduce((sum, item) => sum + getOrderQuantities(order, item).buyQty, 0);
+            return Number(order.id || 0);
+        };
+        const keyOf = value => `${typeof value}:${String(value)}`;
+        const frequencies = new Map();
+        if (direction === 'count_asc' || direction === 'count_desc') {
+            list.forEach(order => {
+                const key = keyOf(getValue(order));
+                const visibleItemRows = Math.max(1, Array.isArray(order.items) ? order.items.length : 0);
+                frequencies.set(key, (frequencies.get(key) || 0) + visibleItemRows);
+            });
+        }
+        return list.sort((a, b) => {
+            const aValue = getValue(a);
+            const bValue = getValue(b);
+            if (direction === 'count_asc' || direction === 'count_desc') {
+                const countDiff = (frequencies.get(keyOf(aValue)) || 0) - (frequencies.get(keyOf(bValue)) || 0);
+                return direction === 'count_desc' ? -countDiff : countDiff;
+            }
+            const difference = typeof aValue === 'number' && typeof bValue === 'number'
+                ? aValue - bValue
+                : String(aValue).localeCompare(String(bValue), 'ko', { numeric: true, sensitivity: 'base' });
+            return direction === 'desc' ? -difference : difference;
+        });
+    }
+
+    function applyOrderListSort() {
+        const selectedIds = new Set(getSelectedOrderIds().map(String));
+        orderListManualSortApplied = true;
+        renderOrdersTable(ordersList);
+        document.querySelectorAll('#ordersTableBody .order-row-check').forEach(checkbox => {
+            checkbox.checked = selectedIds.has(String(checkbox.value));
+        });
+        updateOrderSelectionCount();
+    }
+
+    function resetOrderListSort() {
+        orderListManualSortApplied = false;
+        const field = document.getElementById('orderListSortField');
+        const direction = document.getElementById('orderListSortDirection');
+        if (field) field.value = 'upload_order';
+        if (direction) direction.value = 'asc';
+        const selectedIds = new Set(getSelectedOrderIds().map(String));
+        renderOrdersTable(ordersList);
+        document.querySelectorAll('#ordersTableBody .order-row-check').forEach(checkbox => {
+            checkbox.checked = selectedIds.has(String(checkbox.value));
+        });
+        updateOrderSelectionCount();
+    }
+
     function renderOrdersTable(orders) {
         lastCheckedOrderIndex = -1;
         if (orders && Array.isArray(orders)) {
             sortOrdersInPlace(orders);
+            applyManualOrderListSort(orders);
         }
         const tbody = document.getElementById('ordersTableBody');
         tbody.innerHTML = '';
