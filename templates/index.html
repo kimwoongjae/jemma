@@ -102,6 +102,39 @@
         #ordersTable th:nth-child(14), #ordersTable td:nth-child(14) { width: 80px; }
         #ordersTable td:nth-child(7) { line-height: 1.45; overflow-wrap: anywhere; word-break: keep-all; }
         #ordersTable td:nth-child(8) { white-space: nowrap; }
+        /* 주문/발송 목록 모두 넓은 표를 유지하고 전용 가로 스크롤바로 이동합니다. */
+        .table-horizontal-scrollbar {
+            width: 100%;
+            height: 18px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            margin: 0 0 4px;
+            border-radius: 9px;
+            background: #e2e8f0;
+            scrollbar-color: #64748b #e2e8f0;
+            scrollbar-width: auto;
+            cursor: ew-resize;
+        }
+        .table-horizontal-scrollbar::-webkit-scrollbar { height: 14px; }
+        .table-horizontal-scrollbar::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 9px; }
+        .table-horizontal-scrollbar::-webkit-scrollbar-thumb { background: #64748b; border: 3px solid #e2e8f0; border-radius: 9px; }
+        .table-horizontal-scrollbar > div { height: 1px; }
+        #ordersTable, #dispatchedTable { table-layout: fixed; }
+        #dispatchedTable { min-width: 2130px; }
+        #dispatchedTable [data-column-key="selection"] { width: 50px; }
+        #dispatchedTable [data-column-key="weight"] { width: 105px; }
+        #dispatchedTable [data-column-key="order_no"] { width: 195px; }
+        #dispatchedTable [data-column-key="dispatched_at"] { width: 165px; }
+        #dispatchedTable [data-column-key="recipient"] { width: 165px; }
+        #dispatchedTable [data-column-key="customs_id"] { width: 185px; }
+        #dispatchedTable [data-column-key="address"] { width: 280px; }
+        #dispatchedTable [data-column-key="product"] { width: 360px; }
+        #dispatchedTable [data-column-key="product_quantity"],
+        #dispatchedTable [data-column-key="option_quantity"],
+        #dispatchedTable [data-column-key="buy_quantity"] { width: 90px; }
+        #dispatchedTable [data-column-key="courier_tracking"] { width: 240px; }
+        #dispatchedTable [data-column-key="status"] { width: 100px; }
+        #dispatchedTable td[data-column-key="product"] { overflow-wrap: anywhere; word-break: keep-all; }
         /* 라벨 인쇄 전용 스타일 */
         .shipping-label-card {
             width: 100mm;
@@ -192,6 +225,8 @@
                 -webkit-overflow-scrolling: touch;
                 overscroll-behavior-x: contain;
             }
+            .table-horizontal-scrollbar { height: 20px; margin-bottom: 5px; }
+            .table-horizontal-scrollbar::-webkit-scrollbar { height: 16px; }
             #ordersTable { min-width: 2130px; }
             #customsErrorTable { min-width: 900px; }
             #dispatchedTable { min-width: 1200px; }
@@ -524,6 +559,7 @@
             <!-- 주문 목록 테이블 -->
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
+                    <div class="table-horizontal-scrollbar" data-scroll-target="ordersTable" role="scrollbar" aria-label="주문 목록 좌우 스크롤" aria-controls="ordersTable" aria-orientation="horizontal" tabindex="0" title="마우스로 좌우 이동할 수 있습니다"><div></div></div>
                     <div class="table-responsive">
                         <table class="table table-bordered table-hover align-middle mb-0" id="ordersTable">
                             <thead class="table-light">
@@ -737,6 +773,7 @@
             <!-- 발송 완료 목록 테이블 -->
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
+                    <div class="table-horizontal-scrollbar" data-scroll-target="dispatchedTable" role="scrollbar" aria-label="발송내역 목록 좌우 스크롤" aria-controls="dispatchedTable" aria-orientation="horizontal" tabindex="0" title="마우스로 좌우 이동할 수 있습니다"><div></div></div>
                     <div class="table-responsive">
                         <table class="table table-bordered table-hover align-middle mb-0" id="dispatchedTable">
                             <thead class="table-light">
@@ -3312,6 +3349,41 @@
     document.addEventListener('dragend', () => {
         document.querySelectorAll('#dispatchedTable thead th').forEach(th => th.classList.remove('table-primary', 'opacity-50'));
     });
+
+    function initTableHorizontalScrollbars() {
+        document.querySelectorAll('.table-horizontal-scrollbar[data-scroll-target]').forEach(scrollbar => {
+            if (scrollbar.dataset.scrollBound === 'true') return;
+            const table = document.getElementById(scrollbar.dataset.scrollTarget);
+            const viewport = table?.closest('.table-responsive');
+            const spacer = scrollbar.firstElementChild;
+            if (!table || !viewport || !spacer) return;
+
+            let syncing = false;
+            const syncScroll = (source, destination) => {
+                if (syncing) return;
+                syncing = true;
+                destination.scrollLeft = source.scrollLeft;
+                requestAnimationFrame(() => { syncing = false; });
+            };
+            const refreshWidth = () => {
+                const tableWidth = Math.ceil(table.getBoundingClientRect().width);
+                const viewportWidth = Math.ceil(viewport.clientWidth);
+                spacer.style.width = `${Math.max(tableWidth, viewportWidth)}px`;
+                scrollbar.style.display = tableWidth > viewportWidth + 1 ? 'block' : 'none';
+                scrollbar.scrollLeft = viewport.scrollLeft;
+            };
+
+            scrollbar.addEventListener('scroll', () => syncScroll(scrollbar, viewport), { passive: true });
+            viewport.addEventListener('scroll', () => syncScroll(viewport, scrollbar), { passive: true });
+            window.addEventListener('resize', refreshWidth, { passive: true });
+            new ResizeObserver(refreshWidth).observe(viewport);
+            new MutationObserver(refreshWidth).observe(table, { childList: true, subtree: true });
+            scrollbar.dataset.scrollBound = 'true';
+            refreshWidth();
+        });
+    }
+
+    initTableHorizontalScrollbars();
 
     function renderDispatchedTable(orders) {
         const tbody = document.getElementById('dispatchedTableBody');
