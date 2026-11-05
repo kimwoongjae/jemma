@@ -740,6 +740,10 @@ def get_upload_profiles():
             profile['sort_rules'] = json.loads(profile.pop('sort_rules_json') or '[]')
             if not isinstance(profile['sort_rules'], list):
                 profile['sort_rules'] = []
+            profile['sort_rules'] = [
+                ({'field': 'order_no', 'direction': 'count_asc'} if rule.get('field') == 'order_item_count' else rule)
+                for rule in profile['sort_rules'] if isinstance(rule, dict)
+            ]
         except (TypeError, ValueError):
             profile['sort_rules'] = []
         profiles.append(profile)
@@ -770,7 +774,7 @@ def save_upload_profile():
     if sort_priority < 1 or sort_priority > 9999:
         return jsonify({'error': '정렬 우선순위는 1부터 9999 사이로 입력해주세요.'}), 400
     allowed_sort_fields = {'upload_order', 'order_no', 'order_item_count', 'recipient', 'product', 'barcode', 'quantity'}
-    if sort_field not in allowed_sort_fields or sort_direction not in {'asc', 'desc'}:
+    if sort_field not in allowed_sort_fields or sort_direction not in {'asc', 'desc', 'count_asc', 'count_desc'}:
         return jsonify({'error': '정렬 기준 설정이 올바르지 않습니다.'}), 400
 
     allowed_fields = {
@@ -812,7 +816,8 @@ def save_upload_profile_sort():
         sort_priority = int(data.get('sort_priority', 100))
     except (TypeError, ValueError):
         return jsonify({'error': '표시 순서는 숫자로 입력해주세요.'}), 400
-    allowed_sort_fields = {'upload_order', 'order_no', 'order_item_count', 'recipient', 'product', 'barcode', 'quantity'}
+    allowed_sort_fields = {'upload_order', 'order_no', 'recipient', 'product', 'barcode', 'quantity'}
+    allowed_sort_directions = {'asc', 'desc', 'count_asc', 'count_desc'}
     sort_rules = data.get('sort_rules')
     if sort_rules is None:
         sort_rules = [{'field': data.get('sort_field') or 'upload_order',
@@ -825,7 +830,9 @@ def save_upload_profile_sort():
             return jsonify({'error': '정렬 기준 형식이 올바르지 않습니다.'}), 400
         field = str(rule.get('field') or '').strip()
         direction = str(rule.get('direction') or 'asc').strip().lower()
-        if field not in allowed_sort_fields or direction not in {'asc', 'desc'}:
+        if field == 'order_item_count':
+            field, direction = 'order_no', 'count_asc'
+        if field not in allowed_sort_fields or direction not in allowed_sort_directions:
             return jsonify({'error': '정렬 기준 또는 방향이 올바르지 않습니다.'}), 400
         clean_sort_rules.append({'field': field, 'direction': direction})
     sort_field = clean_sort_rules[0]['field']
@@ -851,8 +858,10 @@ def save_upload_profile_sort():
             sort_field = excluded.sort_field,
             sort_direction = excluded.sort_direction,
             sort_rules_json = excluded.sort_rules_json
+        RETURNING profile_name
     ''', (g.company_id, profile_name, sort_priority, sort_field, sort_direction,
           json.dumps(clean_sort_rules, ensure_ascii=False)))
+    cur.fetchone()
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'profile_name': profile_name, 'sort_priority': sort_priority,

@@ -1362,13 +1362,10 @@
                 </div>
                 <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
                     <label class="form-label fw-bold mb-0">정렬 기준</label>
-                    <div class="d-flex gap-2 flex-wrap justify-content-end">
-                        <button type="button" class="btn btn-sm btn-outline-success" onclick="applySingleOrderSortPreset()" title="품목 1개 주문을 먼저 표시하고, 구매수량 순으로 정렬합니다."><i class="fa-solid fa-wand-magic-sparkles me-1"></i>단품 주문 먼저</button>
-                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="addUploadSortRule()"><i class="fa-solid fa-plus me-1"></i>기준 추가</button>
-                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="addUploadSortRule()"><i class="fa-solid fa-plus me-1"></i>기준 추가</button>
                 </div>
                 <div id="uploadSortRules" class="d-flex flex-column gap-2"></div>
-                <div class="form-text mt-2">위에서 아래 순서로 적용합니다. 앞 기준이 같을 때 다음 기준을 비교합니다.</div>
+                <div class="form-text mt-2">개수 기준은 선택한 값이 업로드 형식의 품목 행에 나타난 횟수로 정렬합니다. 개수가 같으면 다음 기준을 적용합니다.</div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
@@ -1864,22 +1861,33 @@
 
     function uploadSortFieldLabel(field, direction) {
         const labels = {
-        upload_order: '업로드한 순서', order_no: '주문번호', order_item_count: '주문번호별 품목 수', recipient: '수취인',
+            upload_order: '업로드한 순서', order_no: '주문번호', recipient: '수취인',
             product: '상품명 + 옵션명', barcode: '바코드 (SKU)', quantity: '구매수량'
         };
-        return `${labels[field] || labels.upload_order} · ${direction === 'desc' ? '내림차순' : '오름차순'}`;
+        const directions = { asc: '오름차순', desc: '내림차순', count_asc: '개수 기준 오름차순', count_desc: '개수 기준 내림차순' };
+        return `${labels[field] || labels.upload_order} · ${directions[direction] || directions.asc}`;
     }
 
     const UPLOAD_SORT_FIELDS = [
-        ['upload_order', '업로드한 순서'], ['order_no', '주문번호'], ['order_item_count', '주문번호별 품목 수'], ['recipient', '수취인'],
+        ['upload_order', '업로드한 순서'], ['order_no', '주문번호'], ['recipient', '수취인'],
         ['product', '상품명 + 옵션명'], ['barcode', '바코드 (SKU)'], ['quantity', '구매수량']
+    ];
+    const UPLOAD_SORT_DIRECTIONS = [
+        ['asc', '오름차순'], ['desc', '내림차순'],
+        ['count_asc', '개수 기준 오름차순'], ['count_desc', '개수 기준 내림차순']
     ];
 
     function getUploadSortRules(profile) {
         if (Array.isArray(profile?.sort_rules) && profile.sort_rules.length) {
-            return profile.sort_rules.map(rule => ({ field: rule.field, direction: rule.direction === 'desc' ? 'desc' : 'asc' }));
+            return profile.sort_rules.map(rule => rule.field === 'order_item_count'
+                ? { field: 'order_no', direction: 'count_asc' }
+                : { field: rule.field, direction: UPLOAD_SORT_DIRECTIONS.some(([value]) => value === rule.direction) ? rule.direction : 'asc' });
         }
-        return [{ field: profile?.sort_field || 'upload_order', direction: profile?.sort_direction === 'desc' ? 'desc' : 'asc' }];
+        return [{
+            field: profile?.sort_field === 'order_item_count' ? 'order_no' : (profile?.sort_field || 'upload_order'),
+            direction: profile?.sort_field === 'order_item_count' ? 'count_asc'
+                : (UPLOAD_SORT_DIRECTIONS.some(([value]) => value === profile?.sort_direction) ? profile.sort_direction : 'asc')
+        }];
     }
 
     function renderUploadSortRuleRows(rules) {
@@ -1896,8 +1904,7 @@
                 </div>
                 <div class="col-4">
                     <select class="form-select" data-sort-rule-direction aria-label="정렬 방향 ${index + 1}">
-                        <option value="asc" ${rule.direction !== 'desc' ? 'selected' : ''}>오름차순</option>
-                        <option value="desc" ${rule.direction === 'desc' ? 'selected' : ''}>내림차순</option>
+                        ${UPLOAD_SORT_DIRECTIONS.map(([value, label]) => `<option value="${value}" ${rule.direction === value ? 'selected' : ''}>${label}</option>`).join('')}
                     </select>
                 </div>
                 <div class="col-1 text-end">
@@ -1926,13 +1933,6 @@
         if (rules.length >= 10) return alert('정렬 기준은 최대 10개까지 추가할 수 있습니다.');
         rules.push({ field: 'upload_order', direction: 'asc' });
         renderUploadSortRuleRows(rules);
-    }
-
-    function applySingleOrderSortPreset() {
-        renderUploadSortRuleRows([
-            { field: 'order_item_count', direction: 'asc' },
-            { field: 'quantity', direction: 'asc' }
-        ]);
     }
 
     function renderUploadSortProfiles() {
@@ -2736,12 +2736,7 @@
         if (!list || !Array.isArray(list)) return list;
         const profilesByName = new Map(uploadProfilesCache.map(profile => [profile.profile_name, profile]));
         const profileOf = order => String(order.upload_profile || '');
-        const orderItemCounts = new Map();
-        list.forEach(order => {
-            const orderNo = String(order.order_no || `__order_${order.id || ''}`);
-            const itemCount = Array.isArray(order.items) && order.items.length ? order.items.length : 1;
-            orderItemCounts.set(orderNo, (orderItemCounts.get(orderNo) || 0) + itemCount);
-        });
+        const frequenciesByProfileAndField = new Map();
         const configOf = name => profilesByName.get(name) || {
             sort_priority: name ? 100 : 5000,
             sort_field: 'upload_order',
@@ -2750,7 +2745,6 @@
         const orderValue = (order, field) => {
             const items = Array.isArray(order.items) ? order.items : [];
             if (field === 'order_no') return String(order.order_no || '');
-            if (field === 'order_item_count') return orderItemCounts.get(String(order.order_no || `__order_${order.id || ''}`)) || 1;
             if (field === 'recipient') return String(order.recipient_name || '');
             if (field === 'product') return items.map(item =>
                 `${item.item_product_name || ''} ${item.item_option_name || ''}`.trim()
@@ -2758,6 +2752,22 @@
             if (field === 'barcode') return items.map(item => String(item.sku || '')).join(' / ');
             if (field === 'quantity') return items.reduce((sum, item) => sum + getOrderQuantities(order, item).buyQty, 0);
             return Number(order.id || 0);
+        };
+        const valueKey = value => `${typeof value}:${String(value)}`;
+        const frequencyMapFor = (profileName, field) => {
+            const cacheKey = `${profileName}\u0000${field}`;
+            if (frequenciesByProfileAndField.has(cacheKey)) return frequenciesByProfileAndField.get(cacheKey);
+            const frequencies = new Map();
+            list.forEach(order => {
+                if (profileOf(order) !== profileName) return;
+                const key = valueKey(orderValue(order, field));
+                // API returns one order with nested order_items; count the visible item rows
+                // so duplicate order numbers are measured the same way they appear in the list.
+                const rowCount = Math.max(1, Array.isArray(order.items) ? order.items.length : 0);
+                frequencies.set(key, (frequencies.get(key) || 0) + rowCount);
+            });
+            frequenciesByProfileAndField.set(cacheKey, frequencies);
+            return frequencies;
         };
         return list.sort((a, b) => {
             const aProfileName = profileOf(a);
@@ -2772,6 +2782,12 @@
             for (const rule of rules) {
                 const aValue = orderValue(a, rule.field);
                 const bValue = orderValue(b, rule.field);
+                if (rule.direction === 'count_asc' || rule.direction === 'count_desc') {
+                    const frequencyMap = frequencyMapFor(aProfileName, rule.field);
+                    const countDiff = (frequencyMap.get(valueKey(aValue)) || 0) - (frequencyMap.get(valueKey(bValue)) || 0);
+                    if (countDiff) return countDiff * (rule.direction === 'count_desc' ? -1 : 1);
+                    continue;
+                }
                 const comparison = typeof aValue === 'number' && typeof bValue === 'number'
                     ? aValue - bValue
                     : String(aValue).localeCompare(String(bValue), 'ko', { numeric: true, sensitivity: 'base' });
