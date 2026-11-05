@@ -119,6 +119,14 @@
         .table-horizontal-scrollbar::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 9px; }
         .table-horizontal-scrollbar::-webkit-scrollbar-thumb { background: #64748b; border: 3px solid #e2e8f0; border-radius: 9px; }
         .table-horizontal-scrollbar > div { height: 1px; }
+        .table-horizontal-scrollbar.is-floating {
+            position: fixed;
+            z-index: 1040;
+            height: 20px;
+            margin: 0;
+            border: 1px solid #cbd5e1;
+            box-shadow: 0 2px 12px rgba(15, 23, 42, 0.24);
+        }
         #ordersTable, #dispatchedTable { table-layout: fixed; }
         #dispatchedTable { min-width: 2130px; }
         #dispatchedTable [data-column-key="selection"] { width: 50px; }
@@ -3359,27 +3367,51 @@
             if (!table || !viewport || !spacer) return;
 
             let syncing = false;
+            let layoutFrame = 0;
             const syncScroll = (source, destination) => {
                 if (syncing) return;
                 syncing = true;
                 destination.scrollLeft = source.scrollLeft;
                 requestAnimationFrame(() => { syncing = false; });
             };
-            const refreshWidth = () => {
+            const refreshLayout = () => {
                 const tableWidth = Math.ceil(table.getBoundingClientRect().width);
                 const viewportWidth = Math.ceil(viewport.clientWidth);
                 spacer.style.width = `${Math.max(tableWidth, viewportWidth)}px`;
-                scrollbar.style.display = tableWidth > viewportWidth + 1 ? 'block' : 'none';
+                const hasOverflow = tableWidth > viewportWidth + 1;
+                scrollbar.style.display = hasOverflow ? 'block' : 'none';
                 scrollbar.scrollLeft = viewport.scrollLeft;
+
+                const rect = viewport.getBoundingClientRect();
+                const isInVisibleTable = hasOverflow && rect.width > 0 && rect.height > 0 &&
+                    rect.bottom > 0 && rect.top < window.innerHeight &&
+                    rect.right > 0 && rect.left < window.innerWidth;
+                scrollbar.classList.toggle('is-floating', isInVisibleTable);
+                if (isInVisibleTable) {
+                    scrollbar.style.left = `${rect.left}px`;
+                    scrollbar.style.width = `${rect.width}px`;
+                } else {
+                    scrollbar.style.removeProperty('left');
+                    scrollbar.style.removeProperty('width');
+                }
+            };
+            const scheduleRefresh = () => {
+                if (layoutFrame) return;
+                layoutFrame = requestAnimationFrame(() => {
+                    layoutFrame = 0;
+                    refreshLayout();
+                });
             };
 
             scrollbar.addEventListener('scroll', () => syncScroll(scrollbar, viewport), { passive: true });
             viewport.addEventListener('scroll', () => syncScroll(viewport, scrollbar), { passive: true });
-            window.addEventListener('resize', refreshWidth, { passive: true });
-            new ResizeObserver(refreshWidth).observe(viewport);
-            new MutationObserver(refreshWidth).observe(table, { childList: true, subtree: true });
+            window.addEventListener('scroll', scheduleRefresh, { passive: true });
+            window.addEventListener('resize', scheduleRefresh, { passive: true });
+            document.addEventListener('shown.bs.tab', scheduleRefresh);
+            new ResizeObserver(scheduleRefresh).observe(viewport);
+            new MutationObserver(scheduleRefresh).observe(table, { childList: true, subtree: true });
             scrollbar.dataset.scrollBound = 'true';
-            refreshWidth();
+            refreshLayout();
         });
     }
 
