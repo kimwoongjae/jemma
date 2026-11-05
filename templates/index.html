@@ -3390,9 +3390,12 @@
                 if (isInVisibleTable) {
                     scrollbar.style.left = `${rect.left}px`;
                     scrollbar.style.width = `${rect.width}px`;
+                    const visibleTop = Math.max(8, Math.min(rect.top, window.innerHeight - 28));
+                    scrollbar.style.top = `${visibleTop}px`;
                 } else {
                     scrollbar.style.removeProperty('left');
                     scrollbar.style.removeProperty('width');
+                    scrollbar.style.removeProperty('top');
                 }
             };
             const scheduleRefresh = () => {
