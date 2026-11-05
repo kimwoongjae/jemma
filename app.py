@@ -20,6 +20,8 @@ from shipping_api import (
     export_shipping_excel
 )
 
+SHIPPING_WEIGHT_STEPS = [i / 2 for i in range(1, 61)] + list(range(35, 101, 5))
+
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(32)
 app.config.update(
@@ -2154,23 +2156,67 @@ def _narda_pdf_bundle_for_tenant(tenant_id):
 def get_inventory():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('''
-        SELECT p.*,
-            (COALESCE(p.dispatched_quantity, 0) + COALESCE(shipped.quantity, 0)) AS total_dispatched_quantity
-        FROM products p
-        LEFT JOIN (
-            SELECT oi.tenant_id, oi.sku, SUM(oi.quantity) AS quantity
-            FROM order_items oi
-            JOIN orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id
-            WHERE oi.tenant_id = ? AND o.status = '출고완료'
-            GROUP BY oi.tenant_id, oi.sku
-        ) shipped ON shipped.tenant_id = p.tenant_id AND shipped.sku = p.sku
-        WHERE p.tenant_id = ?
-        ORDER BY p.id DESC
-    ''', (g.company_id, g.company_id))
+    paged_request = 'page' in request.args or 'search' in request.args
+    page_size = min(200, max(20, request.args.get('per_page', default=100, type=int)))
+    page = max(0, request.args.get('page', default=0, type=int))
+    search = request.args.get('search', '').strip()
+    where_sql = 'p.tenant_id = ?'
+    where_params = [g.company_id]
+    if search:
+        pattern = f'%{search}%'
+        where_sql += ''' AND (
+            p.sku LIKE ? OR p.product_name LIKE ? OR p.english_name LIKE ? OR p.hs_code LIKE ?
+            OR EXISTS (SELECT 1 FROM product_options po WHERE po.tenant_id = p.tenant_id
+                AND (po.product_id = p.id OR po.sku = p.sku) AND (po.option_name LIKE ? OR po.sku LIKE ?))
+        )'''
+        where_params.extend([pattern] * 6)
+    if paged_request:
+        cur.execute(f'SELECT COUNT(*) AS total FROM products p WHERE {where_sql}', where_params)
+        total_products = int(cur.fetchone()['total'] or 0)
+        page = min(page, max(0, (total_products - 1) // page_size))
+        cur.execute(f'''SELECT p.*, COALESCE(p.dispatched_quantity, 0) AS total_dispatched_quantity
+            FROM products p WHERE {where_sql} ORDER BY p.id DESC LIMIT ? OFFSET ?''',
+            where_params + [page_size, page * page_size])
+    else:
+        total_products = 0
+        cur.execute(f'''
+            SELECT p.*,
+                (COALESCE(p.dispatched_quantity, 0) + COALESCE(shipped.quantity, 0)) AS total_dispatched_quantity
+            FROM products p
+            LEFT JOIN (
+                SELECT oi.tenant_id, oi.sku, SUM(oi.quantity) AS quantity
+                FROM order_items oi
+                JOIN orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id
+                WHERE oi.tenant_id = ? AND o.status = '출고완료'
+                GROUP BY oi.tenant_id, oi.sku
+            ) shipped ON shipped.tenant_id = p.tenant_id AND shipped.sku = p.sku
+            WHERE {where_sql} ORDER BY p.id DESC
+        ''', [g.company_id] + where_params)
     import math
     raw_products = [dict(p) for p in cur.fetchall()]
-    cur.execute('SELECT * FROM product_options WHERE tenant_id = ? ORDER BY id ASC', (g.company_id,))
+    product_ids = [p['id'] for p in raw_products]
+    product_skus = list(dict.fromkeys(str(p.get('sku') or '') for p in raw_products if p.get('sku')))
+    if paged_request and product_skus:
+        sku_placeholders = ','.join(['?'] * len(product_skus))
+        cur.execute(f'''SELECT oi.sku, SUM(oi.quantity) AS quantity
+            FROM order_items oi JOIN orders o ON o.id = oi.order_id AND o.tenant_id = oi.tenant_id
+            WHERE oi.tenant_id = ? AND o.status = '출고완료' AND oi.sku IN ({sku_placeholders})
+            GROUP BY oi.sku''', [g.company_id] + product_skus)
+        dispatched_by_sku = {str(row['sku'] or ''): int(row['quantity'] or 0) for row in cur.fetchall()}
+        for product in raw_products:
+            product['total_dispatched_quantity'] = int(product.get('total_dispatched_quantity') or 0) + dispatched_by_sku.get(str(product.get('sku') or ''), 0)
+    if product_ids:
+        product_placeholders = ','.join(['?'] * len(product_ids))
+        sku_clause = ''
+        option_params = [g.company_id] + product_ids
+        if product_skus:
+            sku_placeholders = ','.join(['?'] * len(product_skus))
+            sku_clause = f' OR sku IN ({sku_placeholders})'
+            option_params.extend(product_skus)
+        cur.execute(f'''SELECT * FROM product_options
+            WHERE tenant_id = ? AND (product_id IN ({product_placeholders}){sku_clause}) ORDER BY id ASC''', option_params)
+    else:
+        cur.execute('SELECT * FROM product_options WHERE 1 = 0')
     options_by_product = {}
     options_by_sku = {}
     for row in cur.fetchall():
@@ -2214,6 +2260,8 @@ def get_inventory():
             p[k] = '' if v.lower() == 'nan' else v
         products.append(p)
     conn.close()
+    if paged_request:
+        return jsonify({'items': products, 'total': total_products, 'page': page, 'per_page': page_size})
     return jsonify(products)
 
 @app.route('/api/inventory/search', methods=['GET'])
@@ -2928,6 +2976,70 @@ def delete_delimiter():
         conn.close()
 
 # ----------------- 7. 택배사 & 발송자 설정 API -----------------
+@app.route('/api/shipping-rates', methods=['GET'])
+def get_shipping_rates():
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.executemany(
+            'INSERT INTO shipping_rates (tenant_id, weight_kg) VALUES (?, ?) ON CONFLICT DO NOTHING',
+            [(g.company_id, weight) for weight in SHIPPING_WEIGHT_STEPS]
+        )
+        conn.commit()
+        cur.execute('''SELECT weight_kg, air_rate, sea_rate FROM shipping_rates
+                       WHERE tenant_id = ? ORDER BY weight_kg ASC''', (g.company_id,))
+        return jsonify({'rates': [dict(row) for row in cur.fetchall()]})
+    finally:
+        conn.close()
+
+
+@app.route('/api/shipping-rates', methods=['POST'])
+def save_shipping_rates():
+    data = request.get_json(silent=True) or {}
+    rates = data.get('rates')
+    if not isinstance(rates, list):
+        return jsonify({'error': '요금표 데이터 형식이 올바르지 않습니다.'}), 400
+
+    allowed_weights = {round(float(weight), 1) for weight in SHIPPING_WEIGHT_STEPS}
+    normalized = []
+    seen = set()
+    for row in rates:
+        if not isinstance(row, dict):
+            return jsonify({'error': '요금표 행 형식이 올바르지 않습니다.'}), 400
+        try:
+            weight = round(float(row.get('weight_kg')), 1)
+            air_rate = float(row.get('air_rate') or 0)
+            sea_rate = float(row.get('sea_rate') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'error': '무게와 요금은 숫자로 입력해주세요.'}), 400
+        if weight not in allowed_weights or weight in seen:
+            return jsonify({'error': '무게 기준이 중복되었거나 요금표에 없는 값입니다.'}), 400
+        if not all(math.isfinite(value) and 0 <= value <= 999999999 for value in (air_rate, sea_rate)):
+            return jsonify({'error': '요금은 0 이상 999,999,999 이하 숫자로 입력해주세요.'}), 400
+        seen.add(weight)
+        normalized.append((g.company_id, weight, air_rate, sea_rate))
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.executemany('''
+            INSERT INTO shipping_rates (tenant_id, weight_kg, air_rate, sea_rate, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (tenant_id, weight_kg) DO UPDATE SET
+                air_rate = excluded.air_rate,
+                sea_rate = excluded.sea_rate,
+                updated_at = CURRENT_TIMESTAMP
+        ''', normalized)
+        conn.commit()
+        return jsonify({'status': 'success', 'saved_count': len(normalized)})
+    except Exception as e:
+        conn.rollback()
+        app.logger.exception('Shipping rate save failed')
+        return jsonify({'error': '배송요금표 저장에 실패했습니다.'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
     conn = get_connection()

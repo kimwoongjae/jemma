@@ -156,6 +156,15 @@ def init_db():
     cur = conn.cursor()
 
     if isinstance(conn, PgConnectionWrapper):
+        cur.execute('''CREATE TABLE IF NOT EXISTS shipping_rates (
+            id BIGSERIAL PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            weight_kg NUMERIC(5,1) NOT NULL,
+            air_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+            sea_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (tenant_id, weight_kg)
+        )''')
         _ensure_tenant_schema(cur, postgres=True)
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
@@ -173,7 +182,7 @@ def init_db():
           AND EXISTS (SELECT 1 FROM orders WHERE orders.id = order_items.order_id AND COALESCE(original_quantity, 1) > 1)''')
         cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS stock_only_dispatch INTEGER NOT NULL DEFAULT 0")
         cur.execute("ALTER TABLE courier_settings ADD COLUMN IF NOT EXISTS tenant_id INTEGER")
-        for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
+        for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products', 'shipping_rates'):
             cur.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id INTEGER')
         _assign_legacy_tenant(cur)
         _ensure_tenant_indexes(cur)
@@ -394,6 +403,16 @@ def init_db():
     )
     ''')
 
+    cur.execute('''CREATE TABLE IF NOT EXISTS shipping_rates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL,
+        weight_kg REAL NOT NULL,
+        air_rate REAL NOT NULL DEFAULT 0,
+        sea_rate REAL NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, weight_kg)
+    )''')
+
     # courier_settings 테이블 컬럼 마이그레이션 (narda_id 추가)
     cur.execute("PRAGMA table_info(courier_settings)")
     settings_cols = [row[1] for row in cur.fetchall()]
@@ -495,7 +514,7 @@ def _ensure_tenant_schema(cur, postgres):
     tenant_tables = (
         'products', 'product_options', 'orders', 'order_items', 'inventory_logs',
         'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
-        'unregistered_products'
+        'unregistered_products', 'shipping_rates'
     )
     for table in tenant_tables:
         if postgres:
@@ -531,7 +550,7 @@ def _assign_legacy_tenant(cur):
         legacy_tables = (
             'products', 'product_options', 'orders', 'order_items', 'inventory_logs',
             'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
-            'unregistered_products'
+            'unregistered_products', 'shipping_rates'
         )
         has_unassigned_legacy_data = False
         for table in legacy_tables:
@@ -544,7 +563,7 @@ def _assign_legacy_tenant(cur):
         invite_code = secrets.token_urlsafe(8).replace('-', '').replace('_', '')[:10].upper()
         cur.execute('INSERT INTO companies (name, invite_code) VALUES (?, ?)', ('젬마 (기존 데이터)', invite_code))
         tenant_id = cur.lastrowid
-    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
+    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products', 'shipping_rates'):
         cur.execute(f'UPDATE {table} SET tenant_id = ? WHERE tenant_id IS NULL', (tenant_id,))
     return tenant_id
 
@@ -569,10 +588,13 @@ def _bootstrap_legacy_owner(cur):
 
 
 def _ensure_tenant_indexes(cur):
-    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products'):
+    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products', 'shipping_rates'):
         cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_tenant_id ON {table} (tenant_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_tenant_status_id ON orders (tenant_id, status, id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_tenant_sku_order ON order_items (tenant_id, sku, order_id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_products_tenant_sku ON products (tenant_id, sku)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_product_options_tenant_product_id ON product_options (tenant_id, product_id, id)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_product_options_tenant_sku ON product_options (tenant_id, sku)')
 
     for table, constraint in (
         ('products', 'products_sku_key'),
