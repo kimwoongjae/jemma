@@ -800,6 +800,7 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
             pass
 
     orders = parsed_data.get('orders', [])
+    upload_profile = str(parsed_data.get('upload_profile') or '')[:80]
     all_order_items = []
 
     # 2. 주문 일괄 청크 삽입 (50건씩 묶어 쿼리 수 98% 절감)
@@ -809,7 +810,7 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
         val_placeholders = []
         params = []
         for ord_data in chunk:
-            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            val_placeholders.append('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
             params.extend([
                 tenant_id,
                 ord_data['order_no'], ord_data['courier'], ord_data['tracking_no'], ord_data['shipping_method'],
@@ -817,7 +818,7 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
                 ord_data['recipient_name'], ord_data['recipient_phone1'], ord_data['recipient_phone2'],
                 ord_data['customs_id'], ord_data['postal_code'], ord_data['address'], ord_data['shipping_memo'],
                 '주문접수', batch_name, float(ord_data.get('weight') or 0),
-                json.dumps(ord_data.get('manifest_data') or {}, ensure_ascii=False)
+                json.dumps(ord_data.get('manifest_data') or {}, ensure_ascii=False), upload_profile
             ])
         
         insert_sql = f'''
@@ -826,7 +827,7 @@ def save_orders_to_db(parsed_data, batch_name, tenant_id=None):
                 original_product_name, original_option_name, original_quantity,
                 recipient_name, recipient_phone1, recipient_phone2,
                 customs_id, postal_code, address, shipping_memo,
-                status, upload_batch, weight, manifest_data
+                status, upload_batch, weight, manifest_data, upload_profile
             ) VALUES {', '.join(val_placeholders)}
             RETURNING id
         '''

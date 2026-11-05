@@ -433,7 +433,7 @@ def admin_copy_legacy_catalog(target_company_id):
                  option['unit_price'], option['dispatched_quantity'], option['created_at'], option['updated_at']))
             copied_options += 1
 
-        cur.execute('SELECT profile_name, mapping_json, header_row, created_at FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name', (source_id,))
+        cur.execute('SELECT profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, created_at FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name', (source_id,))
         source_profiles = cur.fetchall()
         copied_profiles = skipped_profiles = 0
         for profile in source_profiles:
@@ -442,10 +442,10 @@ def admin_copy_legacy_catalog(target_company_id):
             if cur.fetchone():
                 skipped_profiles += 1
                 continue
-            cur.execute('''INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, created_at)
-                           VALUES (?, ?, ?, ?, ?)''',
+            cur.execute('''INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                         (target_company_id, profile['profile_name'], profile['mapping_json'],
-                         profile['header_row'], profile['created_at']))
+                         profile['header_row'], profile['sort_priority'], profile['sort_field'], profile['sort_direction'], profile['created_at']))
             copied_profiles += 1
 
         cur.execute('SELECT symbol FROM split_delimiters WHERE tenant_id = ? ORDER BY id', (source_id,))
@@ -728,7 +728,7 @@ def get_order_sort_key(o):
 def get_upload_profiles():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('SELECT profile_name, mapping_json, header_row FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name ASC', (g.company_id,))
+    cur.execute('SELECT profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction FROM upload_profiles WHERE tenant_id = ? ORDER BY profile_name ASC', (g.company_id,))
     profiles = []
     for row in cur.fetchall():
         profile = dict(row)
@@ -746,10 +746,13 @@ def save_upload_profile():
     data = request.get_json() or {}
     profile_name = str(data.get('profile_name') or '').strip()
     mapping = data.get('mapping') or {}
+    sort_field = str(data.get('sort_field') or 'upload_order').strip()
+    sort_direction = str(data.get('sort_direction') or 'asc').strip().lower()
     try:
         header_row = int(data.get('header_row', 1))
+        sort_priority = int(data.get('sort_priority', 100))
     except (TypeError, ValueError):
-        return jsonify({'error': '헤더 행은 0 이상의 숫자로 입력해주세요.'}), 400
+        return jsonify({'error': '헤더 행과 정렬 우선순위는 숫자로 입력해주세요.'}), 400
     if not profile_name:
         return jsonify({'error': '업로드 형식 이름을 입력해주세요.'}), 400
     if len(profile_name) > 80:
@@ -758,6 +761,11 @@ def save_upload_profile():
         return jsonify({'error': '열 연결 설정 형식이 올바르지 않습니다.'}), 400
     if header_row < 0 or header_row > 100:
         return jsonify({'error': '헤더 행은 0부터 100 사이로 입력해주세요.'}), 400
+    if sort_priority < 1 or sort_priority > 9999:
+        return jsonify({'error': '정렬 우선순위는 1부터 9999 사이로 입력해주세요.'}), 400
+    allowed_sort_fields = {'upload_order', 'order_no', 'recipient', 'product', 'barcode', 'quantity'}
+    if sort_field not in allowed_sort_fields or sort_direction not in {'asc', 'desc'}:
+        return jsonify({'error': '정렬 기준 설정이 올바르지 않습니다.'}), 400
 
     allowed_fields = {
         'order_no', 'courier', 'tracking_no', 'shipping_method', 'product_name', 'sku',
@@ -773,13 +781,17 @@ def save_upload_profile():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute('''
-        INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, profile_name) DO UPDATE SET
             mapping_json = excluded.mapping_json,
-            header_row = excluded.header_row
+            header_row = excluded.header_row,
+            sort_priority = excluded.sort_priority,
+            sort_field = excluded.sort_field,
+            sort_direction = excluded.sort_direction
         RETURNING profile_name
-    ''', (g.company_id, profile_name, json.dumps(clean_mapping, ensure_ascii=False), header_row))
+    ''', (g.company_id, profile_name, json.dumps(clean_mapping, ensure_ascii=False), header_row,
+          sort_priority, sort_field, sort_direction))
     cur.fetchone()
     conn.commit()
     conn.close()
@@ -946,10 +958,6 @@ def upload_preview():
                         os.remove(filepath)
                     except Exception:
                         pass
-
-        # 나르다 Manifest 업로드는 원본 파일의 주문 순서를 그대로 유지합니다.
-        if profile_name != NARDA_MANIFEST_PROFILE:
-            merged_orders.sort(key=get_order_sort_key)
 
         preview_data = {
             'batch_name': ', '.join(batch_names) if len(batch_names) <= 2 else f"{batch_names[0]} 외 {len(batch_names)-1}개 파일",

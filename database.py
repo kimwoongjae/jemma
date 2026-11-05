@@ -160,6 +160,10 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS manifest_data TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS upload_profile TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_priority INTEGER NOT NULL DEFAULT 100")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_field TEXT NOT NULL DEFAULT 'upload_order'")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_direction TEXT NOT NULL DEFAULT 'asc'")
         cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS manifest_data TEXT DEFAULT ''")
         cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_quantity INTEGER NOT NULL DEFAULT 1")
         cur.execute('''UPDATE order_items SET product_quantity = (
@@ -293,6 +297,7 @@ def init_db():
         api_dispatch_status TEXT DEFAULT '',
         api_dispatch_message TEXT DEFAULT '',
         manifest_data TEXT DEFAULT '',
+        upload_profile TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -315,6 +320,8 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN api_dispatch_message TEXT DEFAULT ''")
     if 'manifest_data' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN manifest_data TEXT DEFAULT ''")
+    if 'upload_profile' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN upload_profile TEXT DEFAULT ''")
 
     # 기존 출고대기 상태 주문접수로 통일 정규화
     cur.execute("UPDATE orders SET status = '주문접수' WHERE status = '출고대기'")
@@ -399,9 +406,20 @@ def init_db():
         profile_name TEXT PRIMARY KEY,
         mapping_json TEXT NOT NULL DEFAULT '{}',
         header_row INTEGER NOT NULL DEFAULT 1,
+        sort_priority INTEGER NOT NULL DEFAULT 100,
+        sort_field TEXT NOT NULL DEFAULT 'upload_order',
+        sort_direction TEXT NOT NULL DEFAULT 'asc',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+    cur.execute("PRAGMA table_info(upload_profiles)")
+    upload_profile_cols = [row[1] for row in cur.fetchall()]
+    if 'sort_priority' not in upload_profile_cols:
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN sort_priority INTEGER NOT NULL DEFAULT 100")
+    if 'sort_field' not in upload_profile_cols:
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN sort_field TEXT NOT NULL DEFAULT 'upload_order'")
+    if 'sort_direction' not in upload_profile_cols:
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN sort_direction TEXT NOT NULL DEFAULT 'asc'")
 
     # 초기 기본 택배사 설정 확인 및 삽입
     cur.execute('SELECT COUNT(*) as cnt FROM courier_settings')
@@ -483,6 +501,12 @@ def _ensure_tenant_schema(cur, postgres):
             columns = [row[1] for row in cur.fetchall()]
             if 'tenant_id' not in columns:
                 cur.execute(f'ALTER TABLE {table} ADD COLUMN tenant_id INTEGER')
+
+    if postgres:
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS upload_profile TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_priority INTEGER NOT NULL DEFAULT 100")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_field TEXT NOT NULL DEFAULT 'upload_order'")
+        cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_direction TEXT NOT NULL DEFAULT 'asc'")
 
 
 def _assign_legacy_tenant(cur):
@@ -609,11 +633,13 @@ def _rebuild_sqlite_tenant_uniques(cur):
     if unique_key_exists('upload_profiles', ['profile_name']):
         cur.execute('''CREATE TABLE upload_profiles_tenant_new (
             tenant_id INTEGER NOT NULL, profile_name TEXT NOT NULL, mapping_json TEXT NOT NULL DEFAULT '{}',
-            header_row INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            header_row INTEGER NOT NULL DEFAULT 1, sort_priority INTEGER NOT NULL DEFAULT 100,
+            sort_field TEXT NOT NULL DEFAULT 'upload_order', sort_direction TEXT NOT NULL DEFAULT 'asc',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (tenant_id, profile_name)
         )''')
         cur.execute('''INSERT INTO upload_profiles_tenant_new
-            SELECT tenant_id, profile_name, mapping_json, header_row, created_at FROM upload_profiles''')
+            SELECT tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction, created_at FROM upload_profiles''')
         cur.execute('DROP TABLE upload_profiles')
         cur.execute('ALTER TABLE upload_profiles_tenant_new RENAME TO upload_profiles')
 

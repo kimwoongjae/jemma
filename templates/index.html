@@ -1314,6 +1314,43 @@
                         각 사이트 항목에 엑셀 열 문자(A, H, I 등) 또는 정확한 열 제목을 입력하세요. 헤더가 없는 파일은 헤더 행을 0으로 설정합니다. 비워둔 항목은 자동 인식을 사용합니다.
                     </div>
                 </div>
+                <div class="card bg-light border-0 mb-3">
+                    <div class="card-header bg-light border-0 px-3 pt-3 pb-1">
+                        <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#uploadProfileSortEditor" aria-expanded="true" aria-controls="uploadProfileSortEditor">
+                            <i class="fa-solid fa-arrow-down-wide-short me-1"></i> 정렬 편집
+                        </button>
+                        <span class="small text-muted ms-2">형식별로 목록 표시 순서와 정렬 기준을 설정합니다.</span>
+                    </div>
+                    <div class="collapse show" id="uploadProfileSortEditor">
+                        <div class="card-body pt-2">
+                            <div class="row g-2 align-items-end">
+                                <div class="col-sm-3">
+                                    <label for="uploadProfileSortPriority" class="form-label small fw-bold mb-1">형식 표시 순서</label>
+                                    <input type="number" class="form-control form-control-sm" id="uploadProfileSortPriority" min="1" max="9999" value="100">
+                                </div>
+                                <div class="col-sm-4">
+                                    <label for="uploadProfileSortField" class="form-label small fw-bold mb-1">정렬 기준</label>
+                                    <select class="form-select form-select-sm" id="uploadProfileSortField">
+                                        <option value="upload_order">업로드한 순서</option>
+                                        <option value="order_no">주문번호</option>
+                                        <option value="recipient">수취인</option>
+                                        <option value="product">상품명 + 옵션명</option>
+                                        <option value="barcode">바코드 (SKU)</option>
+                                        <option value="quantity">구매수량</option>
+                                    </select>
+                                </div>
+                                <div class="col-sm-3">
+                                    <label for="uploadProfileSortDirection" class="form-label small fw-bold mb-1">정렬 방향</label>
+                                    <select class="form-select form-select-sm" id="uploadProfileSortDirection">
+                                        <option value="asc">오름차순</option>
+                                        <option value="desc">내림차순</option>
+                                    </select>
+                                </div>
+                                <div class="col-sm-2 small text-muted">순서 숫자가 작을수록 먼저 표시됩니다.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="row g-2" id="uploadProfileMappingFields"></div>
             </div>
             <div class="modal-footer justify-content-between">
@@ -1792,12 +1829,16 @@
             uploadProfilesCache = Array.isArray(profiles) ? profiles : [];
             select.innerHTML = '<option value="">자동 열 인식</option>'
                 + `<option value="${NARDA_MANIFEST_PROFILE}">기본형식</option>`
-                + uploadProfilesCache.map(profile =>
+                + uploadProfilesCache.filter(profile => profile.profile_name !== NARDA_MANIFEST_PROFILE).map(profile =>
                 `<option value="${escapeHtml(profile.profile_name)}">${escapeHtml(profile.profile_name)}</option>`
             ).join('');
             const selected = previous === NARDA_MANIFEST_PROFILE || uploadProfilesCache.some(profile => profile.profile_name === previous) ? previous : '';
             select.value = selected;
             localStorage.setItem('selectedUploadProfile', selected);
+            if (ordersList.length && document.getElementById('orders-pane')?.classList.contains('active')) {
+                sortOrdersInPlace(ordersList);
+                renderOrdersTable(ordersList);
+            }
         } catch (e) {
             console.error('Upload profile load error:', e);
         }
@@ -1812,14 +1853,21 @@
         renderUploadProfileMappingFields();
         const select = document.getElementById('uploadProfileSelect');
         const selectedName = select?.value || '';
-        const profile = uploadProfilesCache.find(item => item.profile_name === selectedName);
+        const profile = uploadProfilesCache.find(item => item.profile_name === selectedName) ||
+            (selectedName === NARDA_MANIFEST_PROFILE ? {
+                profile_name: NARDA_MANIFEST_PROFILE, mapping: {}, header_row: 1,
+                sort_priority: 100, sort_field: 'upload_order', sort_direction: 'asc'
+            } : null);
         document.getElementById('uploadProfileName').value = profile?.profile_name || '';
         document.getElementById('uploadProfileName').readOnly = !!profile;
         document.getElementById('uploadProfileHeaderRow').value = profile?.header_row ?? 1;
+        document.getElementById('uploadProfileSortPriority').value = profile?.sort_priority ?? 100;
+        document.getElementById('uploadProfileSortField').value = profile?.sort_field || 'upload_order';
+        document.getElementById('uploadProfileSortDirection').value = profile?.sort_direction || 'asc';
         UPLOAD_PROFILE_FIELDS.forEach(([key]) => {
             document.getElementById(`uploadMap_${key}`).value = profile?.mapping?.[key] || '';
         });
-        document.getElementById('btnDeleteUploadProfile').style.display = profile ? 'inline-block' : 'none';
+        document.getElementById('btnDeleteUploadProfile').style.display = profile && profile.profile_name !== NARDA_MANIFEST_PROFILE ? 'inline-block' : 'none';
         new bootstrap.Modal(document.getElementById('uploadProfileModal')).show();
     }
 
@@ -1832,6 +1880,9 @@
         const payload = {
             profile_name: profileName,
             header_row: parseInt(document.getElementById('uploadProfileHeaderRow').value, 10),
+            sort_priority: parseInt(document.getElementById('uploadProfileSortPriority').value, 10),
+            sort_field: document.getElementById('uploadProfileSortField').value,
+            sort_direction: document.getElementById('uploadProfileSortDirection').value,
             mapping
         };
         try {
@@ -1842,6 +1893,8 @@
             const data = await res.json();
             if (!res.ok || data.error) throw new Error(data.error || '업로드 형식을 저장하지 못했습니다.');
             await loadUploadProfiles(profileName);
+            sortOrdersInPlace(ordersList);
+            if (document.getElementById('orders-pane')?.classList.contains('active')) renderOrdersTable(ordersList);
             bootstrap.Modal.getInstance(document.getElementById('uploadProfileModal'))?.hide();
         } catch (e) {
             alert('업로드 형식 저장 오류: ' + e.message);
@@ -2512,39 +2565,42 @@
 
     function sortOrdersInPlace(list) {
         if (!list || !Array.isArray(list)) return list;
+        const profilesByName = new Map(uploadProfilesCache.map(profile => [profile.profile_name, profile]));
+        const profileOf = order => String(order.upload_profile || '');
+        const configOf = name => profilesByName.get(name) || {
+            sort_priority: name ? 100 : 5000,
+            sort_field: 'upload_order',
+            sort_direction: 'asc'
+        };
+        const orderValue = (order, field) => {
+            const items = Array.isArray(order.items) ? order.items : [];
+            if (field === 'order_no') return String(order.order_no || '');
+            if (field === 'recipient') return String(order.recipient_name || '');
+            if (field === 'product') return items.map(item =>
+                `${item.item_product_name || ''} ${item.item_option_name || ''}`.trim()
+            ).join(' / ') || `${order.original_product_name || ''} ${order.original_option_name || ''}`.trim();
+            if (field === 'barcode') return items.map(item => String(item.sku || '')).join(' / ');
+            if (field === 'quantity') return items.reduce((sum, item) => sum + getOrderQuantities(order, item).buyQty, 0);
+            return Number(order.id || 0);
+        };
         return list.sort((a, b) => {
-            const aItems = (a.items && a.items.length > 0) ? a.items : [];
-            const bItems = (b.items && b.items.length > 0) ? b.items : [];
-            const aCnt = aItems.length || 1;
-            const bCnt = bItems.length || 1;
+            const aProfileName = profileOf(a);
+            const bProfileName = profileOf(b);
+            const aProfile = configOf(aProfileName);
+            const bProfile = configOf(bProfileName);
+            const priorityDiff = Number(aProfile.sort_priority || 100) - Number(bProfile.sort_priority || 100);
+            if (priorityDiff) return priorityDiff;
+            if (aProfileName !== bProfileName) return aProfileName.localeCompare(bProfileName, 'ko');
 
-            // 1. 단품 주문(품목 1개) 우선, 합포장(2개부터)은 그 밑에
-            const aMulti = aCnt === 1 ? 0 : 1;
-            const bMulti = bCnt === 1 ? 0 : 1;
-            if (aMulti !== bMulti) return aMulti - bMulti;
-
-            // 2. 2개 이상인 경우 품목 개수 오름차순 (2개 -> 3개 -> 4개 ...)
-            if (aCnt !== bCnt) return aCnt - bCnt;
-
-            // 3. 바코드(SKU) 오름차순
-            const aSku = String((aItems[0] && aItems[0].sku) || '');
-            const bSku = String((bItems[0] && bItems[0].sku) || '');
-            const aDigits = aSku.match(/\d+/);
-            const bDigits = bSku.match(/\d+/);
-            if (aDigits && bDigits) {
-                const aNum = parseInt(aDigits[0], 10);
-                const bNum = parseInt(bDigits[0], 10);
-                if (aNum !== bNum) return aNum - bNum;
-            }
-            if (aSku !== bSku) return aSku.localeCompare(bSku);
-
-            // 4. 구매수량 (상품수량 * 옵션수량) 오름차순
-            const aQty = aItems.reduce((acc, it) => acc + getOrderQuantities(a, it).buyQty, 0);
-            const bQty = bItems.reduce((acc, it) => acc + getOrderQuantities(b, it).buyQty, 0);
-            if (aQty !== bQty) return aQty - bQty;
-
-            // 5. 주문번호 오름차순
-            return String(a.order_no || '').localeCompare(String(b.order_no || ''));
+            const field = aProfile.sort_field || 'upload_order';
+            const direction = aProfile.sort_direction === 'desc' ? -1 : 1;
+            const aValue = orderValue(a, field);
+            const bValue = orderValue(b, field);
+            let comparison = typeof aValue === 'number' && typeof bValue === 'number'
+                ? aValue - bValue
+                : String(aValue).localeCompare(String(bValue), 'ko', { numeric: true, sensitivity: 'base' });
+            if (comparison) return comparison * direction;
+            return Number(a.id || 0) - Number(b.id || 0);
         });
     }
 
