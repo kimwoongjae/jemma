@@ -3390,7 +3390,8 @@
                 if (isInVisibleTable) {
                     scrollbar.style.left = `${rect.left}px`;
                     scrollbar.style.width = `${rect.width}px`;
-                    const visibleTop = Math.max(8, Math.min(rect.top, window.innerHeight - 28));
+                    const visibleBottom = Math.min(rect.bottom, window.innerHeight - 8);
+                    const visibleTop = Math.max(8, visibleBottom - scrollbar.offsetHeight);
                     scrollbar.style.top = `${visibleTop}px`;
                 } else {
                     scrollbar.style.removeProperty('left');
