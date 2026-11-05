@@ -1362,7 +1362,10 @@
                 </div>
                 <div class="d-flex justify-content-between align-items-center mb-2 gap-2">
                     <label class="form-label fw-bold mb-0">정렬 기준</label>
-                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="addUploadSortRule()"><i class="fa-solid fa-plus me-1"></i>기준 추가</button>
+                    <div class="d-flex gap-2 flex-wrap justify-content-end">
+                        <button type="button" class="btn btn-sm btn-outline-success" onclick="applySingleOrderSortPreset()" title="품목 1개 주문을 먼저 표시하고, 구매수량 순으로 정렬합니다."><i class="fa-solid fa-wand-magic-sparkles me-1"></i>단품 주문 먼저</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="addUploadSortRule()"><i class="fa-solid fa-plus me-1"></i>기준 추가</button>
+                    </div>
                 </div>
                 <div id="uploadSortRules" class="d-flex flex-column gap-2"></div>
                 <div class="form-text mt-2">위에서 아래 순서로 적용합니다. 앞 기준이 같을 때 다음 기준을 비교합니다.</div>
@@ -1925,6 +1928,13 @@
         renderUploadSortRuleRows(rules);
     }
 
+    function applySingleOrderSortPreset() {
+        renderUploadSortRuleRows([
+            { field: 'order_item_count', direction: 'asc' },
+            { field: 'quantity', direction: 'asc' }
+        ]);
+    }
+
     function renderUploadSortProfiles() {
         const tbody = document.getElementById('uploadSortProfilesBody');
         if (!tbody) return;
@@ -1969,9 +1979,20 @@
             sort_rules: readUploadSortRules()
         };
         try {
-            const response = await fetch('/api/upload-profiles/sort', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-            });
+            let response;
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+                try {
+                    response = await fetch('/api/upload-profiles/sort', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                    });
+                } catch (networkError) {
+                    if (attempt === 2) throw networkError;
+                    await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
+                    continue;
+                }
+                if (![502, 503, 504].includes(response.status) || attempt === 2) break;
+                await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
+            }
             const responseText = await response.text();
             let data;
             try {
@@ -1979,7 +2000,9 @@
             } catch (_) {
                 const detail = response.status === 404
                     ? '현재 접속한 서버에 정렬 저장 기능이 없습니다. GitHub 업로드 후 Render 배포가 완료됐는지 확인해주세요.'
-                    : `서버가 올바른 응답을 보내지 않았습니다 (HTTP ${response.status}).`;
+                    : response.status === 502 || response.status === 503 || response.status === 504
+                        ? `Render 서버가 응답하지 않습니다 (HTTP ${response.status}). 자동으로 다시 요청했지만 실패했습니다. Render의 Logs에서 앱 시작/DB 연결 오류를 확인해주세요.`
+                        : `서버가 올바른 응답을 보내지 않았습니다 (HTTP ${response.status}).`;
                 throw new Error(detail);
             }
             if (!response.ok || data.error) throw new Error(data.error || '정렬 설정을 저장하지 못했습니다.');

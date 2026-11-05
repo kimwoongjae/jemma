@@ -3,7 +3,7 @@ services:
     name: jamma-oms
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: gunicorn --workers 1 --threads 4 --timeout 120 app:app
     plan: free
     envVars:
       - key: PYTHON_VERSION
