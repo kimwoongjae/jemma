@@ -1861,14 +1861,14 @@
 
     function uploadSortFieldLabel(field, direction) {
         const labels = {
-            upload_order: '업로드한 순서', order_no: '주문번호', recipient: '수취인',
+        upload_order: '업로드한 순서', order_no: '주문번호', order_item_count: '주문번호별 품목 수', recipient: '수취인',
             product: '상품명 + 옵션명', barcode: '바코드 (SKU)', quantity: '구매수량'
         };
         return `${labels[field] || labels.upload_order} · ${direction === 'desc' ? '내림차순' : '오름차순'}`;
     }
 
     const UPLOAD_SORT_FIELDS = [
-        ['upload_order', '업로드한 순서'], ['order_no', '주문번호'], ['recipient', '수취인'],
+        ['upload_order', '업로드한 순서'], ['order_no', '주문번호'], ['order_item_count', '주문번호별 품목 수'], ['recipient', '수취인'],
         ['product', '상품명 + 옵션명'], ['barcode', '바코드 (SKU)'], ['quantity', '구매수량']
     ];
 
@@ -1972,7 +1972,16 @@
             const response = await fetch('/api/upload-profiles/sort', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
             });
-            const data = await response.json();
+            const responseText = await response.text();
+            let data;
+            try {
+                data = JSON.parse(responseText);
+            } catch (_) {
+                const detail = response.status === 404
+                    ? '현재 접속한 서버에 정렬 저장 기능이 없습니다. GitHub 업로드 후 Render 배포가 완료됐는지 확인해주세요.'
+                    : `서버가 올바른 응답을 보내지 않았습니다 (HTTP ${response.status}).`;
+                throw new Error(detail);
+            }
             if (!response.ok || data.error) throw new Error(data.error || '정렬 설정을 저장하지 못했습니다.');
             await loadUploadProfiles();
             sortOrdersInPlace(ordersList);
@@ -2704,6 +2713,12 @@
         if (!list || !Array.isArray(list)) return list;
         const profilesByName = new Map(uploadProfilesCache.map(profile => [profile.profile_name, profile]));
         const profileOf = order => String(order.upload_profile || '');
+        const orderItemCounts = new Map();
+        list.forEach(order => {
+            const orderNo = String(order.order_no || `__order_${order.id || ''}`);
+            const itemCount = Array.isArray(order.items) && order.items.length ? order.items.length : 1;
+            orderItemCounts.set(orderNo, (orderItemCounts.get(orderNo) || 0) + itemCount);
+        });
         const configOf = name => profilesByName.get(name) || {
             sort_priority: name ? 100 : 5000,
             sort_field: 'upload_order',
@@ -2712,6 +2727,7 @@
         const orderValue = (order, field) => {
             const items = Array.isArray(order.items) ? order.items : [];
             if (field === 'order_no') return String(order.order_no || '');
+            if (field === 'order_item_count') return orderItemCounts.get(String(order.order_no || `__order_${order.id || ''}`)) || 1;
             if (field === 'recipient') return String(order.recipient_name || '');
             if (field === 'product') return items.map(item =>
                 `${item.item_product_name || ''} ${item.item_option_name || ''}`.trim()

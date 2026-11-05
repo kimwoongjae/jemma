@@ -769,7 +769,7 @@ def save_upload_profile():
         return jsonify({'error': '헤더 행은 0부터 100 사이로 입력해주세요.'}), 400
     if sort_priority < 1 or sort_priority > 9999:
         return jsonify({'error': '정렬 우선순위는 1부터 9999 사이로 입력해주세요.'}), 400
-    allowed_sort_fields = {'upload_order', 'order_no', 'recipient', 'product', 'barcode', 'quantity'}
+    allowed_sort_fields = {'upload_order', 'order_no', 'order_item_count', 'recipient', 'product', 'barcode', 'quantity'}
     if sort_field not in allowed_sort_fields or sort_direction not in {'asc', 'desc'}:
         return jsonify({'error': '정렬 기준 설정이 올바르지 않습니다.'}), 400
 
@@ -812,7 +812,7 @@ def save_upload_profile_sort():
         sort_priority = int(data.get('sort_priority', 100))
     except (TypeError, ValueError):
         return jsonify({'error': '표시 순서는 숫자로 입력해주세요.'}), 400
-    allowed_sort_fields = {'upload_order', 'order_no', 'recipient', 'product', 'barcode', 'quantity'}
+    allowed_sort_fields = {'upload_order', 'order_no', 'order_item_count', 'recipient', 'product', 'barcode', 'quantity'}
     sort_rules = data.get('sort_rules')
     if sort_rules is None:
         sort_rules = [{'field': data.get('sort_field') or 'upload_order',
