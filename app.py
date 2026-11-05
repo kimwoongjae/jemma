@@ -798,6 +798,48 @@ def save_upload_profile():
     return jsonify({'status': 'success', 'profile_name': profile_name})
 
 
+@app.route('/api/upload-profiles/sort', methods=['POST'])
+def save_upload_profile_sort():
+    data = request.get_json() or {}
+    profile_name = str(data.get('profile_name') or '').strip()
+    try:
+        sort_priority = int(data.get('sort_priority', 100))
+    except (TypeError, ValueError):
+        return jsonify({'error': '표시 순서는 숫자로 입력해주세요.'}), 400
+    sort_field = str(data.get('sort_field') or 'upload_order').strip()
+    sort_direction = str(data.get('sort_direction') or 'asc').strip().lower()
+    if len(profile_name) > 80:
+        return jsonify({'error': '업로드 형식 이름은 80자 이내여야 합니다.'}), 400
+    if sort_priority < 1 or sort_priority > 9999:
+        return jsonify({'error': '표시 순서는 1부터 9999 사이로 입력해주세요.'}), 400
+    if sort_field not in {'upload_order', 'order_no', 'recipient', 'product', 'barcode', 'quantity'}:
+        return jsonify({'error': '정렬 기준이 올바르지 않습니다.'}), 400
+    if sort_direction not in {'asc', 'desc'}:
+        return jsonify({'error': '정렬 방향이 올바르지 않습니다.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT profile_name FROM upload_profiles WHERE tenant_id = ? AND profile_name = ?',
+                (g.company_id, profile_name))
+    exists = cur.fetchone()
+    if not exists and profile_name not in ('', NARDA_MANIFEST_PROFILE):
+        conn.close()
+        return jsonify({'error': '업로드 형식을 찾을 수 없습니다. 새로고침 후 다시 시도해주세요.'}), 404
+
+    cur.execute('''
+        INSERT INTO upload_profiles (tenant_id, profile_name, mapping_json, header_row, sort_priority, sort_field, sort_direction)
+        VALUES (?, ?, '{}', 1, ?, ?, ?)
+        ON CONFLICT(tenant_id, profile_name) DO UPDATE SET
+            sort_priority = excluded.sort_priority,
+            sort_field = excluded.sort_field,
+            sort_direction = excluded.sort_direction
+    ''', (g.company_id, profile_name, sort_priority, sort_field, sort_direction))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success', 'profile_name': profile_name, 'sort_priority': sort_priority,
+                    'sort_field': sort_field, 'sort_direction': sort_direction})
+
+
 @app.route('/api/upload-profiles/delete', methods=['POST'])
 def delete_upload_profile():
     data = request.get_json() or {}

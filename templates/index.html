@@ -1195,6 +1195,21 @@
                 </div>
             </div>
             {% endif %}
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div>
+                        <h5 class="fw-bold mb-1"><i class="fa-solid fa-arrow-down-wide-short text-primary me-2"></i>리스트 정렬</h5>
+                        <p class="text-muted small mb-0">업로드 형식별 목록 표시 순서와 정렬 기준을 설정합니다.</p>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadUploadProfiles()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light"><tr><th>업로드 파일 형식</th><th class="text-center">표시 순서</th><th>정렬 기준</th><th class="text-center">관리</th></tr></thead>
+                        <tbody id="uploadSortProfilesBody"><tr><td colspan="4" class="text-center text-muted py-4">업로드 형식을 불러오는 중입니다.</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
             <div class="row g-4">
                 <!-- 세트 상품 분할 규칙 설정 -->
                 <div class="col-lg-7">
@@ -1314,43 +1329,6 @@
                         각 사이트 항목에 엑셀 열 문자(A, H, I 등) 또는 정확한 열 제목을 입력하세요. 헤더가 없는 파일은 헤더 행을 0으로 설정합니다. 비워둔 항목은 자동 인식을 사용합니다.
                     </div>
                 </div>
-                <div class="card bg-light border-0 mb-3">
-                    <div class="card-header bg-light border-0 px-3 pt-3 pb-1">
-                        <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#uploadProfileSortEditor" aria-expanded="true" aria-controls="uploadProfileSortEditor">
-                            <i class="fa-solid fa-arrow-down-wide-short me-1"></i> 정렬 편집
-                        </button>
-                        <span class="small text-muted ms-2">형식별로 목록 표시 순서와 정렬 기준을 설정합니다.</span>
-                    </div>
-                    <div class="collapse show" id="uploadProfileSortEditor">
-                        <div class="card-body pt-2">
-                            <div class="row g-2 align-items-end">
-                                <div class="col-sm-3">
-                                    <label for="uploadProfileSortPriority" class="form-label small fw-bold mb-1">형식 표시 순서</label>
-                                    <input type="number" class="form-control form-control-sm" id="uploadProfileSortPriority" min="1" max="9999" value="100">
-                                </div>
-                                <div class="col-sm-4">
-                                    <label for="uploadProfileSortField" class="form-label small fw-bold mb-1">정렬 기준</label>
-                                    <select class="form-select form-select-sm" id="uploadProfileSortField">
-                                        <option value="upload_order">업로드한 순서</option>
-                                        <option value="order_no">주문번호</option>
-                                        <option value="recipient">수취인</option>
-                                        <option value="product">상품명 + 옵션명</option>
-                                        <option value="barcode">바코드 (SKU)</option>
-                                        <option value="quantity">구매수량</option>
-                                    </select>
-                                </div>
-                                <div class="col-sm-3">
-                                    <label for="uploadProfileSortDirection" class="form-label small fw-bold mb-1">정렬 방향</label>
-                                    <select class="form-select form-select-sm" id="uploadProfileSortDirection">
-                                        <option value="asc">오름차순</option>
-                                        <option value="desc">내림차순</option>
-                                    </select>
-                                </div>
-                                <div class="col-sm-2 small text-muted">순서 숫자가 작을수록 먼저 표시됩니다.</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
                 <div class="row g-2" id="uploadProfileMappingFields"></div>
             </div>
             <div class="modal-footer justify-content-between">
@@ -1363,6 +1341,47 @@
                         <i class="fa-solid fa-floppy-disk me-1"></i> 형식 저장
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="uploadSortModal" tabindex="-1" aria-labelledby="uploadSortModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold" id="uploadSortModalTitle"><i class="fa-solid fa-arrow-down-wide-short text-primary me-2"></i>정렬 편집</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="닫기"></button>
+            </div>
+            <div class="modal-body">
+                <div class="fw-semibold mb-3" id="uploadSortProfileLabel">업로드 형식</div>
+                <div class="mb-3">
+                    <label for="uploadSortPriority" class="form-label fw-bold">형식 표시 순서</label>
+                    <input type="number" class="form-control" id="uploadSortPriority" min="1" max="9999" value="100">
+                    <div class="form-text">숫자가 작을수록 목록에서 먼저 표시됩니다.</div>
+                </div>
+                <div class="mb-3">
+                    <label for="uploadSortField" class="form-label fw-bold">정렬 기준</label>
+                    <select class="form-select" id="uploadSortField">
+                        <option value="upload_order">업로드한 순서</option>
+                        <option value="order_no">주문번호</option>
+                        <option value="recipient">수취인</option>
+                        <option value="product">상품명 + 옵션명</option>
+                        <option value="barcode">바코드 (SKU)</option>
+                        <option value="quantity">구매수량</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="uploadSortDirection" class="form-label fw-bold">정렬 방향</label>
+                    <select class="form-select" id="uploadSortDirection">
+                        <option value="asc">오름차순</option>
+                        <option value="desc">내림차순</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-primary" onclick="saveUploadSort()"><i class="fa-solid fa-floppy-disk me-1"></i>정렬 저장</button>
             </div>
         </div>
     </div>
@@ -1710,6 +1729,7 @@
         'Piece', 'Amount', '상품 URL', '원산지'
     ];
     let uploadProfilesCache = [];
+    let currentUploadSortProfileName = '';
     const UPLOAD_PROFILE_FIELDS = [
         ['order_no', '주문번호'], ['recipient_name', '수취인'], ['recipient_phone1', '연락처'],
         ['recipient_phone2', '보조 연락처'], ['customs_id', '개인통관고유부호'], ['postal_code', '우편번호'],
@@ -1829,18 +1849,93 @@
             uploadProfilesCache = Array.isArray(profiles) ? profiles : [];
             select.innerHTML = '<option value="">자동 열 인식</option>'
                 + `<option value="${NARDA_MANIFEST_PROFILE}">기본형식</option>`
-                + uploadProfilesCache.filter(profile => profile.profile_name !== NARDA_MANIFEST_PROFILE).map(profile =>
+                + uploadProfilesCache.filter(profile => profile.profile_name && profile.profile_name !== NARDA_MANIFEST_PROFILE).map(profile =>
                 `<option value="${escapeHtml(profile.profile_name)}">${escapeHtml(profile.profile_name)}</option>`
             ).join('');
             const selected = previous === NARDA_MANIFEST_PROFILE || uploadProfilesCache.some(profile => profile.profile_name === previous) ? previous : '';
             select.value = selected;
             localStorage.setItem('selectedUploadProfile', selected);
+            renderUploadSortProfiles();
             if (ordersList.length && document.getElementById('orders-pane')?.classList.contains('active')) {
                 sortOrdersInPlace(ordersList);
                 renderOrdersTable(ordersList);
             }
         } catch (e) {
             console.error('Upload profile load error:', e);
+        }
+    }
+
+    function uploadSortProfileLabel(profileName) {
+        if (profileName === NARDA_MANIFEST_PROFILE) return '기본형식';
+        if (!profileName) return '자동 열 인식';
+        return profileName;
+    }
+
+    function uploadSortFieldLabel(field, direction) {
+        const labels = {
+            upload_order: '업로드한 순서', order_no: '주문번호', recipient: '수취인',
+            product: '상품명 + 옵션명', barcode: '바코드 (SKU)', quantity: '구매수량'
+        };
+        return `${labels[field] || labels.upload_order} · ${direction === 'desc' ? '내림차순' : '오름차순'}`;
+    }
+
+    function renderUploadSortProfiles() {
+        const tbody = document.getElementById('uploadSortProfilesBody');
+        if (!tbody) return;
+        const profileNames = ['', NARDA_MANIFEST_PROFILE, ...uploadProfilesCache
+            .map(profile => profile.profile_name)
+            .filter(name => name && name !== NARDA_MANIFEST_PROFILE)];
+        const uniqueNames = [...new Set(profileNames)];
+        const rows = uniqueNames.map(profileName => {
+            const profile = uploadProfilesCache.find(item => item.profile_name === profileName);
+            const defaults = profileName ? { sort_priority: 100, sort_field: 'upload_order', sort_direction: 'asc' }
+                : { sort_priority: 5000, sort_field: 'upload_order', sort_direction: 'asc' };
+            const config = { ...defaults, ...(profile || {}) };
+            return { profileName, config, label: uploadSortProfileLabel(profileName) };
+        }).sort((a, b) => Number(a.config.sort_priority) - Number(b.config.sort_priority) || a.label.localeCompare(b.label, 'ko'));
+
+        tbody.innerHTML = rows.map(({ profileName, config, label }) => `
+            <tr>
+                <td class="fw-semibold">${escapeHtml(label)}</td>
+                <td class="text-center"><span class="badge bg-primary-subtle text-primary">${Number(config.sort_priority)}</span></td>
+                <td>${escapeHtml(uploadSortFieldLabel(config.sort_field, config.sort_direction))}</td>
+                <td class="text-center"><button type="button" class="btn btn-sm btn-outline-primary" data-sort-profile="${escapeHtml(profileName)}"><i class="fa-solid fa-pen-to-square me-1"></i>정렬 편집</button></td>
+            </tr>
+        `).join('');
+        tbody.querySelectorAll('[data-sort-profile]').forEach(button => {
+            button.addEventListener('click', () => openUploadSortModal(button.dataset.sortProfile || ''));
+        });
+    }
+
+    function openUploadSortModal(profileName) {
+        currentUploadSortProfileName = profileName;
+        const profile = uploadProfilesCache.find(item => item.profile_name === profileName);
+        document.getElementById('uploadSortProfileLabel').textContent = uploadSortProfileLabel(profileName);
+        document.getElementById('uploadSortPriority').value = profile?.sort_priority ?? (profileName ? 100 : 5000);
+        document.getElementById('uploadSortField').value = profile?.sort_field || 'upload_order';
+        document.getElementById('uploadSortDirection').value = profile?.sort_direction || 'asc';
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('uploadSortModal')).show();
+    }
+
+    async function saveUploadSort() {
+        const payload = {
+            profile_name: currentUploadSortProfileName,
+            sort_priority: parseInt(document.getElementById('uploadSortPriority').value, 10),
+            sort_field: document.getElementById('uploadSortField').value,
+            sort_direction: document.getElementById('uploadSortDirection').value
+        };
+        try {
+            const response = await fetch('/api/upload-profiles/sort', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (!response.ok || data.error) throw new Error(data.error || '정렬 설정을 저장하지 못했습니다.');
+            await loadUploadProfiles();
+            sortOrdersInPlace(ordersList);
+            if (document.getElementById('orders-pane')?.classList.contains('active')) renderOrdersTable(ordersList);
+            bootstrap.Modal.getInstance(document.getElementById('uploadSortModal'))?.hide();
+        } catch (error) {
+            alert('정렬 설정 저장 오류: ' + error.message);
         }
     }
 
@@ -1853,7 +1948,7 @@
         renderUploadProfileMappingFields();
         const select = document.getElementById('uploadProfileSelect');
         const selectedName = select?.value || '';
-        const profile = uploadProfilesCache.find(item => item.profile_name === selectedName) ||
+        const profile = uploadProfilesCache.find(item => item.profile_name && item.profile_name === selectedName) ||
             (selectedName === NARDA_MANIFEST_PROFILE ? {
                 profile_name: NARDA_MANIFEST_PROFILE, mapping: {}, header_row: 1,
                 sort_priority: 100, sort_field: 'upload_order', sort_direction: 'asc'
@@ -1861,9 +1956,6 @@
         document.getElementById('uploadProfileName').value = profile?.profile_name || '';
         document.getElementById('uploadProfileName').readOnly = !!profile;
         document.getElementById('uploadProfileHeaderRow').value = profile?.header_row ?? 1;
-        document.getElementById('uploadProfileSortPriority').value = profile?.sort_priority ?? 100;
-        document.getElementById('uploadProfileSortField').value = profile?.sort_field || 'upload_order';
-        document.getElementById('uploadProfileSortDirection').value = profile?.sort_direction || 'asc';
         UPLOAD_PROFILE_FIELDS.forEach(([key]) => {
             document.getElementById(`uploadMap_${key}`).value = profile?.mapping?.[key] || '';
         });
@@ -1877,12 +1969,13 @@
         UPLOAD_PROFILE_FIELDS.forEach(([key]) => {
             mapping[key] = document.getElementById(`uploadMap_${key}`).value.trim();
         });
+        const existingProfile = uploadProfilesCache.find(profile => profile.profile_name === profileName);
         const payload = {
             profile_name: profileName,
             header_row: parseInt(document.getElementById('uploadProfileHeaderRow').value, 10),
-            sort_priority: parseInt(document.getElementById('uploadProfileSortPriority').value, 10),
-            sort_field: document.getElementById('uploadProfileSortField').value,
-            sort_direction: document.getElementById('uploadProfileSortDirection').value,
+            sort_priority: existingProfile?.sort_priority ?? 100,
+            sort_field: existingProfile?.sort_field || 'upload_order',
+            sort_direction: existingProfile?.sort_direction || 'asc',
             mapping
         };
         try {
