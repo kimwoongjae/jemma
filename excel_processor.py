@@ -172,10 +172,23 @@ def find_matching_product_info(product_name, option_name, conn=None, opt_rows=No
             cur.execute('SELECT sku, product_name, option_name, unit_price, dispatched_quantity FROM products')
             prod_rows = [dict(r) for r in cur.fetchall()]
 
-        # 1-1. 옵션명 완전 일치
+        # 상품명+옵션명 전체 조합이 일치하는 옵션을 먼저 찾는다.
         for r in opt_rows:
             opt_name = (r['option_name'] or '').strip()
-            if opt_name == combined or opt_name == product_name or (clean_o and opt_name == option_name):
+            if opt_name == combined:
+                return {
+                    'sku': r['sku'],
+                    'dispatched_quantity': r['dispatched_quantity'] or 1,
+                    'unit_price': r.get('unit_price', 0.0),
+                    'matched': True,
+                    'matched_product_name': None,
+                    'matched_option_name': r.get('option_name')
+                }
+
+        # 조합 일치가 없을 때만 단일 상품명/옵션명으로 제한적으로 찾는다.
+        for r in opt_rows:
+            opt_name = (r['option_name'] or '').strip()
+            if (not clean_o and opt_name == product_name) or (clean_o and opt_name == option_name):
                 return {
                     'sku': r['sku'],
                     'dispatched_quantity': r['dispatched_quantity'] or 1,
@@ -188,7 +201,7 @@ def find_matching_product_info(product_name, option_name, conn=None, opt_rows=No
         # 1-2. 공백 제거 후 일치
         for r in opt_rows:
             opt_name = re.sub(r'\s+', '', r['option_name'] or '')
-            if opt_name == clean_combined or opt_name == clean_p:
+            if opt_name == clean_combined or (not clean_o and opt_name == clean_p):
                 return {
                     'sku': r['sku'],
                     'dispatched_quantity': r['dispatched_quantity'] or 1,
@@ -217,7 +230,7 @@ def find_matching_product_info(product_name, option_name, conn=None, opt_rows=No
         for r in prod_rows:
             p_name = r['product_name'] or ''
             p_opt = r['option_name'] or ''
-            if p_name == product_name and (p_opt == option_name or not p_opt):
+            if p_name == product_name and (p_opt == option_name or (not clean_o and not p_opt)):
                 return {
                     'sku': r['sku'],
                     'dispatched_quantity': r.get('dispatched_quantity') or 1,

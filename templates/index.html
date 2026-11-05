@@ -84,6 +84,24 @@
             font-size: 13.5px;
             vertical-align: middle;
         }
+        /* 주문 목록은 넓은 열 폭을 유지하고, 작은 화면에서는 표 안에서 좌우로 이동합니다. */
+        #ordersTable { min-width: 2130px; table-layout: fixed; }
+        #ordersTable th:nth-child(1), #ordersTable td:nth-child(1) { width: 50px; }
+        #ordersTable th:nth-child(2), #ordersTable td:nth-child(2) { width: 105px; }
+        #ordersTable th:nth-child(3), #ordersTable td:nth-child(3) { width: 195px; }
+        #ordersTable th:nth-child(4), #ordersTable td:nth-child(4) { width: 165px; }
+        #ordersTable th:nth-child(5), #ordersTable td:nth-child(5) { width: 185px; }
+        #ordersTable th:nth-child(6), #ordersTable td:nth-child(6) { width: 280px; }
+        #ordersTable th:nth-child(7), #ordersTable td:nth-child(7) { width: 360px; }
+        #ordersTable th:nth-child(8), #ordersTable td:nth-child(8) { width: 165px; }
+        #ordersTable th:nth-child(9), #ordersTable td:nth-child(9),
+        #ordersTable th:nth-child(10), #ordersTable td:nth-child(10),
+        #ordersTable th:nth-child(11), #ordersTable td:nth-child(11) { width: 90px; }
+        #ordersTable th:nth-child(12), #ordersTable td:nth-child(12) { width: 125px; }
+        #ordersTable th:nth-child(13), #ordersTable td:nth-child(13) { width: 240px; }
+        #ordersTable th:nth-child(14), #ordersTable td:nth-child(14) { width: 80px; }
+        #ordersTable td:nth-child(7) { line-height: 1.45; overflow-wrap: anywhere; word-break: keep-all; }
+        #ordersTable td:nth-child(8) { white-space: nowrap; }
         /* 라벨 인쇄 전용 스타일 */
         .shipping-label-card {
             width: 100mm;
@@ -174,7 +192,7 @@
                 -webkit-overflow-scrolling: touch;
                 overscroll-behavior-x: contain;
             }
-            #ordersTable { min-width: 1420px; }
+            #ordersTable { min-width: 2130px; }
             #customsErrorTable { min-width: 900px; }
             #dispatchedTable { min-width: 1200px; }
             #inventoryTable, #logsTable { min-width: 760px; }
@@ -2220,10 +2238,10 @@
             return;
         }
 
-        body.innerHTML = items.map(({ data }) => `
-            <tr>${fields.map(field => {
-                const value = data[field];
-                return `<td>${escapeHtml(value === undefined || value === null || String(value).trim() === '' ? '-' : value)}</td>`;
+        body.innerHTML = items.map(({ item, data }) => `
+            <tr data-item-id="${Number(item.id)}">${fields.map(field => {
+                const value = data[field] === undefined || data[field] === null ? '' : String(data[field]);
+                return `<td><input type="text" class="form-control form-control-sm manifest-edit-field" data-field="${field}" value="${escapeHtml(value)}" aria-label="${field}" style="min-width:${field === 'Item Name' || field === '아이템상세정보' ? '220px' : '100px'}"></td>`;
             }).join('')}</tr>
         `).join('');
         section.classList.remove('d-none');
@@ -2239,7 +2257,11 @@
             postal_code: document.getElementById('editPostalCode').value,
             address: document.getElementById('editAddress').value,
             shipping_memo: document.getElementById('editShippingMemo').value,
-            weight: parseFloat(document.getElementById('editWeight').value) || 0.0
+            weight: parseFloat(document.getElementById('editWeight').value) || 0.0,
+            manifest_items: [...document.querySelectorAll('#editManifestDetailsBody tr[data-item-id]')].map(row => ({
+                id: row.dataset.itemId,
+                fields: Object.fromEntries([...row.querySelectorAll('.manifest-edit-field')].map(input => [input.dataset.field, input.value]))
+            }))
         };
 
         try {

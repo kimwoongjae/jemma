@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import re
 import uuid
 import time
@@ -1378,29 +1379,96 @@ def update_order_weight(order_id):
 @app.route('/api/orders/<int:order_id>/edit', methods=['POST'])
 def edit_order(order_id):
     data = request.get_json() or {}
-    recipient_name = data.get('recipient_name', '').strip()
-    recipient_phone1 = data.get('recipient_phone1', '').strip()
-    recipient_phone2 = data.get('recipient_phone2', '').strip()
-    customs_id = data.get('customs_id', '').strip().upper()
-    postal_code = data.get('postal_code', '').strip()
-    address = data.get('address', '').strip()
-    shipping_memo = data.get('shipping_memo', '').strip()
+    recipient_name = str(data.get('recipient_name') or '').strip()
+    recipient_phone1 = str(data.get('recipient_phone1') or '').strip()
+    recipient_phone2 = str(data.get('recipient_phone2') or '').strip()
+    customs_id = str(data.get('customs_id') or '').strip().upper()
+    postal_code = str(data.get('postal_code') or '').strip()
+    address = str(data.get('address') or '').strip()
+    shipping_memo = str(data.get('shipping_memo') or '').strip()
     try:
-        weight = float(data.get('weight', 0.0) or 0.0)
-    except:
-        weight = 0.0
+        weight = max(0.0, float(data.get('weight', 0.0) or 0.0))
+    except (TypeError, ValueError):
+        return jsonify({'error': '무게는 0 이상의 숫자로 입력해주세요.'}), 400
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('''
-        UPDATE orders 
-        SET recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?,
-            customs_id = ?, postal_code = ?, address = ?, shipping_memo = ?, weight = ?
-        WHERE id = ? AND tenant_id = ?
-    ''', (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code, address, shipping_memo, weight, order_id, g.company_id))
-    conn.commit()
-    conn.close()
-    return jsonify({'status': 'success', 'message': '주문 정보가 성공적으로 수정되었습니다.'})
+    try:
+        cur.execute('SELECT id FROM orders WHERE id = ? AND tenant_id = ?', (order_id, g.company_id))
+        if not cur.fetchone():
+            return jsonify({'error': '주문을 찾을 수 없습니다.'}), 404
+
+        manifest_items = data.get('manifest_items') or []
+        if not isinstance(manifest_items, list):
+            return jsonify({'error': '기본형식 품목 정보가 올바르지 않습니다.'}), 400
+        item_updates = []
+        if manifest_items:
+            cur.execute('SELECT id, manifest_data FROM order_items WHERE tenant_id = ? AND order_id = ?',
+                        (g.company_id, order_id))
+            owned_items = {str(row['id']): row for row in cur.fetchall()}
+            allowed_fields = {'CTNS', 'HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'}
+            for submitted in manifest_items:
+                item_id = str(submitted.get('id') or '') if isinstance(submitted, dict) else ''
+                if item_id not in owned_items or not isinstance(submitted.get('fields'), dict):
+                    return jsonify({'error': '수정할 기본형식 품목을 확인할 수 없습니다. 새로고침 후 다시 시도해주세요.'}), 400
+                row = owned_items[item_id]
+                try:
+                    fields = json.loads(row['manifest_data'] or '{}')
+                except (TypeError, ValueError):
+                    fields = {}
+                if not isinstance(fields, dict) or not fields.get('Item Name'):
+                    return jsonify({'error': '기본형식으로 등록된 품목만 상세 내용을 수정할 수 있습니다.'}), 400
+                edits = submitted['fields']
+                for field in allowed_fields:
+                    if field in edits:
+                        fields[field] = str(edits[field] if edits[field] is not None else '').strip()
+                if not fields.get('Item Name'):
+                    return jsonify({'error': 'Item Name은 비워둘 수 없습니다.'}), 400
+                try:
+                    piece_value = float(fields.get('Piece') or 0)
+                    if not math.isfinite(piece_value) or not piece_value.is_integer() or piece_value < 1:
+                        raise ValueError
+                    piece = int(piece_value)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'Piece는 1 이상의 정수로 입력해주세요.'}), 400
+                for field in ('Unit Price', 'Amount'):
+                    value = str(fields.get(field) or '').replace(',', '').strip()
+                    if value:
+                        try:
+                            numeric_value = float(value)
+                            if not math.isfinite(numeric_value) or numeric_value < 0:
+                                raise ValueError
+                        except ValueError:
+                            return jsonify({'error': f'{field}는 0 이상의 숫자로 입력해주세요.'}), 400
+                        fields[field] = value
+                item_updates.append((json.dumps(fields, ensure_ascii=False), fields['Item Name'],
+                                     fields.get('아이템상세정보', ''), piece, item_id))
+
+        cur.execute('''UPDATE orders
+            SET recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?, customs_id = ?,
+                postal_code = ?, address = ?, shipping_memo = ?, weight = ?
+            WHERE id = ? AND tenant_id = ?''',
+            (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code,
+             address, shipping_memo, weight, order_id, g.company_id))
+        for manifest_data, item_name, item_detail, piece, item_id in item_updates:
+            cur.execute('''UPDATE order_items
+                SET manifest_data = ?, item_product_name = ?, item_option_name = ?,
+                    product_quantity = ?, quantity = ?
+                WHERE id = ? AND order_id = ? AND tenant_id = ?''',
+                (manifest_data, item_name, item_detail, piece, piece, int(item_id), order_id, g.company_id))
+        if item_updates:
+            cur.execute('''UPDATE orders SET original_quantity = (
+                SELECT COALESCE(SUM(quantity), 0) FROM order_items
+                WHERE order_id = ? AND tenant_id = ?
+            ) WHERE id = ? AND tenant_id = ?''', (order_id, g.company_id, order_id, g.company_id))
+        conn.commit()
+        return jsonify({'status': 'success', 'message': '주문 및 기본형식 품목 정보가 수정되었습니다.'})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Order edit failed')
+        return jsonify({'error': '주문 정보를 저장하지 못했습니다. 다시 시도해주세요.'}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/orders/check-dispatch-availability', methods=['POST'])
 def check_dispatch_availability():
