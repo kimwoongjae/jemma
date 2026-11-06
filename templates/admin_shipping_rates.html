@@ -38,7 +38,7 @@
             <section class="panel">
                 <div class="panel-head d-flex flex-wrap justify-content-between align-items-center gap-2"><div><h2 class="h6 fw-bold mb-1">무게별 항공·해상 요금</h2><div class="small text-secondary">빈 요금은 미등록으로 표시됩니다. 무게는 요금표의 다음 상위 구간을 적용합니다.</div></div><span id="ratesMessage" class="small" aria-live="polite"></span></div>
                 <div class="table-responsive"><table class="table table-hover table-bordered align-middle mb-0"><thead><tr><th class="text-center" style="width:180px">무게</th><th class="text-center">항공요금</th><th class="text-center">해상요금</th></tr></thead><tbody id="ratesBody"><tr><td colspan="3" class="text-center text-secondary py-5">요금표를 불러오는 중입니다.</td></tr></tbody></table></div>
-                <div class="p-3 small text-secondary border-top">엑셀 업로드는 입력한 요금 항목을 반영합니다. 기본 양식에 없는 무게 구간은 변경되지 않습니다.</div>
+                <div class="p-3 small text-secondary border-top">엑셀에는 무게 열과 항공요금 또는 해상요금 열 중 하나 이상이 필요합니다. 요금 칸을 비워두면 기존 요금은 유지됩니다.</div>
             </section>
         </main>
     </section>
@@ -56,7 +56,8 @@ async function loadRates(){
         ratesCache=Array.isArray(data.rates)?data.rates:[];
         body.innerHTML=ratesCache.map(rate=>{const weight=Number(rate.weight_kg).toFixed(1);return `<tr><th class="text-center">${weight} kg</th><td><input class="form-control text-end rate-input" type="number" min="0" max="999999999" step="1" inputmode="decimal" data-weight="${weight}" data-kind="air" aria-label="${weight}kg 항공요금" placeholder="항공요금" value="${money(rate.air_rate)}"></td><td><input class="form-control text-end rate-input" type="number" min="0" max="999999999" step="1" inputmode="decimal" data-weight="${weight}" data-kind="sea" aria-label="${weight}kg 해상요금" placeholder="해상요금" value="${money(rate.sea_rate)}"></td></tr>`}).join('');
         document.getElementById('ratesMessage').textContent=`${ratesCache.length.toLocaleString()}개 무게 구간`;
-    }catch(error){body.innerHTML=`<tr><td colspan="3" class="text-center text-danger py-5">${esc(error.message)}</td></tr>`}
+        return true;
+    }catch(error){body.innerHTML=`<tr><td colspan="3" class="text-center text-danger py-5">${esc(error.message)}</td></tr>`;return false}
 }
 async function saveRates(){
     const button=document.getElementById('saveRatesButton'),message=document.getElementById('ratesMessage');button.disabled=true;message.className='small text-secondary';message.textContent='저장 중…';
@@ -70,7 +71,7 @@ async function saveRates(){
 }
 async function uploadRates(input){
     const file=input.files?.[0];if(!file)return;const button=document.getElementById('uploadRatesButton'),message=document.getElementById('ratesMessage');button.disabled=true;message.className='small text-secondary';message.textContent='엑셀 반영 중…';
-    try{const form=new FormData();form.append('file',file);const res=await fetch(`/api/admin/companies/${companyId}/shipping-rates/upload`,{method:'POST',body:form}),data=await res.json();if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);await loadRates();message.className='small text-success';message.textContent=`엑셀 반영 완료 · ${data.saved_count}개 구간`}
+    try{const form=new FormData();form.append('file',file);const res=await fetch(`/api/admin/companies/${companyId}/shipping-rates/upload`,{method:'POST',body:form}),data=await res.json();if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);const refreshed=await loadRates();message.className=refreshed?'small text-success':'small text-warning';message.textContent=refreshed?`엑셀 반영 완료 · ${data.saved_count}개 구간`:`서버 저장 완료 · ${data.saved_count}개 구간 (화면 새로고침 실패)`}
     catch(error){message.className='small text-danger';message.textContent=`업로드 실패: ${error.message}`}
     finally{button.disabled=false;input.value=''}
 }

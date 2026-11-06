@@ -3187,18 +3187,22 @@ def upload_shipping_rates_excel():
         if header_map is None:
             found = {key: next((idx for idx, name in enumerate(normalized) if match_header(key, name)), None)
                      for key in aliases}
-            if all(index is not None for index in found.values()):
+            # 무게 열과 항공/해상 중 하나의 요금 열만 있으면 업로드 가능하게 한다.
+            if found['weight'] is not None and (found['air'] is not None or found['sea'] is not None):
                 header_map = found
             continue
         data_rows.append((row_number, row))
     workbook.close()
     if header_map is None:
-        return jsonify({'error': '무게 (kg), 항공요금, 해상요금 열을 찾지 못했습니다. 기본 양식의 첫 행 제목을 확인해주세요.'}), 400
+        return jsonify({'error': '무게 열과 항공요금 또는 해상요금 열을 찾지 못했습니다. 기본 양식의 제목을 확인해주세요.'}), 400
 
     allowed_weights = {round(float(weight), 1) for weight in SHIPPING_WEIGHT_STEPS}
     parsed = {}
     for row_number, row in data_rows:
-        values = [row[header_map[key]] if header_map[key] < len(row) else None for key in ('weight', 'air', 'sea')]
+        values = [
+            row[header_map[key]] if header_map.get(key) is not None and header_map[key] < len(row) else None
+            for key in ('weight', 'air', 'sea')
+        ]
         if all(value is None or str(value).strip() == '' for value in values):
             continue
         try:
