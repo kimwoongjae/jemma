@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ company.name }} 배송요금표 | NARDA OMS 관리자</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        :root{--navy:#17263c;--blue:#356df3;--muted:#77849a;--line:#e7ecf3;--canvas:#f4f7fb}
+        body{background:var(--canvas);color:#1e293b;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+        .shell{min-height:100vh;display:flex}.sidebar{width:250px;flex:0 0 250px;background:var(--navy);color:#d7e0ef;padding:25px 16px;display:flex;flex-direction:column}
+        .brand{display:flex;align-items:center;gap:11px;color:white;text-decoration:none;font-weight:750;font-size:19px;padding:3px 9px 30px}.mark{display:grid;place-items:center;width:39px;height:39px;border-radius:12px;background:linear-gradient(135deg,#4e83ff,#6559e8);font-size:20px}
+        .side-link{display:flex;align-items:center;gap:12px;padding:12px 13px;border-radius:11px;color:#fff;text-decoration:none;background:#ffffff19}.side-note{font-size:12px;color:#9dacbf;line-height:1.6;border-top:1px solid #ffffff20;margin-top:auto;padding:17px 10px 0}
+        .main{min-width:0;flex:1}.top{height:68px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 30px}.content{padding:30px;max-width:1450px;margin:auto}.panel{background:white;border:1px solid var(--line);border-radius:16px;box-shadow:0 5px 18px #21344f08;overflow:hidden}.panel-head{padding:20px;border-bottom:1px solid var(--line)}.table-responsive{max-height:calc(100vh - 330px);min-height:250px}.table thead th{position:sticky;top:0;background:#f8faff;z-index:1}.rate-input{min-width:150px}.form-control{border-color:#dfe5ee;border-radius:9px;min-height:40px}.btn-primary{background:#356df3;border-color:#356df3}
+        @media(max-width:650px){.shell{display:block}.sidebar{width:100%;padding:13px 14px 10px}.brand{padding:0 4px 12px;font-size:17px}.side-note{display:none}.top{height:54px;padding:0 16px}.content{padding:20px 12px}.table-responsive{max-height:65vh}}
+    </style>
+</head>
+<body>
+<div class="shell">
+    <aside class="sidebar">
+        <a class="brand" href="/admin/companies"><span class="mark"><i class="bi bi-box-seam-fill"></i></span><span>NARDA OMS</span></a>
+        <a class="side-link" href="/admin/companies"><i class="bi bi-buildings"></i>거래처 현황</a>
+        <div class="side-note"><i class="bi bi-shield-lock me-1"></i>업체 배송요금표 관리자 설정</div>
+    </aside>
+    <section class="main">
+        <header class="top"><div class="text-secondary"><i class="bi bi-grid-1x2 me-2"></i>관리자 <span class="mx-2">/</span><a href="/admin/companies" class="link-secondary">거래처 현황</a><span class="mx-2">/</span>{{ company.name }} 요금표</div><a href="/admin/companies" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i>거래처 목록</a></header>
+        <main class="content">
+            <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+                <div><h1 class="h3 fw-bold mb-2">{{ company.name }} 배송요금표</h1><p class="text-secondary mb-0">이 화면에서 설정한 요금은 {{ company.name }} 업체 화면에 조회 전용으로 표시됩니다.</p></div>
+                <div class="d-flex flex-wrap gap-2">
+                    <a class="btn btn-outline-success" href="/api/admin/companies/{{ company.id }}/shipping-rates/template"><i class="bi bi-file-earmark-arrow-down me-1"></i>기본 양식 다운로드</a>
+                    <button class="btn btn-outline-primary" id="uploadRatesButton" onclick="document.getElementById('ratesFile').click()"><i class="bi bi-file-earmark-arrow-up me-1"></i>엑셀 업로드</button>
+                    <input id="ratesFile" type="file" class="d-none" accept=".xlsx" onchange="uploadRates(this)">
+                    <button class="btn btn-outline-secondary" onclick="loadRates()"><i class="bi bi-arrow-clockwise me-1"></i>새로고침</button>
+                    <button class="btn btn-primary" id="saveRatesButton" onclick="saveRates()"><i class="bi bi-floppy me-1"></i>수정 저장</button>
+                </div>
+            </div>
+            <section class="panel">
+                <div class="panel-head d-flex flex-wrap justify-content-between align-items-center gap-2"><div><h2 class="h6 fw-bold mb-1">무게별 항공·해상 요금</h2><div class="small text-secondary">빈 요금은 미등록으로 표시됩니다. 무게는 요금표의 다음 상위 구간을 적용합니다.</div></div><span id="ratesMessage" class="small" aria-live="polite"></span></div>
+                <div class="table-responsive"><table class="table table-hover table-bordered align-middle mb-0"><thead><tr><th class="text-center" style="width:180px">무게</th><th class="text-center">항공요금</th><th class="text-center">해상요금</th></tr></thead><tbody id="ratesBody"><tr><td colspan="3" class="text-center text-secondary py-5">요금표를 불러오는 중입니다.</td></tr></tbody></table></div>
+                <div class="p-3 small text-secondary border-top">엑셀 업로드는 입력한 요금 항목을 반영합니다. 기본 양식에 없는 무게 구간은 변경되지 않습니다.</div>
+            </section>
+        </main>
+    </section>
+</div>
+<script>
+const companyId={{ company.id|tojson }};
+let ratesCache=[];
+const money=value=>Number(value)>0?Number(value).toLocaleString('ko-KR'):'';
+async function loadRates(){
+    const body=document.getElementById('ratesBody');
+    body.innerHTML='<tr><td colspan="3" class="text-center text-secondary py-5">요금표를 불러오는 중입니다.</td></tr>';
+    try{
+        const res=await fetch(`/api/admin/companies/${companyId}/shipping-rates`),data=await res.json();
+        if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);
+        ratesCache=Array.isArray(data.rates)?data.rates:[];
+        body.innerHTML=ratesCache.map(rate=>{const weight=Number(rate.weight_kg).toFixed(1);return `<tr><th class="text-center">${weight} kg</th><td><input class="form-control text-end rate-input" type="number" min="0" max="999999999" step="1" inputmode="decimal" data-weight="${weight}" data-kind="air" aria-label="${weight}kg 항공요금" placeholder="항공요금" value="${money(rate.air_rate)}"></td><td><input class="form-control text-end rate-input" type="number" min="0" max="999999999" step="1" inputmode="decimal" data-weight="${weight}" data-kind="sea" aria-label="${weight}kg 해상요금" placeholder="해상요금" value="${money(rate.sea_rate)}"></td></tr>`}).join('');
+        document.getElementById('ratesMessage').textContent=`${ratesCache.length.toLocaleString()}개 무게 구간`;
+    }catch(error){body.innerHTML=`<tr><td colspan="3" class="text-center text-danger py-5">${esc(error.message)}</td></tr>`}
+}
+async function saveRates(){
+    const button=document.getElementById('saveRatesButton'),message=document.getElementById('ratesMessage');button.disabled=true;message.className='small text-secondary';message.textContent='저장 중…';
+    try{
+        const byWeight=new Map();document.querySelectorAll('.rate-input').forEach(input=>{const weight=input.dataset.weight;if(!byWeight.has(weight))byWeight.set(weight,{weight_kg:Number(weight),air_rate:0,sea_rate:0});byWeight.get(weight)[input.dataset.kind==='air'?'air_rate':'sea_rate']=input.value.trim()===''?0:Number(input.value)});
+        const rates=[...byWeight.values()];if(rates.some(row=>!Number.isFinite(row.air_rate)||!Number.isFinite(row.sea_rate)||row.air_rate<0||row.sea_rate<0||row.air_rate>999999999||row.sea_rate>999999999))throw new Error('요금은 0부터 999,999,999까지 입력해주세요.');
+        const res=await fetch(`/api/admin/companies/${companyId}/shipping-rates`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rates})}),data=await res.json();if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);
+        message.className='small text-success';message.textContent=`저장 완료 · ${data.saved_count}개 구간`;
+    }catch(error){message.className='small text-danger';message.textContent=`저장 실패: ${error.message}`}
+    finally{button.disabled=false}
+}
+async function uploadRates(input){
+    const file=input.files?.[0];if(!file)return;const button=document.getElementById('uploadRatesButton'),message=document.getElementById('ratesMessage');button.disabled=true;message.className='small text-secondary';message.textContent='엑셀 반영 중…';
+    try{const form=new FormData();form.append('file',file);const res=await fetch(`/api/admin/companies/${companyId}/shipping-rates/upload`,{method:'POST',body:form}),data=await res.json();if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);await loadRates();message.className='small text-success';message.textContent=`엑셀 반영 완료 · ${data.saved_count}개 구간`}
+    catch(error){message.className='small text-danger';message.textContent=`업로드 실패: ${error.message}`}
+    finally{button.disabled=false;input.value=''}
+}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+loadRates();
+</script>
+</body>
+</html>

@@ -270,6 +270,72 @@ def admin_shipments_page():
     return render_template('admin.html', active_page='shipments')
 
 
+@app.route('/admin/companies/<int:company_id>/shipping-rates', methods=['GET'])
+def admin_company_shipping_rates_page(company_id):
+    if session.get('account_role') != 'admin':
+        return redirect('/login')
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, name FROM companies WHERE id = ? AND active = 1', (company_id,))
+    company = cur.fetchone()
+    conn.close()
+    if not company:
+        return redirect('/admin/companies')
+    return render_template('admin_shipping_rates.html', company=dict(company))
+
+
+def _admin_company_for_shipping_rates(company_id):
+    if session.get('account_role') != 'admin':
+        return None
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM companies WHERE id = ? AND active = 1', (company_id,))
+    company = cur.fetchone()
+    conn.close()
+    return company
+
+
+@app.route('/api/admin/companies/<int:company_id>/shipping-rates', methods=['GET'])
+def admin_get_company_shipping_rates(company_id):
+    if not _admin_company_for_shipping_rates(company_id):
+        return jsonify({'error': '관리자 권한 또는 활성 거래처 확인이 필요합니다.'}), 403
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.executemany(
+            'INSERT INTO shipping_rates (tenant_id, weight_kg) VALUES (?, ?) ON CONFLICT DO NOTHING',
+            [(company_id, weight) for weight in SHIPPING_WEIGHT_STEPS]
+        )
+        conn.commit()
+        cur.execute('SELECT weight_kg, air_rate, sea_rate FROM shipping_rates WHERE tenant_id = ? ORDER BY weight_kg ASC', (company_id,))
+        return jsonify({'rates': [dict(row) for row in cur.fetchall()]})
+    finally:
+        conn.close()
+
+
+@app.route('/api/admin/companies/<int:company_id>/shipping-rates', methods=['POST'])
+def admin_save_company_shipping_rates(company_id):
+    if not _admin_company_for_shipping_rates(company_id):
+        return jsonify({'error': '관리자 권한 또는 활성 거래처 확인이 필요합니다.'}), 403
+    g.company_id = company_id
+    return save_shipping_rates()
+
+
+@app.route('/api/admin/companies/<int:company_id>/shipping-rates/upload', methods=['POST'])
+def admin_upload_company_shipping_rates(company_id):
+    if not _admin_company_for_shipping_rates(company_id):
+        return jsonify({'error': '관리자 권한 또는 활성 거래처 확인이 필요합니다.'}), 403
+    g.company_id = company_id
+    return upload_shipping_rates_excel()
+
+
+@app.route('/api/admin/companies/<int:company_id>/shipping-rates/template', methods=['GET'])
+def admin_download_company_shipping_rates_template(company_id):
+    if not _admin_company_for_shipping_rates(company_id):
+        return jsonify({'error': '관리자 권한 또는 활성 거래처 확인이 필요합니다.'}), 403
+    return download_shipping_rates_template()
+
+
 @app.route('/api/admin/companies/<int:company_id>/access', methods=['POST'])
 def admin_access_company(company_id):
     if session.get('account_role') != 'admin':
@@ -332,7 +398,7 @@ def admin_delete_company(company_id):
         # Delete only records owned by this company.
         for table in ('order_items', 'orders', 'product_options', 'inventory_logs', 'products',
                       'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
-                      'unregistered_products'):
+                      'unregistered_products', 'shipping_rates'):
             cur.execute(f'DELETE FROM {table} WHERE tenant_id = ?', (company_id,))
         cur.execute('DELETE FROM users WHERE company_id = ?', (company_id,))
         if company['name'] == '젬마 (기존 데이터)':
@@ -2976,6 +3042,160 @@ def delete_delimiter():
         conn.close()
 
 # ----------------- 7. 택배사 & 발송자 설정 API -----------------
+@app.route('/api/shipping-rates/template', methods=['GET'])
+def download_shipping_rates_template():
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = '배송요금표'
+    headers = ['무게 (kg)', '항공요금', '해상요금']
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.fill = PatternFill('solid', fgColor='2563EB')
+        cell.alignment = Alignment(horizontal='center')
+    for weight in SHIPPING_WEIGHT_STEPS:
+        sheet.append([weight, None, None])
+        sheet.cell(sheet.max_row, 1).number_format = '0.0'
+        sheet.cell(sheet.max_row, 2).number_format = '#,##0.##'
+        sheet.cell(sheet.max_row, 3).number_format = '#,##0.##'
+    sheet.column_dimensions['A'].width = 16
+    sheet.column_dimensions['B'].width = 20
+    sheet.column_dimensions['C'].width = 20
+    sheet.freeze_panes = 'A2'
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.sheet_view.showGridLines = False
+
+    instructions = workbook.create_sheet('안내')
+    instructions.append(['배송요금표 엑셀 업로드 안내'])
+    instructions.append(['배송요금표 시트에서 항공요금과 해상요금을 입력한 뒤 업로드하세요.'])
+    instructions.append(['요금 칸을 비워두면 해당 무게의 기존 요금은 유지됩니다.'])
+    instructions.append(['무게 기준은 양식에 있는 값을 그대로 사용해주세요.'])
+    instructions.column_dimensions['A'].width = 85
+    instructions['A1'].font = Font(bold=True, size=14, color='2563EB')
+    for row in range(2, 5):
+        instructions.cell(row, 1).alignment = Alignment(wrap_text=True, vertical='top')
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(output, as_attachment=True, download_name='배송요금표_기본양식.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@app.route('/api/shipping-rates/upload', methods=['POST'])
+def upload_shipping_rates_excel():
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '배송요금표는 관리자만 업로드할 수 있습니다.'}), 403
+    from io import BytesIO
+    import openpyxl
+
+    uploaded = request.files.get('file')
+    if not uploaded or not uploaded.filename:
+        return jsonify({'error': '배송요금표 엑셀 파일을 선택해주세요.'}), 400
+    if not uploaded.filename.lower().endswith('.xlsx'):
+        return jsonify({'error': '.xlsx 엑셀 파일만 업로드할 수 있습니다.'}), 400
+
+    try:
+        workbook = openpyxl.load_workbook(BytesIO(uploaded.read()), data_only=True, read_only=True)
+    except Exception:
+        return jsonify({'error': '엑셀 파일을 읽을 수 없습니다. 기본 양식의 .xlsx 파일인지 확인해주세요.'}), 400
+
+    def normalize_header(value):
+        return ''.join(char for char in str(value or '').strip().lower() if char.isalnum() or '\uac00' <= char <= '\ud7a3')
+
+    aliases = {
+        'weight': {'무게', '무게kg', '중량', '중량kg', 'weight', 'weightkg', 'kg'},
+        'air': {'항공', '항공요금', '항공요금표', 'air', 'airrate'},
+        'sea': {'해상', '해상요금', '해상요금표', 'sea', 'searate'}
+    }
+    selected_sheet = next((workbook[name] for name in ('배송요금표', 'Shipping Rates') if name in workbook.sheetnames), workbook.active)
+    rows = selected_sheet.iter_rows(values_only=True)
+    header_map = None
+    data_rows = []
+    for row in rows:
+        normalized = [normalize_header(value) for value in row]
+        if header_map is None:
+            found = {key: next((idx for idx, name in enumerate(normalized) if name in candidates), None)
+                     for key, candidates in aliases.items()}
+            if all(index is not None for index in found.values()):
+                header_map = found
+            continue
+        data_rows.append(row)
+    workbook.close()
+    if header_map is None:
+        return jsonify({'error': '무게 (kg), 항공요금, 해상요금 열을 찾지 못했습니다. 기본 양식의 첫 행 제목을 확인해주세요.'}), 400
+
+    allowed_weights = {round(float(weight), 1) for weight in SHIPPING_WEIGHT_STEPS}
+    parsed = {}
+    for row_number, row in enumerate(data_rows, start=2):
+        values = [row[header_map[key]] if header_map[key] < len(row) else None for key in ('weight', 'air', 'sea')]
+        if all(value is None or str(value).strip() == '' for value in values):
+            continue
+        try:
+            weight_text = str(values[0]).strip().lower().replace('kg', '').strip()
+            weight = round(float(weight_text), 1)
+        except (TypeError, ValueError):
+            return jsonify({'error': f'{row_number}행의 무게를 숫자로 읽을 수 없습니다.'}), 400
+        if weight not in allowed_weights:
+            return jsonify({'error': f'{row_number}행의 무게 {weight:g}kg는 배송요금표 기준에 없습니다.'}), 400
+        if weight in parsed:
+            return jsonify({'error': f'{row_number}행에 무게 {weight:.1f}kg가 중복되어 있습니다.'}), 400
+
+        rate_values = {}
+        for key, value in (('air_rate', values[1]), ('sea_rate', values[2])):
+            if value is None or str(value).strip() == '':
+                rate_values[key] = None
+                continue
+            try:
+                amount = float(value)
+            except (TypeError, ValueError):
+                return jsonify({'error': f'{row_number}행의 {"항공" if key == "air_rate" else "해상"}요금이 숫자가 아닙니다.'}), 400
+            if not math.isfinite(amount) or amount < 0 or amount > 999999999:
+                return jsonify({'error': f'{row_number}행의 요금은 0 이상 999,999,999 이하로 입력해주세요.'}), 400
+            rate_values[key] = amount
+        if rate_values['air_rate'] is None and rate_values['sea_rate'] is None:
+            continue
+        parsed[weight] = rate_values
+
+    if not parsed:
+        return jsonify({'error': '반영할 요금이 없습니다. 항공요금 또는 해상요금 칸에 값을 입력해주세요.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        weights = list(parsed)
+        placeholders = ','.join(['?'] * len(weights))
+        cur.execute(f'''SELECT weight_kg, air_rate, sea_rate FROM shipping_rates
+            WHERE tenant_id = ? AND weight_kg IN ({placeholders})''', [g.company_id] + weights)
+        existing = {round(float(row['weight_kg']), 1): row for row in cur.fetchall()}
+        normalized = []
+        for weight, rate_values in parsed.items():
+            old = existing.get(weight)
+            air_rate = rate_values['air_rate'] if rate_values['air_rate'] is not None else (float(old['air_rate'] or 0) if old else 0)
+            sea_rate = rate_values['sea_rate'] if rate_values['sea_rate'] is not None else (float(old['sea_rate'] or 0) if old else 0)
+            normalized.append((g.company_id, weight, air_rate, sea_rate))
+        cur.executemany('''
+            INSERT INTO shipping_rates (tenant_id, weight_kg, air_rate, sea_rate, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (tenant_id, weight_kg) DO UPDATE SET
+                air_rate = excluded.air_rate,
+                sea_rate = excluded.sea_rate,
+                updated_at = CURRENT_TIMESTAMP
+        ''', normalized)
+        conn.commit()
+        return jsonify({'status': 'success', 'saved_count': len(normalized)})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Shipping rate Excel upload failed')
+        return jsonify({'error': '배송요금 엑셀 반영 중 오류가 발생했습니다.'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/shipping-rates', methods=['GET'])
 def get_shipping_rates():
     conn = get_connection()
@@ -2995,6 +3215,8 @@ def get_shipping_rates():
 
 @app.route('/api/shipping-rates', methods=['POST'])
 def save_shipping_rates():
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '배송요금표는 관리자만 수정할 수 있습니다.'}), 403
     data = request.get_json(silent=True) or {}
     rates = data.get('rates')
     if not isinstance(rates, list):

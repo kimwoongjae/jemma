@@ -128,9 +128,10 @@
             box-shadow: 0 2px 12px rgba(15, 23, 42, 0.24);
         }
         #ordersTable, #dispatchedTable { table-layout: fixed; }
-        #dispatchedTable { min-width: 2130px; }
+        #dispatchedTable { min-width: 2300px; }
         #dispatchedTable [data-column-key="selection"] { width: 50px; }
         #dispatchedTable [data-column-key="weight"] { width: 105px; }
+        #dispatchedTable [data-column-key="shipping_fee"] { width: 190px; }
         #dispatchedTable [data-column-key="order_no"] { width: 195px; }
         #dispatchedTable [data-column-key="dispatched_at"] { width: 165px; }
         #dispatchedTable [data-column-key="recipient"] { width: 165px; }
@@ -806,6 +807,7 @@
                                         <input type="checkbox" class="form-check-input" id="checkAllDispatched" onchange="toggleSelectAllDispatched(this)">
                                     </th>
                                     <th data-column-key="weight" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 85px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">무게 (kg)</th>
+                                    <th data-column-key="shipping_fee" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 170px; cursor: grab;" title="무게에 맞는 항공·해상 배송요금">배송비</th>
                                     <th data-column-key="order_no" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">주문번호</th>
                                     <th data-column-key="dispatched_at" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">발송 일시</th>
                                     <th data-column-key="recipient" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">수취인 / 연락처</th>
@@ -821,7 +823,7 @@
                             </thead>
                             <tbody id="dispatchedTableBody">
                                 <tr>
-                                    <td colspan="12" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
+                                    <td colspan="14" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1206,23 +1208,20 @@
                 <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <div>
                         <h5 class="fw-bold mb-1"><i class="fa-solid fa-scale-balanced text-primary me-2"></i>배송요금표</h5>
-                        <p class="text-muted small mb-0">무게별 항공·해상 요금을 입력하고 저장합니다. 요금은 업체별로 보관됩니다.</p>
+                        <p class="text-muted small mb-0">관리자가 설정한 업체별 무게 요금표를 조회합니다.</p>
                     </div>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex gap-2 flex-wrap">
                         <button type="button" class="btn btn-outline-secondary" onclick="loadShippingRates()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
-                        <button type="button" class="btn btn-primary" id="saveShippingRatesButton" onclick="saveShippingRates()"><i class="fa-solid fa-floppy-disk me-1"></i>요금표 저장</button>
                     </div>
                 </div>
+                <div class="px-3 pt-3 small text-muted">요금표 변경이 필요하면 관리자에게 요청해주세요. 업체 계정에서는 조회만 가능합니다.</div>
                 <div class="table-responsive shipping-rates-table-wrap">
                     <table class="table table-hover table-bordered align-middle mb-0">
                         <thead class="table-light"><tr><th class="text-center">무게</th><th class="text-center">항공요금표</th><th class="text-center">해상요금표</th></tr></thead>
                         <tbody id="shippingRatesTableBody"><tr><td colspan="3" class="text-center text-muted py-5">요금표를 불러오는 중입니다.</td></tr></tbody>
                     </table>
                 </div>
-                <div class="card-footer bg-white text-end">
-                    <span id="shippingRatesMessage" class="small me-3" aria-live="polite"></span>
-                    <button type="button" class="btn btn-primary" onclick="saveShippingRates()"><i class="fa-solid fa-floppy-disk me-1"></i>요금표 저장</button>
-                </div>
+                <div class="card-footer bg-white text-end"><span id="shippingRatesMessage" class="small" aria-live="polite"></span></div>
             </div>
         </div>
 
@@ -1780,6 +1779,8 @@
     const orderDispatchStatusCache = new Map();
     let customsErrorOrdersList = [];
     let dispatchedOrdersList = [];
+    let shippingRatesCache = null;
+    let shippingRatesLoadPromise = null;
     let dispatchedSelectedDate = '';
     let inventoryList = [];
     let inventoryLoaded = false;
@@ -3663,6 +3664,8 @@
         const courier = document.getElementById('dispatchedCourierFilter')?.value || '전체';
         const search = document.getElementById('dispatchedSearchInput')?.value || '';
         try {
+            try { await ensureShippingRatesLoaded(); }
+            catch (rateError) { console.warn('Shipping rates unavailable; dispatch history will still load.', rateError); shippingRatesCache = []; }
             const datesRes = await fetch(`/api/dispatched-orders/dates?courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}`);
             if (!datesRes.ok) throw new Error(`발송 날짜 조회 실패 (${datesRes.status})`);
             const dateGroups = await datesRes.json();
@@ -3686,12 +3689,12 @@
         } catch (e) {
             console.error('Dispatched orders load error', e);
             const tbody = document.getElementById('dispatchedTableBody');
-            if (tbody) tbody.innerHTML = `<tr><td colspan="12" class="text-center py-5 text-danger">발송내역을 불러오지 못했습니다: ${escapeHtml(e.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadDispatchedOrders()">다시 시도</button></td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="14" class="text-center py-5 text-danger">발송내역을 불러오지 못했습니다: ${escapeHtml(e.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadDispatchedOrders()">다시 시도</button></td></tr>`;
         }
     }
 
     const DISPATCHED_COLUMN_ORDER_KEY = 'jamma-dispatched-columns-v1';
-    const DEFAULT_DISPATCHED_COLUMN_ORDER = ['weight', 'order_no', 'dispatched_at', 'recipient', 'customs_id', 'address', 'product', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier_tracking', 'status'];
+    const DEFAULT_DISPATCHED_COLUMN_ORDER = ['weight', 'shipping_fee', 'order_no', 'dispatched_at', 'recipient', 'customs_id', 'address', 'product', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier_tracking', 'status'];
 
     function getDispatchedColumnOrder() {
         try {
@@ -3712,6 +3715,39 @@
         const buyQuantity = Math.max(1, parseInt(item?.quantity) || ((parseInt(order?.original_quantity) || 1) * optionQuantity));
         const productQuantity = Math.max(1, parseInt(item?.product_quantity) || parseInt(order?.original_quantity) || Math.round(buyQuantity / optionQuantity));
         return { productQuantity, optionQuantity, buyQuantity };
+    }
+
+    async function ensureShippingRatesLoaded(force = false) {
+        if (!force && Array.isArray(shippingRatesCache)) return shippingRatesCache;
+        if (!force && shippingRatesLoadPromise) return shippingRatesLoadPromise;
+        shippingRatesLoadPromise = (async () => {
+            const response = await fetch('/api/shipping-rates');
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || `배송요금표 조회 실패 (${response.status})`);
+            shippingRatesCache = (Array.isArray(data.rates) ? data.rates : [])
+                .map(rate => ({
+                    weight_kg: Number(rate.weight_kg),
+                    air_rate: Number(rate.air_rate || 0),
+                    sea_rate: Number(rate.sea_rate || 0)
+                }))
+                .filter(rate => Number.isFinite(rate.weight_kg))
+                .sort((a, b) => a.weight_kg - b.weight_kg);
+            return shippingRatesCache;
+        })();
+        try {
+            return await shippingRatesLoadPromise;
+        } finally {
+            shippingRatesLoadPromise = null;
+        }
+    }
+
+    function getShippingFeeCellHtml(weightValue) {
+        const weight = Number(weightValue);
+        if (!Number.isFinite(weight) || weight <= 0) return '<span class="text-muted small">무게 미입력</span>';
+        const matched = (shippingRatesCache || []).find(rate => weight <= rate.weight_kg + 0.000001);
+        if (!matched) return '<span class="text-danger small">요금표 범위 초과</span>';
+        const formatRate = value => Number(value) > 0 ? `${Number(value).toLocaleString('ko-KR')}원` : '미등록';
+        return `<div class="small text-muted mb-1">적용 구간 ${matched.weight_kg.toFixed(1)} kg</div><div class="small">✈ ${formatRate(matched.air_rate)}</div><div class="small">🚢 ${formatRate(matched.sea_rate)}</div>`;
     }
 
     function applyDispatchedColumnOrder() {
@@ -3849,7 +3885,7 @@
         tbody.innerHTML = '';
 
         if (!orders || orders.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="12" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="14" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
             updateDispatchedSelectionCount();
             return;
         }
@@ -3879,11 +3915,13 @@
             const productQtyHtml = items.map(it => `${getDispatchedQuantities(o, it).productQuantity}개`).join('<br>');
             const optionQtyHtml = items.map(it => `${getDispatchedQuantities(o, it).optionQuantity}개`).join('<br>');
             const buyQtyHtml = items.map(it => `${getDispatchedQuantities(o, it).buyQuantity}개`).join('<br>');
+            const shippingFeeHtml = getShippingFeeCellHtml(o.weight);
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td data-column-key="selection" class="text-center bg-white"><input type="checkbox" class="form-check-input dispatched-row-check" value="${o.id}" onchange="updateDispatchedSelectionCount()"></td>
                 <td data-column-key="weight" class="text-center bg-white"><span class="badge bg-light text-dark border">${o.weight && o.weight > 0 ? o.weight + ' kg' : '-'}</span></td>
+                <td data-column-key="shipping_fee" class="text-center bg-white">${shippingFeeHtml}</td>
                 <td data-column-key="order_no" class="bg-white"><div class="fw-bold">${o.order_no}</div><small class="text-muted">접수: ${o.created_at || ''}</small></td>
                 <td data-column-key="dispatched_at" class="bg-white"><div class="fw-bold text-success"><i class="fa-regular fa-clock me-1"></i>${dispatchDate}</div></td>
                 <td data-column-key="recipient" class="bg-white"><div class="fw-bold">${o.recipient_name}</div><small class="text-muted">${o.recipient_phone1 || ''}</small></td>
@@ -5247,18 +5285,15 @@
         if (message) message.textContent = '';
         tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-5">요금표를 불러오는 중입니다.</td></tr>';
         try {
-            const response = await fetch('/api/shipping-rates');
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-            const rates = Array.isArray(data.rates) ? data.rates : [];
+            const rates = await ensureShippingRatesLoaded(true);
             tbody.innerHTML = rates.map(rate => {
                 const weight = Number(rate.weight_kg).toFixed(1);
                 const air = Number(rate.air_rate || 0);
                 const sea = Number(rate.sea_rate || 0);
                 return `<tr>
                     <th scope="row" class="text-center fw-semibold">${weight} kg</th>
-                    <td><input type="number" min="0" max="999999999" step="1" inputmode="decimal" class="form-control text-end shipping-rate-input" data-weight="${weight}" data-rate-type="air" aria-label="${weight}kg 항공요금" placeholder="항공요금" value="${air > 0 ? air : ''}"></td>
-                    <td><input type="number" min="0" max="999999999" step="1" inputmode="decimal" class="form-control text-end shipping-rate-input" data-weight="${weight}" data-rate-type="sea" aria-label="${weight}kg 해상요금" placeholder="해상요금" value="${sea > 0 ? sea : ''}"></td>
+                    <td class="text-end">${air > 0 ? `${air.toLocaleString('ko-KR')}원` : '<span class="text-muted">미등록</span>'}</td>
+                    <td class="text-end">${sea > 0 ? `${sea.toLocaleString('ko-KR')}원` : '<span class="text-muted">미등록</span>'}</td>
                 </tr>`;
             }).join('');
         } catch (error) {
@@ -5292,11 +5327,36 @@
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            shippingRatesCache = rates.map(rate => ({ ...rate })).sort((a, b) => a.weight_kg - b.weight_kg);
+            if (document.getElementById('tab-dispatched')?.classList.contains('active')) renderDispatchedTable(dispatchedOrdersList);
             if (message) { message.className = 'small me-3 text-success'; message.textContent = `${data.saved_count}개 무게 구간의 요금표를 저장했습니다.`; }
         } catch (error) {
             if (message) { message.className = 'small me-3 text-danger'; message.textContent = `저장 실패: ${error.message}`; }
         } finally {
             if (button) button.disabled = false;
+        }
+    }
+
+    async function uploadShippingRatesExcel(input) {
+        const file = input?.files?.[0];
+        if (!file) return;
+        const button = document.getElementById('uploadShippingRatesButton');
+        const message = document.getElementById('shippingRatesMessage');
+        if (button) button.disabled = true;
+        if (message) { message.className = 'small me-3 text-muted'; message.textContent = '엑셀 파일을 반영 중...'; }
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const response = await fetch('/api/shipping-rates/upload', { method: 'POST', body: formData });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            await loadShippingRates();
+            if (message) { message.className = 'small me-3 text-success'; message.textContent = `${data.saved_count}개 무게 구간의 요금을 엑셀에서 반영했습니다.`; }
+        } catch (error) {
+            if (message) { message.className = 'small me-3 text-danger'; message.textContent = `엑셀 업로드 실패: ${error.message}`; }
+        } finally {
+            if (button) button.disabled = false;
+            input.value = '';
         }
     }
 
