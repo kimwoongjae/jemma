@@ -85,23 +85,22 @@
             vertical-align: middle;
         }
         /* 주문 목록은 넓은 열 폭을 유지하고, 작은 화면에서는 표 안에서 좌우로 이동합니다. */
-        #ordersTable { min-width: 2130px; table-layout: fixed; }
-        #ordersTable th:nth-child(1), #ordersTable td:nth-child(1) { width: 50px; }
-        #ordersTable th:nth-child(2), #ordersTable td:nth-child(2) { width: 105px; }
-        #ordersTable th:nth-child(3), #ordersTable td:nth-child(3) { width: 195px; }
-        #ordersTable th:nth-child(4), #ordersTable td:nth-child(4) { width: 165px; }
-        #ordersTable th:nth-child(5), #ordersTable td:nth-child(5) { width: 185px; }
-        #ordersTable th:nth-child(6), #ordersTable td:nth-child(6) { width: 280px; }
-        #ordersTable th:nth-child(7), #ordersTable td:nth-child(7) { width: 360px; }
-        #ordersTable th:nth-child(8), #ordersTable td:nth-child(8) { width: 165px; }
-        #ordersTable th:nth-child(9), #ordersTable td:nth-child(9),
-        #ordersTable th:nth-child(10), #ordersTable td:nth-child(10),
-        #ordersTable th:nth-child(11), #ordersTable td:nth-child(11) { width: 90px; }
-        #ordersTable th:nth-child(12), #ordersTable td:nth-child(12) { width: 125px; }
-        #ordersTable th:nth-child(13), #ordersTable td:nth-child(13) { width: 240px; }
-        #ordersTable th:nth-child(14), #ordersTable td:nth-child(14) { width: 80px; }
-        #ordersTable td:nth-child(7) { line-height: 1.45; overflow-wrap: anywhere; word-break: keep-all; }
-        #ordersTable td:nth-child(8) { white-space: nowrap; }
+        #ordersTable { min-width: 2370px; table-layout: fixed; }
+        #ordersTable [data-column-key="selection"] { width: 50px; }
+        #ordersTable [data-column-key="registered_at"] { width: 150px; }
+        #ordersTable [data-column-key="weight"] { width: 105px; }
+        #ordersTable [data-column-key="order_no"] { width: 195px; }
+        #ordersTable [data-column-key="recipient"] { width: 165px; }
+        #ordersTable [data-column-key="customs_id"] { width: 185px; }
+        #ordersTable [data-column-key="address"] { width: 280px; }
+        #ordersTable [data-column-key="product"] { width: 360px; line-height: 1.45; overflow-wrap: anywhere; word-break: keep-all; }
+        #ordersTable [data-column-key="sku"] { width: 165px; white-space: nowrap; }
+        #ordersTable [data-column-key="product_quantity"],
+        #ordersTable [data-column-key="option_quantity"],
+        #ordersTable [data-column-key="buy_quantity"] { width: 90px; }
+        #ordersTable [data-column-key="dispatch_status"] { width: 125px; }
+        #ordersTable [data-column-key="api_status"] { width: 240px; }
+        #ordersTable [data-column-key="manage"] { width: 80px; }
         /* 주문/발송 목록 모두 넓은 표를 유지하고 전용 가로 스크롤바로 이동합니다. */
         .table-horizontal-scrollbar {
             width: 100%;
@@ -236,7 +235,7 @@
             }
             .table-horizontal-scrollbar { height: 20px; margin-bottom: 5px; }
             .table-horizontal-scrollbar::-webkit-scrollbar { height: 16px; }
-            #ordersTable { min-width: 2130px; }
+            #ordersTable { min-width: 2370px; }
             #customsErrorTable { min-width: 900px; }
             #dispatchedTable { min-width: 1200px; }
             #inventoryTable, #logsTable { min-width: 760px; }
@@ -533,6 +532,17 @@
                             </div>
                         </div>
                     </div>
+                    <div class="row g-2 align-items-end mb-2 pt-2 border-top">
+                        <div class="col-md-3 col-sm-6">
+                            <label class="form-label small mb-1" for="orderDateFrom">등록일 시작</label>
+                            <input type="date" id="orderDateFrom" class="form-control" aria-label="주문 등록일 시작 날짜">
+                        </div>
+                        <div class="col-md-3 col-sm-6">
+                            <label class="form-label small mb-1" for="orderDateTo">등록일 종료</label>
+                            <input type="date" id="orderDateTo" class="form-control" aria-label="주문 등록일 종료 날짜">
+                        </div>
+                        <div class="col-md-6 text-muted small pb-2">기간을 지정한 뒤 <strong>필터 검색</strong>을 누르면 해당 기간에 등록된 주문만 표시됩니다.</div>
+                    </div>
                     <div class="row g-2 align-items-center mb-2 pt-2 border-top">
                         <div class="col-12 d-flex flex-wrap justify-content-between align-items-center gap-2">
                             <span class="small fw-bold text-muted"><i class="fa-solid fa-arrow-down-wide-short me-1"></i>목록 정렬</span>
@@ -589,27 +599,28 @@
                         <table class="table table-bordered table-hover align-middle mb-0" id="ordersTable">
                             <thead class="table-light">
                                 <tr>
-                                    <th style="width: 40px;" class="text-center">
+                                    <th data-column-key="selection" style="width: 40px;" class="text-center">
                                         <input type="checkbox" class="form-check-input" id="checkAllOrders" onchange="toggleSelectAllOrders(this)">
                                     </th>
-                                    <th style="width: 80px;" class="text-center">무게 (kg)</th>
-                                    <th>주문번호</th>
-                                    <th>수취인 / 연락처</th>
-                                    <th>통관부호 / 유효성</th>
-                                    <th>배송지 주소 (우편번호)</th>
-                                    <th>상품명 + 옵션명</th>
-                                    <th>바코드 (SKU)</th>
-                                    <th class="text-center" style="width: 75px;">상품수량</th>
-                                    <th class="text-center" style="width: 75px;">옵션수량</th>
-                                    <th class="text-center text-primary" style="width: 85px; background-color: #eef6fc;">구매수량</th>
-                                    <th class="text-center" style="width: 95px;">출고여부</th>
-                                    <th class="text-center" style="width: 230px;">API 전송상태</th>
-                                    <th class="text-center" style="width: 70px;">관리</th>
+                                    <th data-column-key="registered_at" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">등록일</th>
+                                    <th data-column-key="weight" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">무게 (kg)</th>
+                                    <th data-column-key="order_no" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">주문번호</th>
+                                    <th data-column-key="recipient" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">수취인 / 연락처</th>
+                                    <th data-column-key="customs_id" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">통관부호 / 유효성</th>
+                                    <th data-column-key="address" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">배송지 주소 (우편번호)</th>
+                                    <th data-column-key="product" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">상품명 + 옵션명</th>
+                                    <th data-column-key="sku" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">바코드 (SKU)</th>
+                                    <th data-column-key="product_quantity" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;">상품수량</th>
+                                    <th data-column-key="option_quantity" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;">옵션수량</th>
+                                    <th data-column-key="buy_quantity" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center text-primary" style="background-color: #eef6fc; cursor: grab;">구매수량</th>
+                                    <th data-column-key="dispatch_status" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;">출고여부</th>
+                                    <th data-column-key="api_status" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;">API 전송상태</th>
+                                    <th data-column-key="manage" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;">관리</th>
                                 </tr>
                             </thead>
                             <tbody id="ordersTableBody">
                                 <tr>
-                                    <td colspan="14" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
+                                    <td colspan="15" class="text-center py-5 text-muted">주문 데이터를 불러오는 중입니다...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -777,6 +788,20 @@
                                 <i class="fa-solid fa-print me-1"></i> 선택 송장 재인쇄
                             </button>
                         </div>
+                    </div>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-3 col-sm-6">
+                            <label class="form-label small mb-1" for="dispatchedDateFrom">발송일시 시작</label>
+                            <input type="date" id="dispatchedDateFrom" class="form-control" aria-label="발송일시 시작 날짜">
+                        </div>
+                        <div class="col-md-3 col-sm-6">
+                            <label class="form-label small mb-1" for="dispatchedDateTo">발송일시 종료</label>
+                            <input type="date" id="dispatchedDateTo" class="form-control" aria-label="발송일시 종료 날짜">
+                        </div>
+                        <div class="col-md-3">
+                            <button type="button" class="btn btn-outline-primary w-100" onclick="searchDispatchedDateRange()"><i class="fa-solid fa-magnifying-glass me-1"></i>기간 검색</button>
+                        </div>
+                        <div class="col-md-3 text-muted small pb-2">선택한 발송일시 기간으로 내역을 조회합니다.</div>
                     </div>
                     <!-- 발송 목록 선택 카운트 바 -->
                     <div class="d-flex align-items-center justify-content-between pt-2 border-top">
@@ -2354,8 +2379,11 @@
         const dispatchFilter = document.getElementById('orderDispatchFilter')?.value || '전체';
         const search = document.getElementById('orderSearchInput')?.value || '';
         const searchField = document.getElementById('orderSearchField')?.value || 'all';
+        const dateFrom = document.getElementById('orderDateFrom')?.value || '';
+        const dateTo = document.getElementById('orderDateTo')?.value || '';
         try {
-            const res = await fetch(`/api/orders?status=${encodeURIComponent(status)}&customs_status=${encodeURIComponent(customs)}&dispatch_filter=${encodeURIComponent(dispatchFilter)}&search=${encodeURIComponent(search)}&search_field=${encodeURIComponent(searchField)}`);
+            const query = new URLSearchParams({ status, customs_status: customs, dispatch_filter: dispatchFilter, search, search_field: searchField, date_from: dateFrom, date_to: dateTo });
+            const res = await fetch(`/api/orders?${query.toString()}`);
             ordersList = await res.json();
             ordersList.forEach(order => {
                 const id = Number(order.id);
@@ -2375,7 +2403,7 @@
             console.error('Order load error', e);
             const tbody = document.getElementById('ordersTableBody');
             if (tbody) {
-                tbody.innerHTML = `<tr><td colspan="14" class="text-center py-5 text-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>주문 목록 로딩 중 일시적 오류: ${e.message} <br><button class="btn btn-sm btn-outline-secondary mt-2" onclick="loadOrders()"><i class="fa-solid fa-arrows-rotate me-1"></i>다시 불러오기</button></td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="15" class="text-center py-5 text-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>주문 목록 로딩 중 일시적 오류: ${e.message} <br><button class="btn btn-sm btn-outline-secondary mt-2" onclick="loadOrders()"><i class="fa-solid fa-arrows-rotate me-1"></i>다시 불러오기</button></td></tr>`;
             }
         }
     }
@@ -2967,7 +2995,8 @@
         const tbody = document.getElementById('ordersTableBody');
         tbody.innerHTML = '';
         if (!orders || orders.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="14" class="text-center py-5 text-muted">조건에 일치하는 주문 데이터가 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="15" class="text-center py-5 text-muted">조건에 일치하는 주문 데이터가 없습니다.</td></tr>`;
+            applyOrderColumnOrder();
             updateOrderSelectionCount();
             return;
         }
@@ -3031,10 +3060,11 @@
                 // 주문 공통 정보는 첫 번째 품목 행에만 rowspan으로 묶어 렌더링
                 if (idx === 0) {
                     rowHtml += `
-                        <td rowspan="${rowCount}" class="text-center bg-white" style="cursor: pointer;" onclick="handleOrderCellClick(event, this)">
+                        <td data-column-key="selection" rowspan="${rowCount}" class="text-center bg-white" style="cursor: pointer;" onclick="handleOrderCellClick(event, this)">
                             <input type="checkbox" class="form-check-input order-row-check" value="${o.id}" onclick="event.stopPropagation(); handleOrderCheckClick(event, this);" onchange="updateOrderSelectionCount()">
                         </td>
-                        <td rowspan="${rowCount}" class="text-center bg-white">
+                        <td data-column-key="registered_at" rowspan="${rowCount}" class="text-center bg-white"><span class="small">${escapeHtml(formatOrderDate(o.created_at))}</span></td>
+                        <td data-column-key="weight" rowspan="${rowCount}" class="text-center bg-white">
                             <div class="input-group input-group-sm">
                                 <input type="text" inputmode="decimal" class="form-control form-control-sm text-end px-1 order-weight-input"
                                        value="${o.weight && o.weight > 0 ? o.weight : ''}" placeholder="0.00" 
@@ -3044,22 +3074,21 @@
                                        onchange="saveOrderWeight(${o.id}, this.value, this)" title="클릭 후 무게를 입력하고 Enter를 누르면 저장 후 다음 주문으로 이동합니다">
                             </div>
                         </td>
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div class="fw-bold">${o.order_no}</div>
-                            <small class="text-muted">${o.created_at || ''}</small>
+                        <td data-column-key="order_no" rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${escapeHtml(o.order_no || '')}</div>
                         </td>
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div class="fw-bold">${o.recipient_name}</div>
-                            <small class="text-muted">${o.recipient_phone1 || ''}</small>
+                        <td data-column-key="recipient" rowspan="${rowCount}" class="bg-white">
+                            <div class="fw-bold">${escapeHtml(o.recipient_name || '')}</div>
+                            <small class="text-muted">${escapeHtml(o.recipient_phone1 || '')}</small>
                         </td>
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div class="mb-1"><code>${o.customs_id || '-'}</code></div>
+                        <td data-column-key="customs_id" rowspan="${rowCount}" class="bg-white">
+                            <div class="mb-1"><code>${escapeHtml(o.customs_id || '-')}</code></div>
                             <div>${customsBadge}</div>
                         </td>
-                        <td rowspan="${rowCount}" class="bg-white">
-                            <div class="small mb-1"><span class="badge bg-light text-dark border">${o.postal_code || '-'}</span></div>
-                            <small class="text-secondary text-truncate d-inline-block" style="max-width: 170px;" title="${o.address}">${o.address || '-'}</small>
-                            ${o.shipping_memo ? `<div class="small text-muted fst-italic">📝 ${o.shipping_memo}</div>` : ''}
+                        <td data-column-key="address" rowspan="${rowCount}" class="bg-white">
+                            <div class="small mb-1"><span class="badge bg-light text-dark border">${escapeHtml(o.postal_code || '-')}</span></div>
+                            <small class="text-secondary text-truncate d-inline-block" style="max-width: 170px;" title="${escapeHtml(o.address || '')}">${escapeHtml(o.address || '-')}</small>
+                            ${o.shipping_memo ? `<div class="small text-muted fst-italic">📝 ${escapeHtml(o.shipping_memo)}</div>` : ''}
                         </td>
                     `;
                 }
@@ -3070,25 +3099,25 @@
                 const { prodQty, optQty, buyQty } = getOrderQuantities(o, it);
 
                 rowHtml += `
-                    <td>
+                    <td data-column-key="product">
                         <div class="fw-bold text-dark">${escapeHtml(combinedName)}</div>
                         ${rowCount > 1 ? `<span class="badge bg-light text-primary border py-0 px-1 mt-1">품목 ${idx + 1}/${rowCount}</span>` : ''}
                     </td>
-                    <td>
+                    <td data-column-key="sku">
                         <code class="fw-bold text-dark">${escapeHtml(it.sku || '-')}</code>
                     </td>
-                    <td class="text-center fw-bold text-dark">${prodQty}개</td>
-                    <td class="text-center fw-bold text-secondary">${optQty}개</td>
-                    <td class="text-center fw-bold text-primary" style="background-color: #f3f8fd;">
+                    <td data-column-key="product_quantity" class="text-center fw-bold text-dark">${prodQty}개</td>
+                    <td data-column-key="option_quantity" class="text-center fw-bold text-secondary">${optQty}개</td>
+                    <td data-column-key="buy_quantity" class="text-center fw-bold text-primary" style="background-color: #f3f8fd;">
                         <span class="badge bg-primary fs-6 px-2 py-1">${buyQty}개</span>
                     </td>
                 `;
 
                 if (idx === 0) {
                     rowHtml += `
-                        <td rowspan="${rowCount}" class="text-center bg-white">${dispatchBadge}</td>
-                        <td rowspan="${rowCount}" class="text-center bg-white">${apiDispatchHtml}</td>
-                        <td rowspan="${rowCount}" class="text-center bg-white">
+                        <td data-column-key="dispatch_status" rowspan="${rowCount}" class="text-center bg-white">${dispatchBadge}</td>
+                        <td data-column-key="api_status" rowspan="${rowCount}" class="text-center bg-white">${apiDispatchHtml}</td>
+                        <td data-column-key="manage" rowspan="${rowCount}" class="text-center bg-white">
                             <div class="d-flex flex-column gap-1 align-items-center">
                                 <button class="btn btn-sm btn-outline-primary py-1 px-2" onclick="openEditOrderModal(${o.id})" title="주문 및 수취인 정보 수정">
                                     <i class="fa-solid fa-pen-to-square"></i>
@@ -3107,7 +3136,13 @@
                 tbody.appendChild(tr);
             });
         });
+        applyOrderColumnOrder();
         updateOrderSelectionCount();
+    }
+
+    function formatOrderDate(value) {
+        const match = String(value || '').match(/\d{4}-\d{2}-\d{2}/);
+        return match ? match[0] : '-';
     }
 
     let lastCheckedOrderIndex = -1;
@@ -3657,30 +3692,50 @@
 
     async function selectDispatchedDate(date) {
         dispatchedSelectedDate = date;
+        const dateFromInput = document.getElementById('dispatchedDateFrom');
+        const dateToInput = document.getElementById('dispatchedDateTo');
+        if (dateFromInput) dateFromInput.value = '';
+        if (dateToInput) dateToInput.value = '';
+        await loadDispatchedOrders();
+    }
+
+    async function searchDispatchedDateRange() {
+        dispatchedSelectedDate = '';
         await loadDispatchedOrders();
     }
 
     async function loadDispatchedOrders() {
         const courier = document.getElementById('dispatchedCourierFilter')?.value || '전체';
         const search = document.getElementById('dispatchedSearchInput')?.value || '';
+        const dateFrom = document.getElementById('dispatchedDateFrom')?.value || '';
+        const dateTo = document.getElementById('dispatchedDateTo')?.value || '';
+        const hasDateRange = Boolean(dateFrom || dateTo);
         try {
             try { await ensureShippingRatesLoaded(); }
             catch (rateError) { console.warn('Shipping rates unavailable; dispatch history will still load.', rateError); shippingRatesCache = []; }
-            const datesRes = await fetch(`/api/dispatched-orders/dates?courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}`);
+            const dateParams = new URLSearchParams({ courier, search, date_from: dateFrom, date_to: dateTo });
+            const datesRes = await fetch(`/api/dispatched-orders/dates?${dateParams.toString()}`);
             if (!datesRes.ok) throw new Error(`발송 날짜 조회 실패 (${datesRes.status})`);
             const dateGroups = await datesRes.json();
             if (!Array.isArray(dateGroups)) throw new Error('발송 날짜 응답 형식이 올바르지 않습니다.');
-            if (!dateGroups.some(group => group.date === dispatchedSelectedDate)) {
+            if (!hasDateRange && !dateGroups.some(group => group.date === dispatchedSelectedDate)) {
                 dispatchedSelectedDate = dateGroups[0]?.date || '';
             }
             renderDispatchedDateList(dateGroups);
-            if (!dispatchedSelectedDate) {
+            if (!hasDateRange && !dispatchedSelectedDate) {
                 dispatchedOrdersList = [];
                 renderDispatchedTable(dispatchedOrdersList);
                 return;
             }
 
-            const res = await fetch(`/api/dispatched-orders?courier=${encodeURIComponent(courier)}&search=${encodeURIComponent(search)}&date=${encodeURIComponent(dispatchedSelectedDate)}`);
+            const orderParams = new URLSearchParams({ courier, search });
+            if (hasDateRange) {
+                orderParams.set('date_from', dateFrom);
+                orderParams.set('date_to', dateTo);
+            } else {
+                orderParams.set('date', dispatchedSelectedDate);
+            }
+            const res = await fetch(`/api/dispatched-orders?${orderParams.toString()}`);
             if (!res.ok) throw new Error(`발송내역 조회 실패 (${res.status})`);
             const data = await res.json();
             if (!Array.isArray(data)) throw new Error(data.error || '발송내역 응답 형식이 올바르지 않습니다.');
@@ -3692,6 +3747,76 @@
             if (tbody) tbody.innerHTML = `<tr><td colspan="14" class="text-center py-5 text-danger">발송내역을 불러오지 못했습니다: ${escapeHtml(e.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadDispatchedOrders()">다시 시도</button></td></tr>`;
         }
     }
+
+    const ORDER_COLUMN_ORDER_KEY = 'jamma-orders-columns-v1';
+    const DEFAULT_ORDER_COLUMN_ORDER = ['registered_at', 'weight', 'order_no', 'recipient', 'customs_id', 'address', 'product', 'sku', 'product_quantity', 'option_quantity', 'buy_quantity', 'dispatch_status', 'api_status', 'manage'];
+
+    function getOrderColumnOrder() {
+        try {
+            const saved = JSON.parse(localStorage.getItem(ORDER_COLUMN_ORDER_KEY) || '[]');
+            const valid = Array.isArray(saved) ? saved.filter(key => DEFAULT_ORDER_COLUMN_ORDER.includes(key)) : [];
+            const order = [...new Set(valid)];
+            DEFAULT_ORDER_COLUMN_ORDER.forEach((key, index) => {
+                if (order.includes(key)) return;
+                const nextDefaultKey = DEFAULT_ORDER_COLUMN_ORDER.slice(index + 1).find(nextKey => order.includes(nextKey));
+                order.splice(nextDefaultKey ? order.indexOf(nextDefaultKey) : order.length, 0, key);
+            });
+            return order;
+        } catch { return [...DEFAULT_ORDER_COLUMN_ORDER]; }
+    }
+
+    function applyOrderColumnOrder() {
+        const order = getOrderColumnOrder();
+        const headerRow = document.querySelector('#ordersTable thead tr');
+        if (!headerRow) return;
+        const headerCells = new Map(Array.from(headerRow.cells).map(cell => [cell.dataset.columnKey, cell]));
+        headerRow.replaceChildren(...[headerCells.get('selection'), ...order.map(key => headerCells.get(key))].filter(Boolean));
+
+        document.querySelectorAll('#ordersTableBody tr').forEach(row => {
+            if (!row.querySelector('[data-column-key]')) return;
+            const cells = new Map(Array.from(row.cells).map(cell => [cell.dataset.columnKey, cell]));
+            row.replaceChildren(...[cells.get('selection'), ...order.map(key => cells.get(key))].filter(Boolean));
+        });
+    }
+
+    function startOrderColumnDrag(event) {
+        const key = event.currentTarget.dataset.columnKey;
+        if (!key || key === 'selection') { event.preventDefault(); return; }
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', key);
+        event.currentTarget.classList.add('opacity-50');
+    }
+
+    function allowOrderColumnDrop(event) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        event.currentTarget.classList.add('table-primary');
+    }
+
+    function dropOrderColumn(event) {
+        event.preventDefault();
+        const target = event.currentTarget;
+        document.querySelectorAll('#ordersTable thead th').forEach(th => th.classList.remove('table-primary', 'opacity-50'));
+        const sourceKey = event.dataTransfer.getData('text/plain');
+        const targetKey = target.dataset.columnKey;
+        if (!sourceKey || !targetKey || sourceKey === 'selection' || targetKey === 'selection' || sourceKey === targetKey) return;
+
+        const order = getOrderColumnOrder();
+        const sourceIndex = order.indexOf(sourceKey);
+        const targetIndex = order.indexOf(targetKey);
+        if (sourceIndex < 0 || targetIndex < 0) return;
+        order.splice(sourceIndex, 1);
+        const rect = target.getBoundingClientRect();
+        const insertAfter = event.clientX > rect.left + rect.width / 2;
+        const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+        order.splice(adjustedTargetIndex + (insertAfter ? 1 : 0), 0, sourceKey);
+        try { localStorage.setItem(ORDER_COLUMN_ORDER_KEY, JSON.stringify(order)); } catch {}
+        applyOrderColumnOrder();
+    }
+
+    document.addEventListener('dragend', () => {
+        document.querySelectorAll('#ordersTable thead th').forEach(th => th.classList.remove('table-primary', 'opacity-50'));
+    });
 
     const DISPATCHED_COLUMN_ORDER_KEY = 'jamma-dispatched-columns-v1';
     const DEFAULT_DISPATCHED_COLUMN_ORDER = ['weight', 'shipping_fee', 'order_no', 'dispatched_at', 'recipient', 'customs_id', 'address', 'product', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier_tracking', 'status'];

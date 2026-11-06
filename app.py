@@ -1139,6 +1139,8 @@ def get_orders():
     search = request.args.get('search', '').strip()
     search_field = request.args.get('search_field', 'all').strip()
     dispatch_filter = request.args.get('dispatch_filter', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     sort_by = request.args.get('sort_by', 'single_barcode_asc').strip()
     limit_param = request.args.get('limit', '').strip()
 
@@ -1147,6 +1149,14 @@ def get_orders():
 
     query = 'SELECT * FROM orders WHERE tenant_id = ?'
     params = [g.company_id]
+
+    # 등록일(created_at) 기준 기간 검색. ISO 날짜만 받아 SQL 조건에 사용합니다.
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
+        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?"
+        params.append(date_from)
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
+        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?"
+        params.append(date_to)
 
     if status == '출고대기':
         query += " AND status IN ('주문접수', '출고대기')"
@@ -1420,6 +1430,8 @@ def get_dispatched_orders():
     courier = request.args.get('courier', '').strip()
     search = request.args.get('search', '').strip()
     selected_date = request.args.get('date', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     limit_param = request.args.get('limit', '').strip()
 
     conn = get_connection()
@@ -1444,9 +1456,17 @@ def get_dispatched_orders():
         wild = f'%{search}%'
         params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
 
+    dispatch_date_expr = "COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10))"
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date):
-        query += " AND COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10)) = ?"
+        query += f' AND {dispatch_date_expr} = ?'
         params.append(selected_date)
+    else:
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
+            query += f' AND {dispatch_date_expr} >= ?'
+            params.append(date_from)
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
+            query += f' AND {dispatch_date_expr} <= ?'
+            params.append(date_to)
 
     # PostgreSQL에서는 dispatched_at(TEXT)와 created_at(TIMESTAMP)의
     # COALESCE가 타입 오류를 내므로 양쪽을 TEXT로 맞춰 정렬합니다.
@@ -1481,6 +1501,8 @@ def get_dispatched_orders():
 def get_dispatched_order_dates():
     courier = request.args.get('courier', '').strip()
     search = request.args.get('search', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     conn = get_connection()
     cur = conn.cursor()
     query = """SELECT COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''),
@@ -1501,6 +1523,12 @@ def get_dispatched_order_dates():
         )'''
         wild = f'%{search}%'
         params.extend([wild] * 11)
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
+        query += " AND COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10)) >= ?"
+        params.append(date_from)
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
+        query += " AND COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10)) <= ?"
+        params.append(date_to)
     query += ' GROUP BY date ORDER BY date DESC'
     cur.execute(query, params)
     dates = [dict(row) for row in cur.fetchall()]
