@@ -3120,7 +3120,7 @@ def download_shipping_rates_template():
 
     instructions = workbook.create_sheet('안내')
     instructions.append(['배송요금표 엑셀 업로드 안내'])
-    instructions.append(['배송요금표 시트에서 항공요금과 해상요금을 입력한 뒤 업로드하세요.'])
+    instructions.append(['배송요금표 시트에서 항공요금과 해상요금 중 입력할 요금만 작성해 업로드하세요. 한쪽 요금만 입력해도 반영됩니다.'])
     instructions.append(['요금 칸을 비워두면 해당 무게의 기존 요금은 유지됩니다.'])
     instructions.append(['무게 기준은 양식에 있는 값을 그대로 사용해주세요.'])
     instructions.column_dimensions['A'].width = 85
