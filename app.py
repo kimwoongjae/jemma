@@ -297,18 +297,27 @@ def _admin_company_for_shipping_rates(company_id):
 
 @app.route('/api/admin/companies/<int:company_id>/shipping-rates', methods=['GET'])
 def admin_get_company_shipping_rates(company_id):
-    if not _admin_company_for_shipping_rates(company_id):
-        return jsonify({'error': '관리자 권한 또는 활성 거래처 확인이 필요합니다.'}), 403
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.executemany(
-            'INSERT INTO shipping_rates (tenant_id, weight_kg) VALUES (?, ?) ON CONFLICT DO NOTHING',
-            [(company_id, weight) for weight in SHIPPING_WEIGHT_STEPS]
-        )
-        conn.commit()
+        cur.execute('SELECT id FROM companies WHERE id = ? AND active = 1', (company_id,))
+        if not cur.fetchone():
+            return jsonify({'error': '활성 거래처를 찾을 수 없습니다.'}), 404
         cur.execute('SELECT weight_kg, air_rate, sea_rate FROM shipping_rates WHERE tenant_id = ? ORDER BY weight_kg ASC', (company_id,))
-        return jsonify({'rates': [dict(row) for row in cur.fetchall()]})
+        rows = cur.fetchall()
+        existing_weights = {round(float(row['weight_kg']), 1) for row in rows}
+        missing_weights = [weight for weight in SHIPPING_WEIGHT_STEPS if round(float(weight), 1) not in existing_weights]
+        if missing_weights:
+            cur.executemany(
+                'INSERT INTO shipping_rates (tenant_id, weight_kg) VALUES (?, ?) ON CONFLICT DO NOTHING',
+                [(company_id, weight) for weight in missing_weights]
+            )
+            conn.commit()
+            cur.execute('SELECT weight_kg, air_rate, sea_rate FROM shipping_rates WHERE tenant_id = ? ORDER BY weight_kg ASC', (company_id,))
+            rows = cur.fetchall()
+        return jsonify({'rates': [dict(row) for row in rows]})
     finally:
         conn.close()
 
@@ -1016,6 +1025,18 @@ def download_order_upload_template():
         output,
         as_attachment=True,
         download_name='주문업로드_자동열인식_기본양식.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+@app.route('/api/upload/narda-basic-template', methods=['GET'])
+def download_narda_basic_template():
+    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sample_data', '기본양식.xlsx')
+    if not os.path.isfile(template_path):
+        return jsonify({'error': '기본 양식 파일을 찾을 수 없습니다.'}), 404
+    return send_file(
+        template_path,
+        as_attachment=True,
+        download_name='기본양식.xlsx',
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
@@ -3140,26 +3161,43 @@ def upload_shipping_rates_excel():
         'air': {'항공', '항공요금', '항공요금표', 'air', 'airrate'},
         'sea': {'해상', '해상요금', '해상요금표', 'sea', 'searate'}
     }
+
+    def match_header(key, name):
+        if name in aliases[key]:
+            return True
+        if key == 'weight':
+            return name.startswith(('무게', '중량', 'weight'))
+        if key == 'air':
+            return name.startswith('항공') or (name.startswith('air') and 'rate' in name)
+        if key == 'sea':
+            return name.startswith('해상') or (name.startswith('sea') and 'rate' in name)
+        return False
+
     selected_sheet = next((workbook[name] for name in ('배송요금표', 'Shipping Rates') if name in workbook.sheetnames), workbook.active)
-    rows = selected_sheet.iter_rows(values_only=True)
+    # 엑셀에서 서식만 멀리 적용된 파일도 빠르게 처리하도록 실제 요금표 범위만 읽습니다.
+    rows = selected_sheet.iter_rows(
+        max_row=min(selected_sheet.max_row or 500, 500),
+        max_col=min(selected_sheet.max_column or 50, 50),
+        values_only=True
+    )
     header_map = None
     data_rows = []
-    for row in rows:
+    for row_number, row in enumerate(rows, start=1):
         normalized = [normalize_header(value) for value in row]
         if header_map is None:
-            found = {key: next((idx for idx, name in enumerate(normalized) if name in candidates), None)
-                     for key, candidates in aliases.items()}
+            found = {key: next((idx for idx, name in enumerate(normalized) if match_header(key, name)), None)
+                     for key in aliases}
             if all(index is not None for index in found.values()):
                 header_map = found
             continue
-        data_rows.append(row)
+        data_rows.append((row_number, row))
     workbook.close()
     if header_map is None:
         return jsonify({'error': '무게 (kg), 항공요금, 해상요금 열을 찾지 못했습니다. 기본 양식의 첫 행 제목을 확인해주세요.'}), 400
 
     allowed_weights = {round(float(weight), 1) for weight in SHIPPING_WEIGHT_STEPS}
     parsed = {}
-    for row_number, row in enumerate(data_rows, start=2):
+    for row_number, row in data_rows:
         values = [row[header_map[key]] if header_map[key] < len(row) else None for key in ('weight', 'air', 'sea')]
         if all(value is None or str(value).strip() == '' for value in values):
             continue
@@ -3179,7 +3217,10 @@ def upload_shipping_rates_excel():
                 rate_values[key] = None
                 continue
             try:
-                amount = float(value)
+                amount_text = str(value).strip().replace(',', '').replace(' ', '')
+                for unit in ('JPY', 'KRW', '￥', '¥', '₩', '원', '엔'):
+                    amount_text = amount_text.replace(unit, '')
+                amount = float(amount_text)
             except (TypeError, ValueError):
                 return jsonify({'error': f'{row_number}행의 {"항공" if key == "air_rate" else "해상"}요금이 숫자가 아닙니다.'}), 400
             if not math.isfinite(amount) or amount < 0 or amount > 999999999:
