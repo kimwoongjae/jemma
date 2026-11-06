@@ -611,6 +611,24 @@ def _ensure_tenant_indexes(cur):
     ):
         index_name = f'ux_{table}_tenant_key'
         cur.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} ({columns})')
+    # Older deployments may have created shipping_rates before its per-tenant
+    # UNIQUE constraint existed. ON CONFLICT (tenant_id, weight_kg) requires an
+    # actual unique index, so keep one row per company/weight and add it safely.
+    cur.execute('''
+        DELETE FROM shipping_rates
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY tenant_id, weight_kg
+                    ORDER BY updated_at DESC NULLS LAST, id DESC
+                ) AS duplicate_rank
+                FROM shipping_rates
+            ) ranked_rates
+            WHERE duplicate_rank > 1
+        )
+    ''')
+    cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS ux_shipping_rates_tenant_weight
+                   ON shipping_rates (tenant_id, weight_kg)''')
     # A company may intentionally have several option rows mapped to one barcode.
     # Scope lookups by tenant, but do not impose SKU uniqueness on option rows.
     cur.execute('ALTER TABLE product_options DROP CONSTRAINT IF EXISTS product_options_sku_key')
@@ -692,6 +710,22 @@ def _rebuild_sqlite_tenant_uniques(cur):
         cur.execute('''INSERT INTO split_delimiters_tenant_new SELECT id, tenant_id, symbol FROM split_delimiters''')
         cur.execute('DROP TABLE split_delimiters')
         cur.execute('ALTER TABLE split_delimiters_tenant_new RENAME TO split_delimiters')
+
+    cur.execute('''
+        DELETE FROM shipping_rates
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY tenant_id, weight_kg
+                    ORDER BY updated_at DESC, id DESC
+                ) AS duplicate_rank
+                FROM shipping_rates
+            ) ranked_rates
+            WHERE duplicate_rank > 1
+        )
+    ''')
+    cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS ux_shipping_rates_tenant_weight
+                   ON shipping_rates (tenant_id, weight_kg)''')
 
     for table in ('products', 'product_options', 'upload_profiles', 'unregistered_products', 'split_delimiters'):
         cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_tenant_id ON {table} (tenant_id)')
