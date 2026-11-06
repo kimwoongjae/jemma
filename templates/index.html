@@ -3165,8 +3165,23 @@
     }
 
     function formatOrderDate(value) {
-        const match = String(value || '').match(/\d{4}-\d{2}-\d{2}/);
-        return match ? match[0] : '-';
+        const text = String(value || '').trim();
+        if (!text) return '-';
+
+        // ISO timestamps (SQLite and some API responses) already contain the
+        // registration date in the format used by the table.
+        const isoMatch = text.match(/\d{4}-\d{2}-\d{2}/);
+        if (isoMatch) return isoMatch[0];
+
+        // Flask serializes Python datetime values as RFC 1123 strings, e.g.
+        // "Wed, 04 Nov 2026 17:15:54 GMT". Use UTC so the displayed date
+        // matches the stored date and the registration-date filters.
+        const parsed = new Date(text);
+        if (Number.isNaN(parsed.getTime())) return '-';
+        const year = parsed.getUTCFullYear();
+        const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(parsed.getUTCDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     }
 
     let lastCheckedOrderIndex = -1;

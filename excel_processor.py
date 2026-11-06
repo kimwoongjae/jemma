@@ -562,25 +562,32 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
         address = val('address')
         shipping_memo = val('shipping_memo')
 
-        # 업로드 파일에 바코드가 있으면 상품명/옵션명 분할보다 바코드를 우선합니다.
-        if barcode:
+        # 바코드가 함께 있어도 재고 매칭은 업로드된 상품명+옵션명으로 먼저 수행합니다.
+        # 그래야 기재된 이름으로 여러 품목을 분리하고, 재고 마스터에서 각 품목의
+        # 바코드와 기본 옵션수량을 가져올 수 있습니다. 이름 매칭이 전혀 안 될 때만
+        # 업로드 바코드를 단일 품목의 대체 매칭값으로 사용합니다.
+        split_items = split_order_items(
+            product_name, option_name, quantity, conn,
+            opt_rows=opt_rows, prod_rows=prod_rows,
+            rules_cache=rules_cache, delimiters=delimiters
+        )
+
+        if barcode and not any(item.get('matched') for item in split_items):
             barcode_info = find_product_info_by_sku(barcode, opt_rows, prod_rows)
-            try:
-                option_quantity = max(1, int(barcode_info.get('dispatched_quantity') or 1))
-            except (TypeError, ValueError):
-                option_quantity = 1
-            split_items = [{
-                'item_product_name': product_name or barcode_info.get('matched_product_name') or '상품명미상',
-                'item_option_name': option_name or barcode_info.get('matched_option_name') or '단일옵션',
-                'sku': barcode_info.get('sku') or barcode,
-                'product_quantity': quantity,
-                'option_quantity': option_quantity,
-                'quantity': quantity * option_quantity,
-                'matched': barcode_info.get('matched', False)
-            }]
-        else:
-            # 바코드가 없으면 기존 상품명/옵션명 분할 및 자동 매칭을 사용합니다.
-            split_items = split_order_items(product_name, option_name, quantity, conn, opt_rows=opt_rows, prod_rows=prod_rows, rules_cache=rules_cache, delimiters=delimiters)
+            if barcode_info.get('matched'):
+                try:
+                    option_quantity = max(1, int(barcode_info.get('dispatched_quantity') or 1))
+                except (TypeError, ValueError):
+                    option_quantity = 1
+                split_items = [{
+                    'item_product_name': product_name or barcode_info.get('matched_product_name') or '상품명미상',
+                    'item_option_name': option_name or barcode_info.get('matched_option_name') or '단일옵션',
+                    'sku': barcode_info.get('sku') or barcode,
+                    'product_quantity': quantity,
+                    'option_quantity': option_quantity,
+                    'quantity': quantity * option_quantity,
+                    'matched': True
+                }]
 
         # 자동 열 인식/저장 형식은 기존 재고 매칭 결과에서 통관용 상품 정보를 보완합니다.
         # 나르다 기본형식 전용 파서는 이 경로에 들어오지 않아 업로드 값을 그대로 유지합니다.
