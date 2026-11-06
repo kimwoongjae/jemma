@@ -639,10 +639,6 @@ def process_narda_manifest_file(file_path, batch_name=None, tenant_id=None):
         raise ValueError('업체 정보가 없어 주문 파일을 처리할 수 없습니다.')
 
     workbook = load_workbook(file_path, read_only=True, data_only=True)
-    sheet = workbook.active
-    if sheet.max_column < 30:
-        workbook.close()
-        raise ValueError('나르다 기본형식 파일의 열 구성이 올바르지 않습니다. ManifestTemplate 파일인지 확인해주세요.')
 
     def clean(value):
         if value is None:
@@ -654,10 +650,36 @@ def process_narda_manifest_file(file_path, batch_name=None, tenant_id=None):
             text = text[:-2]
         return text
 
-    header_values = [clean(sheet.cell(1, col).value) for col in range(1, 31)]
-    if header_values[6] != '주문번호' or header_values[22] not in ('HS Code', 'HS Code 1') or header_values[23] != 'Item Name':
+    def normalized_header(value):
+        return re.sub(r'\s+', '', clean(value)).casefold()
+
+    # 안내용 시트가 활성화되어 있거나 일부 끝열이 비어 있는 템플릿도 있으므로,
+    # 통합문서의 각 시트 첫 10행에서 ManifestTemplate의 고정 헤더 위치를 찾습니다.
+    sheet = None
+    header_row = None
+    for candidate_sheet in workbook.worksheets:
+        max_header_row = min(max(int(candidate_sheet.max_row or 1), 1), 10)
+        for row_number, values in enumerate(
+            candidate_sheet.iter_rows(min_row=1, max_row=max_header_row, max_col=30, values_only=True),
+            start=1
+        ):
+            header_values = [clean(value) for value in values]
+            if len(header_values) < 30:
+                header_values.extend([''] * (30 - len(header_values)))
+            if (
+                normalized_header(header_values[6]) == '주문번호'
+                and normalized_header(header_values[22]) in ('hscode', 'hscode1')
+                and normalized_header(header_values[23]) == 'itemname'
+            ):
+                sheet = candidate_sheet
+                header_row = row_number
+                break
+        if sheet is not None:
+            break
+
+    if sheet is None:
         workbook.close()
-        raise ValueError('나르다 기본형식은 ManifestTemplate 파일만 지원합니다. 업로드 파일 형식을 확인해주세요.')
+        raise ValueError('ManifestTemplate 형식의 시트를 찾지 못했습니다. 고정 양식에서 주문번호는 G열, HS Code는 W열, Item Name은 X열에 있어야 합니다.')
 
     # ManifestTemplate2의 열 순서는 고정되어 있어 제목 자동 인식이나 재고 검색을 하지 않습니다.
     # 주문 단위 정보는 다음 품목 행에서 비어 있을 수 있으므로 주문 그룹 안에서만 이어받습니다.
@@ -668,7 +690,7 @@ def process_narda_manifest_file(file_path, batch_name=None, tenant_id=None):
     current_order_values = [''] * 30
     meaningful_rows = 0
 
-    for row in sheet.iter_rows(min_row=2, max_col=30, values_only=True):
+    for row in sheet.iter_rows(min_row=header_row + 1, max_col=30, values_only=True):
         values = [clean(value) for value in row]
         if len(values) < 30:
             values.extend([''] * (30 - len(values)))

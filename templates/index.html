@@ -1860,6 +1860,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        initializeDefaultDateRanges();
         loadCompanyHeader();
         refreshAllData();
         setupDragAndDrop();
@@ -1868,6 +1869,29 @@
         loadUploadProfiles();
         initBatchScanRows();
     });
+
+    function initializeDefaultDateRanges() {
+        const today = new Date();
+        const start = new Date(today.getFullYear(), today.getMonth(), 1);
+        start.setMonth(start.getMonth() - 1);
+        start.setDate(Math.min(today.getDate(), new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate()));
+        const toInputDate = date => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+        const fromValue = toInputDate(start);
+        const toValue = toInputDate(today);
+        ['orderDateFrom', 'dispatchedDateFrom'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) input.value = fromValue;
+        });
+        ['orderDateTo', 'dispatchedDateTo'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) input.value = toValue;
+        });
+    }
 
     function refreshAllData(refreshEveryTab = false) {
         loadStats();
