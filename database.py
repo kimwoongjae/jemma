@@ -51,7 +51,15 @@ class PgCursorWrapper:
         is_insert = trans_sql.upper().startswith('INSERT INTO')
         has_returning = 'RETURNING' in trans_sql.upper()
 
-        if is_insert and not has_returning:
+        # shipping_packaging_rates is keyed directly by tenant_id and has no
+        # synthetic `id` column. Never probe it with RETURNING id: PostgreSQL
+        # marks the transaction aborted when that probe fails, so retrying the
+        # original INSERT on the same transaction also fails.
+        insert_table_match = re.match(r"INSERT\s+INTO\s+([\w\"]+)", clean_sql, re.IGNORECASE)
+        insert_table = insert_table_match.group(1).strip('"').lower() if insert_table_match else ''
+        supports_lastrowid = insert_table != 'shipping_packaging_rates'
+
+        if is_insert and not has_returning and supports_lastrowid:
             trans_sql_ret = trans_sql + ' RETURNING id'
             try:
                 if params:
