@@ -165,11 +165,19 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (tenant_id, weight_kg)
         )''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS shipping_packaging_rates (
+            tenant_id INTEGER PRIMARY KEY,
+            additional_package_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+            box_package_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
         _ensure_tenant_schema(cur, postgres=True)
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_status TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS api_dispatch_message TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS manifest_data TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS upload_profile TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS packaging_type TEXT NOT NULL DEFAULT '기본포장'")
+        cur.execute("UPDATE orders SET packaging_type = '기본포장' WHERE packaging_type IS NULL OR TRIM(packaging_type) = ''")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_priority INTEGER NOT NULL DEFAULT 100")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_field TEXT NOT NULL DEFAULT 'upload_order'")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_direction TEXT NOT NULL DEFAULT 'asc'")
@@ -308,6 +316,7 @@ def init_db():
         api_dispatch_message TEXT DEFAULT '',
         manifest_data TEXT DEFAULT '',
         upload_profile TEXT DEFAULT '',
+        packaging_type TEXT NOT NULL DEFAULT '기본포장',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -332,6 +341,9 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN manifest_data TEXT DEFAULT ''")
     if 'upload_profile' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN upload_profile TEXT DEFAULT ''")
+    if 'packaging_type' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN packaging_type TEXT NOT NULL DEFAULT '기본포장'")
+    cur.execute("UPDATE orders SET packaging_type = '기본포장' WHERE packaging_type IS NULL OR TRIM(packaging_type) = ''")
 
     # 기존 출고대기 상태 주문접수로 통일 정규화
     cur.execute("UPDATE orders SET status = '주문접수' WHERE status = '출고대기'")
@@ -411,6 +423,12 @@ def init_db():
         sea_rate REAL NOT NULL DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (tenant_id, weight_kg)
+    )''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS shipping_packaging_rates (
+        tenant_id INTEGER PRIMARY KEY,
+        additional_package_rate REAL NOT NULL DEFAULT 0,
+        box_package_rate REAL NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
 
     # courier_settings 테이블 컬럼 마이그레이션 (narda_id 추가)
@@ -514,7 +532,7 @@ def _ensure_tenant_schema(cur, postgres):
     tenant_tables = (
         'products', 'product_options', 'orders', 'order_items', 'inventory_logs',
         'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
-        'unregistered_products', 'shipping_rates'
+        'unregistered_products', 'shipping_rates', 'shipping_packaging_rates'
     )
     for table in tenant_tables:
         if postgres:
@@ -550,7 +568,7 @@ def _assign_legacy_tenant(cur):
         legacy_tables = (
             'products', 'product_options', 'orders', 'order_items', 'inventory_logs',
             'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters',
-            'unregistered_products', 'shipping_rates'
+            'unregistered_products', 'shipping_rates', 'shipping_packaging_rates'
         )
         has_unassigned_legacy_data = False
         for table in legacy_tables:
@@ -563,7 +581,7 @@ def _assign_legacy_tenant(cur):
         invite_code = secrets.token_urlsafe(8).replace('-', '').replace('_', '')[:10].upper()
         cur.execute('INSERT INTO companies (name, invite_code) VALUES (?, ?)', ('젬마 (기존 데이터)', invite_code))
         tenant_id = cur.lastrowid
-    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products', 'shipping_rates'):
+    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products', 'shipping_rates', 'shipping_packaging_rates'):
         cur.execute(f'UPDATE {table} SET tenant_id = ? WHERE tenant_id IS NULL', (tenant_id,))
     return tenant_id
 
@@ -588,7 +606,7 @@ def _bootstrap_legacy_owner(cur):
 
 
 def _ensure_tenant_indexes(cur):
-    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products', 'shipping_rates'):
+    for table in ('products', 'product_options', 'orders', 'order_items', 'inventory_logs', 'courier_settings', 'upload_profiles', 'bundle_rules', 'split_delimiters', 'unregistered_products', 'shipping_rates', 'shipping_packaging_rates'):
         cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_tenant_id ON {table} (tenant_id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_orders_tenant_status_id ON orders (tenant_id, status, id)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_order_items_tenant_sku_order ON order_items (tenant_id, sku, order_id)')

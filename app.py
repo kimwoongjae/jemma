@@ -317,7 +317,9 @@ def admin_get_company_shipping_rates(company_id):
             conn.commit()
             cur.execute('SELECT weight_kg, air_rate, sea_rate FROM shipping_rates WHERE tenant_id = ? ORDER BY weight_kg ASC', (company_id,))
             rows = cur.fetchall()
-        return jsonify({'rates': [dict(row) for row in rows]})
+        cur.execute('SELECT additional_package_rate, box_package_rate FROM shipping_packaging_rates WHERE tenant_id = ?', (company_id,))
+        packaging = cur.fetchone()
+        return jsonify({'rates': [dict(row) for row in rows], 'packaging_fees': dict(packaging) if packaging else {'additional_package_rate': 0, 'box_package_rate': 0}})
     finally:
         conn.close()
 
@@ -1570,6 +1572,54 @@ def update_order_weight(order_id):
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'weight': weight})
+
+
+ORDER_PACKAGING_TYPES = {'기본포장', '추가포장', '박스포장', '추가+박스포장'}
+
+@app.route('/api/orders/<int:order_id>/packaging', methods=['POST'])
+def update_order_packaging(order_id):
+    data = request.get_json(silent=True) or {}
+    packaging_type = str(data.get('packaging_type') or '').strip()
+    if packaging_type not in ORDER_PACKAGING_TYPES:
+        return jsonify({'error': '포장 방식을 선택해주세요.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('UPDATE orders SET packaging_type = ? WHERE id = ? AND tenant_id = ?',
+                    (packaging_type, order_id, g.company_id))
+        if cur.rowcount == 0:
+            return jsonify({'error': '주문을 찾을 수 없습니다.'}), 404
+        conn.commit()
+        return jsonify({'status': 'success', 'packaging_type': packaging_type})
+    finally:
+        conn.close()
+
+
+@app.route('/api/orders/bulk-packaging', methods=['POST'])
+def bulk_update_order_packaging():
+    data = request.get_json(silent=True) or {}
+    order_ids = data.get('order_ids') or []
+    packaging_type = str(data.get('packaging_type') or '').strip()
+    if packaging_type not in ORDER_PACKAGING_TYPES:
+        return jsonify({'error': '포장 방식을 선택해주세요.'}), 400
+    if not isinstance(order_ids, list) or not order_ids:
+        return jsonify({'error': '포장 방식을 적용할 주문을 선택하세요.'}), 400
+    ids = []
+    try:
+        ids = list(dict.fromkeys(int(order_id) for order_id in order_ids))
+    except (TypeError, ValueError):
+        return jsonify({'error': '주문 선택 정보가 올바르지 않습니다.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        marks = ','.join(['?'] * len(ids))
+        cur.execute(f'UPDATE orders SET packaging_type = ? WHERE tenant_id = ? AND id IN ({marks})',
+                    [packaging_type, g.company_id] + ids)
+        updated_count = cur.rowcount
+        conn.commit()
+        return jsonify({'status': 'success', 'updated_count': updated_count, 'packaging_type': packaging_type})
+    finally:
+        conn.close()
 
 @app.route('/api/orders/<int:order_id>/edit', methods=['POST'])
 def edit_order(order_id):
@@ -3281,7 +3331,10 @@ def get_shipping_rates():
         conn.commit()
         cur.execute('''SELECT weight_kg, air_rate, sea_rate FROM shipping_rates
                        WHERE tenant_id = ? ORDER BY weight_kg ASC''', (g.company_id,))
-        return jsonify({'rates': [dict(row) for row in cur.fetchall()]})
+        rates = [dict(row) for row in cur.fetchall()]
+        cur.execute('SELECT additional_package_rate, box_package_rate FROM shipping_packaging_rates WHERE tenant_id = ?', (g.company_id,))
+        packaging = cur.fetchone()
+        return jsonify({'rates': rates, 'packaging_fees': dict(packaging) if packaging else {'additional_package_rate': 0, 'box_package_rate': 0}})
     finally:
         conn.close()
 
@@ -3294,6 +3347,20 @@ def save_shipping_rates():
     rates = data.get('rates')
     if not isinstance(rates, list):
         return jsonify({'error': '요금표 데이터 형식이 올바르지 않습니다.'}), 400
+
+    packaging_fees = data.get('packaging_fees')
+    normalized_packaging = None
+    if packaging_fees is not None:
+        if not isinstance(packaging_fees, dict):
+            return jsonify({'error': '포장 요금 데이터 형식이 올바르지 않습니다.'}), 400
+        try:
+            additional_fee = float(packaging_fees.get('additional_package_rate') or 0)
+            box_fee = float(packaging_fees.get('box_package_rate') or 0)
+        except (TypeError, ValueError):
+            return jsonify({'error': '포장 요금은 숫자로 입력해주세요.'}), 400
+        if not all(math.isfinite(value) and 0 <= value <= 999999999 for value in (additional_fee, box_fee)):
+            return jsonify({'error': '포장 요금은 0 이상 999,999,999 이하 숫자로 입력해주세요.'}), 400
+        normalized_packaging = (g.company_id, additional_fee, box_fee)
 
     allowed_weights = {round(float(weight), 1) for weight in SHIPPING_WEIGHT_STEPS}
     normalized = []
@@ -3325,8 +3392,17 @@ def save_shipping_rates():
                 sea_rate = excluded.sea_rate,
                 updated_at = CURRENT_TIMESTAMP
         ''', normalized)
+        if normalized_packaging:
+            cur.execute('''
+                INSERT INTO shipping_packaging_rates (tenant_id, additional_package_rate, box_package_rate, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT (tenant_id) DO UPDATE SET
+                    additional_package_rate = excluded.additional_package_rate,
+                    box_package_rate = excluded.box_package_rate,
+                    updated_at = CURRENT_TIMESTAMP
+            ''', normalized_packaging)
         conn.commit()
-        return jsonify({'status': 'success', 'saved_count': len(normalized)})
+        return jsonify({'status': 'success', 'saved_count': len(normalized), 'packaging_saved': normalized_packaging is not None})
     except Exception as e:
         conn.rollback()
         app.logger.exception('Shipping rate save failed')

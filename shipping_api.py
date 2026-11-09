@@ -557,6 +557,9 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({placeholders}) ORDER BY id ASC', [tenant_id] + order_ids_for_items)
         for item in cur.fetchall():
             items_by_order.setdefault(item['order_id'], []).append(dict(item))
+    cur.execute('SELECT additional_package_rate, box_package_rate FROM shipping_packaging_rates WHERE tenant_id = ?', (tenant_id,))
+    packaging_rate_row = cur.fetchone()
+    packaging_rates = dict(packaging_rate_row) if packaging_rate_row else {'additional_package_rate': 0, 'box_package_rate': 0}
     conn.close()
 
     wb = openpyxl.Workbook()
@@ -592,8 +595,19 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
             return f'{fallback}개'
         return '\n'.join(f'{value_getter(item)}개' for item in items)
 
+    def packaging_fee(order):
+        package_type = order['packaging_type'] if 'packaging_type' in order.keys() else '기본포장'
+        amount = 0
+        if package_type in ('추가포장', '추가+박스포장'):
+            amount += float(packaging_rates.get('additional_package_rate') or 0)
+        if package_type in ('박스포장', '추가+박스포장'):
+            amount += float(packaging_rates.get('box_package_rate') or 0)
+        return amount
+
     column_definitions = {
         'weight': ('무게 (kg)', lambda o, its: o['weight'] if ('weight' in o.keys() and o['weight']) else 0.0),
+        'packaging': ('포장 방식', lambda o, its: o['packaging_type'] if ('packaging_type' in o.keys() and o['packaging_type']) else '기본포장'),
+        'shipping_fee': ('포장 추가요금', lambda o, its: packaging_fee(o)),
         'order_no': ('주문번호', lambda o, its: o['order_no'] or ''),
         'dispatched_at': ('발송 일시', lambda o, its: o['dispatched_at'] or ''),
         'recipient': ('수취인 / 연락처', lambda o, its: ' / '.join(value for value in [o['recipient_name'] or '', o['recipient_phone1'] or ''] if value)),
@@ -622,7 +636,7 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
     thin_gray = Side(style='thin', color='D7DEE7')
     cell_border = Border(left=thin_gray, right=thin_gray, top=thin_gray, bottom=thin_gray)
     column_widths = {
-        'weight': 11, 'order_no': 24, 'dispatched_at': 19, 'recipient': 23,
+        'weight': 11, 'packaging': 18, 'shipping_fee': 16, 'order_no': 24, 'dispatched_at': 19, 'recipient': 23,
         'customs_id': 19, 'address': 42, 'product': 52,
         'product_quantity': 13, 'option_quantity': 13, 'buy_quantity': 13,
         'courier': 16, 'tracking_no': 19, 'status': 14
@@ -637,7 +651,7 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         ws.column_dimensions[cell.column_letter].width = column_widths.get(key, 16)
     ws.row_dimensions[1].height = 26
 
-    centered_keys = {'weight', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier', 'tracking_no', 'status'}
+    centered_keys = {'weight', 'packaging', 'shipping_fee', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier', 'tracking_no', 'status'}
     for o in orders:
         row_items = items_by_order.get(o['id'], [])
         row_idx = ws.max_row + 1
