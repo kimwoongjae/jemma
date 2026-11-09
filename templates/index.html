@@ -85,10 +85,12 @@
             vertical-align: middle;
         }
         /* 주문 목록은 넓은 열 폭을 유지하고, 작은 화면에서는 표 안에서 좌우로 이동합니다. */
-        #ordersTable { min-width: 2370px; table-layout: fixed; }
+        #ordersTable { min-width: 2540px; table-layout: fixed; }
         #ordersTable [data-column-key="selection"] { width: 50px; }
         #ordersTable [data-column-key="registered_at"] { width: 150px; }
         #ordersTable [data-column-key="weight"] { width: 105px; }
+        #ordersTable [data-column-key="packaging"] { width: 170px; }
+        .order-packaging-select { min-width: 145px; }
         #ordersTable [data-column-key="order_no"] { width: 195px; }
         #ordersTable [data-column-key="recipient"] { width: 165px; }
         #ordersTable [data-column-key="customs_id"] { width: 185px; }
@@ -235,7 +237,7 @@
             }
             .table-horizontal-scrollbar { height: 20px; margin-bottom: 5px; }
             .table-horizontal-scrollbar::-webkit-scrollbar { height: 16px; }
-            #ordersTable { min-width: 2370px; }
+            #ordersTable { min-width: 2540px; }
             #customsErrorTable { min-width: 900px; }
             #dispatchedTable { min-width: 1200px; }
             #inventoryTable, #logsTable { min-width: 760px; }
@@ -536,13 +538,21 @@
                                 </button>
                             </div>
                         </div>
-                        <div class="col-xl-3 col-md-6">
-                            <div class="input-group">
-                                <span class="input-group-text bg-light text-muted small"><i class="fa-solid fa-box-open me-1"></i>포장</span>
-                                <select id="bulkPackagingSelect" class="form-select" aria-label="선택 주문 포장 방식">
-                                    <option value="기본포장">기본포장</option><option value="추가포장">추가포장</option><option value="박스포장">박스포장</option><option value="추가+박스포장">추가+박스포장</option>
-                                </select>
-                                <button class="btn btn-outline-primary text-nowrap" onclick="applyBulkPackaging()">선택 적용</button>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-12">
+                            <div class="border rounded bg-light p-2 d-flex flex-wrap align-items-center gap-2">
+                                <strong class="text-nowrap"><i class="fa-solid fa-box-open text-primary me-1"></i>선택 주문 포장 방식</strong>
+                                <span class="small text-muted">왼쪽 체크박스로 주문을 선택한 뒤 적용하세요.</span>
+                                <div class="input-group ms-md-auto" style="width:min(100%, 480px)">
+                                    <select id="bulkPackagingSelect" class="form-select" aria-label="선택 주문 포장 방식">
+                                        <option value="기본포장">기본포장</option>
+                                        <option value="추가포장">추가포장</option>
+                                        <option value="박스포장">박스포장</option>
+                                        <option value="추가+박스포장">추가+박스포장</option>
+                                    </select>
+                                    <button class="btn btn-primary text-nowrap" type="button" onclick="applyBulkPackaging()"><i class="fa-solid fa-check me-1"></i>선택 건 적용</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -618,7 +628,7 @@
                                     </th>
                                     <th data-column-key="registered_at" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">등록일</th>
                                     <th data-column-key="weight" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">무게 (kg)</th>
-                                    <th data-column-key="packaging" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">포장 방식</th>
+                                    <th data-column-key="packaging" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" class="text-center" style="width:170px; cursor: grab;" title="주문별 포장 방식을 지정합니다">포장 방식</th>
                                     <th data-column-key="order_no" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">주문번호</th>
                                     <th data-column-key="recipient" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">수취인 / 연락처</th>
                                     <th data-column-key="customs_id" draggable="true" ondragstart="startOrderColumnDrag(event)" ondragover="allowOrderColumnDrop(event)" ondrop="dropOrderColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 바꾸면 자동 저장됩니다">통관부호 / 유효성</th>

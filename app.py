@@ -22,6 +22,15 @@ from shipping_api import (
 
 SHIPPING_WEIGHT_STEPS = [i / 2 for i in range(1, 61)] + list(range(35, 101, 5))
 
+
+def complete_shipping_rate_rows(rows):
+    """Return the configured weight grid, filling unregistered prices in memory."""
+    existing = {round(float(row['weight_kg']), 1): dict(row) for row in rows}
+    return [
+        existing.get(weight, {'weight_kg': weight, 'air_rate': 0, 'sea_rate': 0})
+        for weight in SHIPPING_WEIGHT_STEPS
+    ]
+
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(32)
 app.config.update(
@@ -306,17 +315,7 @@ def admin_get_company_shipping_rates(company_id):
         if not cur.fetchone():
             return jsonify({'error': '활성 거래처를 찾을 수 없습니다.'}), 404
         cur.execute('SELECT weight_kg, air_rate, sea_rate FROM shipping_rates WHERE tenant_id = ? ORDER BY weight_kg ASC', (company_id,))
-        rows = cur.fetchall()
-        existing_weights = {round(float(row['weight_kg']), 1) for row in rows}
-        missing_weights = [weight for weight in SHIPPING_WEIGHT_STEPS if round(float(weight), 1) not in existing_weights]
-        if missing_weights:
-            cur.executemany(
-                'INSERT INTO shipping_rates (tenant_id, weight_kg) VALUES (?, ?) ON CONFLICT DO NOTHING',
-                [(company_id, weight) for weight in missing_weights]
-            )
-            conn.commit()
-            cur.execute('SELECT weight_kg, air_rate, sea_rate FROM shipping_rates WHERE tenant_id = ? ORDER BY weight_kg ASC', (company_id,))
-            rows = cur.fetchall()
+        rows = complete_shipping_rate_rows(cur.fetchall())
         cur.execute('SELECT additional_package_rate, box_package_rate FROM shipping_packaging_rates WHERE tenant_id = ?', (company_id,))
         packaging = cur.fetchone()
         return jsonify({'rates': [dict(row) for row in rows], 'packaging_fees': dict(packaging) if packaging else {'additional_package_rate': 0, 'box_package_rate': 0}})
@@ -3324,14 +3323,9 @@ def get_shipping_rates():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.executemany(
-            'INSERT INTO shipping_rates (tenant_id, weight_kg) VALUES (?, ?) ON CONFLICT DO NOTHING',
-            [(g.company_id, weight) for weight in SHIPPING_WEIGHT_STEPS]
-        )
-        conn.commit()
         cur.execute('''SELECT weight_kg, air_rate, sea_rate FROM shipping_rates
                        WHERE tenant_id = ? ORDER BY weight_kg ASC''', (g.company_id,))
-        rates = [dict(row) for row in cur.fetchall()]
+        rates = complete_shipping_rate_rows(cur.fetchall())
         cur.execute('SELECT additional_package_rate, box_package_rate FROM shipping_packaging_rates WHERE tenant_id = ?', (g.company_id,))
         packaging = cur.fetchone()
         return jsonify({'rates': rates, 'packaging_fees': dict(packaging) if packaging else {'additional_package_rate': 0, 'box_package_rate': 0}})
