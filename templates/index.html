@@ -247,6 +247,10 @@
             .upload-dropzone h5 { font-size: 13px; line-height: 1.3; }
             .upload-dropzone p { display: none; }
             #ordersToolbarCard { max-height: 34dvh; }
+            body.orders-workspace-active { overflow-y: auto; }
+            #orders-pane.orders-workspace { height: auto !important; min-height: calc(100dvh - 360px); overflow: visible; display: block; }
+            #ordersToolbarCard { position: sticky; top: 0; z-index: 1030; max-height: 40dvh; }
+            #ordersDataCard .orders-table-scroll { height: 42dvh; max-height: 42dvh; min-height: 220px; }
             .card-body { padding: 12px !important; }
             .order-search-col, .order-weight-bulk-col { flex: 0 0 100%; width: 100%; }
             .order-filter-half-col { flex: 0 0 50%; width: 50%; }

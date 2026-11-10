@@ -112,7 +112,7 @@
                 <div class="p-3 p-md-4">
                     <div class="row g-3 align-items-end">
                         <div class="col-12 col-lg-4"><label for="adminInventoryCompany" class="form-label fw-semibold">거래처</label><select id="adminInventoryCompany" class="form-select" onchange="onAdminInventoryCompanyChange()"><option value="">거래처를 선택하세요</option></select></div>
-                        <div class="col-12 col-lg-5"><label for="adminInventoryBarcode" class="form-label fw-semibold">바코드</label><div class="input-group"><input id="adminInventoryBarcode" class="form-control" autocomplete="off" placeholder="바코드를 입력하거나 스캔하세요" onkeydown="if(event.key==='Enter'){event.preventDefault();lookupAdminInventoryBarcode()}"><button class="btn btn-outline-primary d-lg-none" type="button" onclick="startAdminInventoryCamera()" aria-label="카메라로 바코드 스캔"><i class="bi bi-camera-fill"></i> 카메라</button><button class="btn btn-primary" type="button" onclick="lookupAdminInventoryBarcode()"><i class="bi bi-search me-1"></i>상품 조회</button></div></div>
+                        <div class="col-12 col-lg-5"><label for="adminInventoryBarcode" class="form-label fw-semibold">바코드 / QR 코드</label><div class="input-group"><input id="adminInventoryBarcode" class="form-control" autocomplete="off" placeholder="바코드 또는 QR 코드를 입력하거나 스캔하세요" onkeydown="if(event.key==='Enter'){event.preventDefault();lookupAdminInventoryBarcode()}"><button class="btn btn-outline-primary d-lg-none" type="button" onclick="startAdminInventoryCamera()" aria-label="카메라로 바코드 또는 QR 코드 스캔"><i class="bi bi-camera-fill"></i> 카메라</button><button class="btn btn-primary" type="button" onclick="lookupAdminInventoryBarcode()"><i class="bi bi-search me-1"></i>상품 조회</button></div></div>
                         <div class="col-12 col-lg-3"><label for="adminInventoryQuantity" class="form-label fw-semibold">수량</label><input id="adminInventoryQuantity" class="form-control" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
                         <div class="col-12"><label for="adminInventoryMemo" class="form-label fw-semibold">메모 <span class="text-secondary fw-normal">(선택)</span></label><input id="adminInventoryMemo" class="form-control" maxlength="250" placeholder="예: 정기 입고, 파손 출고"></div>
                     </div>
@@ -359,6 +359,8 @@ async function startAdminInventoryCamera(){
             adminInventoryScanBusy=true;
             const input=document.getElementById('adminInventoryBarcode');
             input.value=String(value).trim();
+            adminInventoryProduct=null;
+            setAdminInventoryActions(false);
             stopAdminInventoryCamera();
             input.focus();
             input.select();
