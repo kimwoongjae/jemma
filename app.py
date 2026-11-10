@@ -279,6 +279,124 @@ def admin_shipments_page():
     return render_template('admin.html', active_page='shipments')
 
 
+@app.route('/admin/inventory', methods=['GET'])
+def admin_inventory_page():
+    if session.get('account_role') != 'admin':
+        return redirect('/login')
+    return render_template('admin.html', active_page='inventory')
+
+
+def _admin_inventory_company_exists(cur, company_id):
+    cur.execute('SELECT id FROM companies WHERE id = ? AND active = 1', (company_id,))
+    return cur.fetchone()
+
+
+@app.route('/api/admin/companies/<int:company_id>/inventory/search', methods=['GET'])
+def admin_inventory_search(company_id):
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    barcode = str(request.args.get('barcode') or '').strip()
+    if not barcode:
+        return jsonify({'error': '바코드를 입력해주세요.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        if not _admin_inventory_company_exists(cur, company_id):
+            return jsonify({'error': '활성 거래처를 찾을 수 없습니다.'}), 404
+        cur.execute('''SELECT id, sku, product_name, option_name, english_name, hs_code,
+                              unit_price, stock_quantity, product_url
+                       FROM products WHERE tenant_id = ? AND sku = ? LIMIT 1''',
+                    (company_id, barcode))
+        product = cur.fetchone()
+        if not product:
+            return jsonify({'found': False, 'message': '해당 거래처 재고에 등록되지 않은 바코드입니다.'})
+        return jsonify({'found': True, 'product': dict(product)})
+    finally:
+        conn.close()
+
+
+@app.route('/api/admin/companies/<int:company_id>/inventory/movement', methods=['POST'])
+def admin_inventory_movement(company_id):
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    data = request.get_json(silent=True) or {}
+    barcode = str(data.get('barcode') or '').strip()
+    movement = str(data.get('movement') or '').strip()
+    memo = str(data.get('memo') or '').strip()[:250]
+    try:
+        raw_quantity = data.get('quantity')
+        numeric_quantity = float(raw_quantity)
+        if not math.isfinite(numeric_quantity) or not numeric_quantity.is_integer():
+            raise ValueError('quantity must be an integer')
+        quantity = int(numeric_quantity)
+    except (TypeError, ValueError):
+        return jsonify({'error': '수량은 1 이상의 정수로 입력해주세요.'}), 400
+    if not barcode:
+        return jsonify({'error': '바코드를 입력해주세요.'}), 400
+    if quantity <= 0:
+        return jsonify({'error': '수량은 1 이상이어야 합니다.'}), 400
+    if movement not in ('입고', '출고'):
+        return jsonify({'error': '입고 또는 출고를 선택해주세요.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        if not _admin_inventory_company_exists(cur, company_id):
+            return jsonify({'error': '활성 거래처를 찾을 수 없습니다.'}), 404
+        cur.execute('SELECT id, sku, product_name, option_name, stock_quantity FROM products WHERE tenant_id = ? AND sku = ? LIMIT 1',
+                    (company_id, barcode))
+        product = cur.fetchone()
+        if not product:
+            return jsonify({'error': '해당 거래처 재고에서 바코드 상품을 찾을 수 없습니다.'}), 404
+        current_stock = int(product['stock_quantity'] or 0)
+        if movement == '출고' and quantity > current_stock:
+            return jsonify({'error': f'재고가 부족합니다. 현재 재고는 {current_stock}개입니다.'}), 409
+        change_qty = quantity if movement == '입고' else -quantity
+        new_stock = current_stock + change_qty
+        cur.execute('UPDATE products SET stock_quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?',
+                    (new_stock, product['id'], company_id))
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cur.execute('''INSERT INTO inventory_logs
+                       (tenant_id, product_id, sku, product_name, option_name, change_type, change_qty,
+                        resulting_stock, memo, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (company_id, product['id'], product['sku'], product['product_name'],
+                     product['option_name'] or '', movement, change_qty, new_stock,
+                     memo or f'관리자 바코드 {movement}', now_str))
+        conn.commit()
+        return jsonify({'status': 'success', 'movement': movement, 'quantity': quantity,
+                        'stock_quantity': new_stock, 'product_name': product['product_name'],
+                        'sku': product['sku'], 'created_at': now_str})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Admin inventory movement failed for company %s', company_id)
+        return jsonify({'error': '입출고 저장에 실패했습니다. 다시 시도해주세요.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/admin/companies/<int:company_id>/inventory/logs', methods=['GET'])
+def admin_inventory_logs(company_id):
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    try:
+        limit = min(max(int(request.args.get('limit', 100)), 1), 500)
+    except (TypeError, ValueError):
+        limit = 100
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        if not _admin_inventory_company_exists(cur, company_id):
+            return jsonify({'error': '활성 거래처를 찾을 수 없습니다.'}), 404
+        cur.execute('''SELECT id, sku, product_name, option_name, change_type, change_qty,
+                              resulting_stock, memo, created_at
+                       FROM inventory_logs WHERE tenant_id = ? ORDER BY id DESC LIMIT ?''',
+                    (company_id, limit))
+        return jsonify([dict(row) for row in cur.fetchall()])
+    finally:
+        conn.close()
+
+
 @app.route('/admin/companies/<int:company_id>/shipping-rates', methods=['GET'])
 def admin_company_shipping_rates_page(company_id):
     if session.get('account_role') != 'admin':
