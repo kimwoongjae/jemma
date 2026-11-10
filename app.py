@@ -1381,6 +1381,8 @@ def get_orders():
                     'display_option_name': row['option_name'] or ''
                 })
             for order in orders:
+                if int(order.get('reship_clear_items') or 0):
+                    continue
                 for item in order.get('items', []):
                     display_names = display_names_by_sku.get(str(item.get('sku') or '').strip())
                     if display_names:
@@ -1614,6 +1616,96 @@ def get_dispatched_orders():
 
     conn.close()
     return jsonify(orders)
+
+@app.route('/api/dispatched-orders/reship', methods=['POST'])
+def reship_dispatched_orders():
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get('order_ids') or []
+    clear_items = bool(data.get('clear_items'))
+    try:
+        order_ids = list(dict.fromkeys(int(value) for value in raw_ids if str(value).isdigit()))
+    except (TypeError, ValueError):
+        order_ids = []
+    if not order_ids:
+        return jsonify({'error': '재발송할 발송 건을 선택하세요.'}), 400
+    if len(order_ids) > 500:
+        return jsonify({'error': '한 번에 재발송할 수 있는 건은 최대 500건입니다.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        placeholders = ','.join(['?'] * len(order_ids))
+        cur.execute(f'''SELECT * FROM orders
+            WHERE tenant_id = ? AND id IN ({placeholders})
+              AND (status IN ('출고완료', '송장발급')
+                   OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))''',
+            [g.company_id] + order_ids)
+        selected = [dict(row) for row in cur.fetchall()]
+        if len(selected) != len(order_ids):
+            return jsonify({'error': '선택한 발송 건 중 일부를 찾지 못했습니다. 목록을 새로고침한 뒤 다시 선택하세요.'}), 409
+
+        updated = []
+        for order in selected:
+            old_no = str(order.get('order_no') or '').strip()
+            match = re.match(r'^(.*?)-(\d+)$', old_no)
+            base_no = match.group(1) if match else old_no
+            next_suffix = int(match.group(2)) + 1 if match else 1
+            new_no = f'{base_no}-{next_suffix}'
+            while True:
+                cur.execute('''SELECT id FROM orders
+                    WHERE tenant_id = ? AND order_no = ? AND id != ? LIMIT 1''',
+                    (g.company_id, new_no, order['id']))
+                if not cur.fetchone():
+                    break
+                next_suffix += 1
+                new_no = f'{base_no}-{next_suffix}'
+
+            original_manifest = order.get('manifest_data') or ''
+            if clear_items:
+                try:
+                    manifest = json.loads(original_manifest) if original_manifest else {}
+                    if not isinstance(manifest, dict):
+                        manifest = {}
+                except (TypeError, ValueError):
+                    manifest = {}
+                for key in ('Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', 'HS Code 1'):
+                    manifest[key] = ''
+                original_manifest = json.dumps(manifest, ensure_ascii=False)
+
+            cur.execute('''UPDATE orders SET order_no = ?, tracking_no = '', invoice_pdf_url = '',
+                status = '주문접수', dispatched_at = '', api_dispatch_status = '', api_dispatch_message = '',
+                reship_clear_items = ?, original_product_name = CASE WHEN ? THEN '' ELSE original_product_name END,
+                original_option_name = CASE WHEN ? THEN '' ELSE original_option_name END,
+                manifest_data = CASE WHEN ? THEN ? ELSE manifest_data END
+                WHERE tenant_id = ? AND id = ?''',
+                (new_no, 1 if clear_items else 0, clear_items, clear_items, clear_items,
+                 original_manifest, g.company_id, order['id']))
+            cur.execute('''UPDATE order_items SET order_no = ?, status = '주문접수', stock_deducted = 0
+                WHERE tenant_id = ? AND order_id = ?''', (new_no, g.company_id, order['id']))
+            if clear_items:
+                cur.execute('SELECT id, manifest_data FROM order_items WHERE tenant_id = ? AND order_id = ?',
+                            (g.company_id, order['id']))
+                for item in cur.fetchall():
+                    try:
+                        manifest = json.loads(item['manifest_data'] or '{}')
+                        if not isinstance(manifest, dict):
+                            manifest = {}
+                    except (TypeError, ValueError):
+                        manifest = {}
+                    for key in ('Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', 'HS Code 1'):
+                        manifest[key] = ''
+                    cur.execute('UPDATE order_items SET manifest_data = ? WHERE tenant_id = ? AND order_id = ? AND id = ?',
+                                (json.dumps(manifest, ensure_ascii=False), g.company_id, order['id'], item['id']))
+            updated.append({'id': order['id'], 'old_order_no': old_no, 'order_no': new_no})
+
+        conn.commit()
+        return jsonify({'status': 'success', 'updated_count': len(updated), 'items_cleared': clear_items, 'orders': updated})
+    except Exception as e:
+        conn.rollback()
+        app.logger.exception('Reship failed')
+        return jsonify({'error': f'재발송 처리 중 오류가 발생했습니다: {str(e)}'}), 500
+    finally:
+        conn.close()
 
 @app.route('/api/dispatched-orders/dates', methods=['GET'])
 def get_dispatched_order_dates():

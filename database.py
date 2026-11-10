@@ -185,6 +185,7 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS manifest_data TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS upload_profile TEXT DEFAULT ''")
         cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS packaging_type TEXT NOT NULL DEFAULT '기본포장'")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS reship_clear_items INTEGER NOT NULL DEFAULT 0")
         cur.execute("UPDATE orders SET packaging_type = '기본포장' WHERE packaging_type IS NULL OR TRIM(packaging_type) = ''")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_priority INTEGER NOT NULL DEFAULT 100")
         cur.execute("ALTER TABLE upload_profiles ADD COLUMN IF NOT EXISTS sort_field TEXT NOT NULL DEFAULT 'upload_order'")
@@ -325,6 +326,7 @@ def init_db():
         manifest_data TEXT DEFAULT '',
         upload_profile TEXT DEFAULT '',
         packaging_type TEXT NOT NULL DEFAULT '기본포장',
+        reship_clear_items INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -351,6 +353,8 @@ def init_db():
         cur.execute("ALTER TABLE orders ADD COLUMN upload_profile TEXT DEFAULT ''")
     if 'packaging_type' not in order_cols:
         cur.execute("ALTER TABLE orders ADD COLUMN packaging_type TEXT NOT NULL DEFAULT '기본포장'")
+    if 'reship_clear_items' not in order_cols:
+        cur.execute("ALTER TABLE orders ADD COLUMN reship_clear_items INTEGER NOT NULL DEFAULT 0")
     cur.execute("UPDATE orders SET packaging_type = '기본포장' WHERE packaging_type IS NULL OR TRIM(packaging_type) = ''")
 
     # 기존 출고대기 상태 주문접수로 통일 정규화

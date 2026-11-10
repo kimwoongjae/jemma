@@ -200,6 +200,18 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
         items = []
         for raw_item in raw_items:
             it = dict(raw_item)
+            if int(ord_dict.get('reship_clear_items') or 0):
+                # 품목정보 삭제 재발송은 재고 차감용 SKU/수량은 보존하되,
+                # 송장 통관 품목에는 이전 상품명·가격·HS 정보를 다시 채우지 않습니다.
+                it['english_name'] = 'Item'
+                it['hs_code'] = '630690'
+                it['unit_price'] = 10.0
+                it['product_url'] = ''
+                it['item_detail'] = ''
+                it['manifest_mode'] = True
+                it['manifest_amount'] = ''
+                items.append(it)
+                continue
             try:
                 manifest_item = json.loads(it.get('manifest_data') or '{}')
             except (TypeError, ValueError):
