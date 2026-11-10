@@ -78,7 +78,7 @@
         .upload-dropzone h5 { font-size: 14px; margin: 0; }
         .upload-dropzone p { margin: 0; }
         /* 주문 화면은 업로드·작업 도구를 화면에 두고 주문 행만 내부에서 스크롤합니다. */
-        #orders-pane.orders-workspace { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+        #orders-pane.orders-workspace.active.show { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
         #ordersUploadCard, #ordersToolbarCard { flex: 0 0 auto; }
         #ordersUploadCard { margin-bottom: 8px !important; }
         #ordersUploadCard .card-body { padding: 10px !important; }
@@ -248,7 +248,7 @@
             .upload-dropzone p { display: none; }
             #ordersToolbarCard { max-height: 34dvh; }
             body.orders-workspace-active { overflow-y: auto; }
-            #orders-pane.orders-workspace { height: auto !important; min-height: calc(100dvh - 360px); overflow: visible; display: block; }
+            #orders-pane.orders-workspace.active.show { height: auto !important; min-height: calc(100dvh - 360px); overflow: visible; display: block; }
             #ordersToolbarCard { position: sticky; top: 0; z-index: 1030; max-height: 40dvh; }
             #ordersDataCard .orders-table-scroll { height: 42dvh; max-height: 42dvh; min-height: 220px; }
             .card-body { padding: 12px !important; }
@@ -1937,7 +1937,10 @@
         const isOrdersActive = pane?.classList.contains('active') && pane?.classList.contains('show');
         document.body.classList.toggle('orders-workspace-active', Boolean(isOrdersActive));
         if (!isOrdersActive) {
-            if (pane) pane.style.height = '';
+            if (pane) {
+                pane.style.height = '';
+                pane.classList.remove('orders-workspace');
+            }
             return;
         }
         pane.classList.add('orders-workspace');
