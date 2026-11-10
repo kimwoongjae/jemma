@@ -1723,13 +1723,22 @@
                         </div>
                         <div class="col-12 d-none" id="editManifestDetailsSection">
                             <hr class="my-1">
-                            <h6 class="fw-bold mb-2"><i class="fa-solid fa-file-excel me-1 text-success"></i>기본형식 업로드 상세 품목</h6>
+                            <div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-2">
+                                <h6 class="fw-bold mb-0"><i class="fa-solid fa-file-excel me-1 text-success"></i>상품정보</h6>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="addEditManifestItem()"><i class="fa-solid fa-plus me-1"></i>상품 추가</button>
+                            </div>
+                            <div class="row g-2 mb-2">
+                                <div class="col-sm-4 col-md-3">
+                                    <label class="form-label small fw-bold mb-1" for="editManifestCtns">CTNS (주문당 1개)</label>
+                                    <input type="text" class="form-control form-control-sm" id="editManifestCtns" placeholder="CTNS">
+                                </div>
+                            </div>
                             <div class="table-responsive border rounded">
                                 <table class="table table-sm table-bordered table-striped align-middle mb-0 text-nowrap">
                                     <thead class="table-light">
                                         <tr>
-                                            <th>CTNS</th><th>HS Code</th><th>Item Name</th><th>아이템상세정보</th>
-                                            <th>Unit Price</th><th>Piece</th><th>Amount</th><th>상품 URL</th><th>원산지</th>
+                                            <th>HS Code</th><th>Item Name</th><th>아이템상세정보</th>
+                                            <th>Unit Price</th><th>Piece</th><th>Amount</th><th>상품 URL</th><th>원산지</th><th>관리</th>
                                         </tr>
                                     </thead>
                                     <tbody id="editManifestDetailsBody"></tbody>
@@ -1962,11 +1971,11 @@
         const toValue = toInputDate(today);
         ['orderDateFrom', 'dispatchedDateFrom'].forEach(id => {
             const input = document.getElementById(id);
-            if (input) input.value = fromValue;
+            if (input && !input.value) input.value = fromValue;
         });
         ['orderDateTo', 'dispatchedDateTo'].forEach(id => {
             const input = document.getElementById(id);
-            if (input) input.value = toValue;
+            if (input && !input.value) input.value = toValue;
         });
     }
 
@@ -2707,7 +2716,12 @@
     function renderEditManifestDetails(order) {
         const section = document.getElementById('editManifestDetailsSection');
         const body = document.getElementById('editManifestDetailsBody');
-        const fields = ['CTNS', 'HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'];
+        const fields = ['HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'];
+        let orderManifest = order.manifest_data || {};
+        if (typeof orderManifest === 'string') {
+            try { orderManifest = JSON.parse(orderManifest || '{}'); } catch (_) { orderManifest = {}; }
+        }
+        document.getElementById('editManifestCtns').value = orderManifest.CTNS || '';
         const items = (order.items || []).map(item => {
             let data = item.manifest_data || {};
             if (typeof data === 'string') {
@@ -2716,19 +2730,24 @@
             return { item, data };
         }).filter(entry => fields.some(field => entry.data[field] !== undefined && entry.data[field] !== null && String(entry.data[field]).trim() !== ''));
 
-        if (!items.length) {
-            section.classList.add('d-none');
-            body.innerHTML = '';
-            return;
-        }
-
         body.innerHTML = items.map(({ item, data }) => `
             <tr data-item-id="${Number(item.id)}">${fields.map(field => {
                 const value = data[field] === undefined || data[field] === null ? '' : String(data[field]);
                 return `<td><input type="text" class="form-control form-control-sm manifest-edit-field" data-field="${field}" value="${escapeHtml(value)}" aria-label="${field}" style="min-width:${field === 'Item Name' || field === '아이템상세정보' ? '220px' : '100px'}"></td>`;
-            }).join('')}</tr>
+            }).join('')}<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()" aria-label="상품 삭제"><i class="fa-solid fa-trash"></i></button></td></tr>
         `).join('');
         section.classList.remove('d-none');
+    }
+
+    function addEditManifestItem() {
+        const fields = ['HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'];
+        const row = document.createElement('tr');
+        row.dataset.itemId = '';
+        row.dataset.newItem = 'true';
+        row.innerHTML = fields.map(field => `<td><input type="text" class="form-control form-control-sm manifest-edit-field" data-field="${field}" value="${field === 'Piece' ? '1' : ''}" aria-label="${field}" style="min-width:${field === 'Item Name' || field === '아이템상세정보' ? '220px' : '100px'}"></td>`).join('')
+            + '<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest(\'tr\').remove()" aria-label="상품 삭제"><i class="fa-solid fa-trash"></i></button></td>';
+        document.getElementById('editManifestDetailsBody').appendChild(row);
+        row.querySelector('[data-field="Item Name"]')?.focus();
     }
 
     async function saveOrderEdit() {
@@ -2742,8 +2761,9 @@
             address: document.getElementById('editAddress').value,
             shipping_memo: document.getElementById('editShippingMemo').value,
             weight: parseFloat(document.getElementById('editWeight').value) || 0.0,
+            ctns: document.getElementById('editManifestCtns').value,
             manifest_items: [...document.querySelectorAll('#editManifestDetailsBody tr[data-item-id]')].map(row => ({
-                id: row.dataset.itemId,
+                id: row.dataset.itemId || null,
                 fields: Object.fromEntries([...row.querySelectorAll('.manifest-edit-field')].map(input => [input.dataset.field, input.value]))
             }))
         };
@@ -3849,6 +3869,11 @@
     }
 
     async function loadDispatchedOrders() {
+        const rangeFromInput = document.getElementById('dispatchedDateFrom');
+        const rangeToInput = document.getElementById('dispatchedDateTo');
+        if (!dispatchedSelectedDate && rangeFromInput && rangeToInput && !rangeFromInput.value && !rangeToInput.value) {
+            initializeDefaultDateRanges();
+        }
         const courier = document.getElementById('dispatchedCourierFilter')?.value || '전체';
         const search = document.getElementById('dispatchedSearchInput')?.value || '';
         const dateFrom = document.getElementById('dispatchedDateFrom')?.value || '';

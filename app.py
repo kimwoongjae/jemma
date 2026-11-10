@@ -1846,73 +1846,121 @@ def edit_order(order_id):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute('SELECT id FROM orders WHERE id = ? AND tenant_id = ?', (order_id, g.company_id))
-        if not cur.fetchone():
+        cur.execute('SELECT * FROM orders WHERE id = ? AND tenant_id = ?', (order_id, g.company_id))
+        order = cur.fetchone()
+        if not order:
             return jsonify({'error': '주문을 찾을 수 없습니다.'}), 404
 
         manifest_items = data.get('manifest_items') or []
         if not isinstance(manifest_items, list):
             return jsonify({'error': '기본형식 품목 정보가 올바르지 않습니다.'}), 400
+        order_manifest = order['manifest_data'] or '{}'
+        try:
+            order_manifest = json.loads(order_manifest) if isinstance(order_manifest, str) else dict(order_manifest)
+        except (TypeError, ValueError):
+            order_manifest = {}
+        if not isinstance(order_manifest, dict):
+            order_manifest = {}
+        ctns = str(data.get('ctns') or '').strip()
+        order_manifest['CTNS'] = ctns
+
+        cur.execute('SELECT * FROM order_items WHERE tenant_id = ? AND order_id = ? ORDER BY id ASC',
+                    (g.company_id, order_id))
+        all_owned_items = [dict(row) for row in cur.fetchall()]
+        manifest_owned = {}
+        for row in all_owned_items:
+            try:
+                row_manifest = json.loads(row.get('manifest_data') or '{}')
+            except (TypeError, ValueError):
+                row_manifest = {}
+            if isinstance(row_manifest, dict) and str(row_manifest.get('Item Name') or '').strip():
+                manifest_owned[str(row['id'])] = (row, row_manifest)
+
+        allowed_fields = {'HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'}
         item_updates = []
-        if manifest_items:
-            cur.execute('SELECT id, manifest_data FROM order_items WHERE tenant_id = ? AND order_id = ?',
-                        (g.company_id, order_id))
-            owned_items = {str(row['id']): row for row in cur.fetchall()}
-            allowed_fields = {'CTNS', 'HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'}
-            for submitted in manifest_items:
-                item_id = str(submitted.get('id') or '') if isinstance(submitted, dict) else ''
-                if item_id not in owned_items or not isinstance(submitted.get('fields'), dict):
-                    return jsonify({'error': '수정할 기본형식 품목을 확인할 수 없습니다. 새로고침 후 다시 시도해주세요.'}), 400
-                row = owned_items[item_id]
-                try:
-                    fields = json.loads(row['manifest_data'] or '{}')
-                except (TypeError, ValueError):
-                    fields = {}
-                if not isinstance(fields, dict) or not fields.get('Item Name'):
-                    return jsonify({'error': '기본형식으로 등록된 품목만 상세 내용을 수정할 수 있습니다.'}), 400
-                edits = submitted['fields']
-                for field in allowed_fields:
-                    if field in edits:
-                        fields[field] = str(edits[field] if edits[field] is not None else '').strip()
-                if not fields.get('Item Name'):
-                    return jsonify({'error': 'Item Name은 비워둘 수 없습니다.'}), 400
-                try:
-                    piece_value = float(fields.get('Piece') or 0)
-                    if not math.isfinite(piece_value) or not piece_value.is_integer() or piece_value < 1:
-                        raise ValueError
-                    piece = int(piece_value)
-                except (TypeError, ValueError):
-                    return jsonify({'error': 'Piece는 1 이상의 정수로 입력해주세요.'}), 400
-                for field in ('Unit Price', 'Amount'):
-                    value = str(fields.get(field) or '').replace(',', '').strip()
-                    if value:
-                        try:
-                            numeric_value = float(value)
-                            if not math.isfinite(numeric_value) or numeric_value < 0:
-                                raise ValueError
-                        except ValueError:
-                            return jsonify({'error': f'{field}는 0 이상의 숫자로 입력해주세요.'}), 400
-                        fields[field] = value
-                item_updates.append((json.dumps(fields, ensure_ascii=False), fields['Item Name'],
-                                     fields.get('아이템상세정보', ''), piece, item_id))
+        item_inserts = []
+        retained_ids = set()
+        for submitted in manifest_items:
+            if not isinstance(submitted, dict) or not isinstance(submitted.get('fields'), dict):
+                return jsonify({'error': '수정할 상품 정보를 확인해주세요.'}), 400
+            item_id = str(submitted.get('id') or '').strip()
+            if item_id:
+                if item_id not in manifest_owned:
+                    return jsonify({'error': '수정할 상품을 확인할 수 없습니다. 새로고침 후 다시 시도해주세요.'}), 400
+                row, fields = manifest_owned[item_id]
+                fields = dict(fields)
+            else:
+                row = None
+                fields = {}
+            for field in allowed_fields:
+                if field in submitted['fields']:
+                    fields[field] = str(submitted['fields'][field] if submitted['fields'][field] is not None else '').strip()
+            fields['CTNS'] = ctns
+            if not str(fields.get('Item Name') or '').strip():
+                return jsonify({'error': 'Item Name은 비워둘 수 없습니다. 상품 행을 삭제하거나 상품명을 입력해주세요.'}), 400
+            try:
+                piece_value = float(fields.get('Piece') or 0)
+                if not math.isfinite(piece_value) or not piece_value.is_integer() or piece_value < 1:
+                    raise ValueError
+                piece = int(piece_value)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Piece는 1 이상의 정수로 입력해주세요.'}), 400
+            for field in ('Unit Price', 'Amount'):
+                value = str(fields.get(field) or '').replace(',', '').strip()
+                if value:
+                    try:
+                        numeric_value = float(value)
+                        if not math.isfinite(numeric_value) or numeric_value < 0:
+                            raise ValueError
+                    except ValueError:
+                        return jsonify({'error': f'{field}는 0 이상의 숫자로 입력해주세요.'}), 400
+                    fields[field] = value
+            manifest_json = json.dumps(fields, ensure_ascii=False)
+            entry = (manifest_json, fields['Item Name'], fields.get('아이템상세정보', ''), piece)
+            if row:
+                retained_ids.add(item_id)
+                item_updates.append((*entry, item_id))
+            else:
+                item_inserts.append(entry)
+
+        # 상품 목록에서 제거한 행은 기본형식 manifest 품목만 삭제합니다.
+        deleted_ids = set(manifest_owned) - retained_ids
+        for deleted_id in deleted_ids:
+            cur.execute('DELETE FROM order_items WHERE id = ? AND order_id = ? AND tenant_id = ?',
+                        (int(deleted_id), order_id, g.company_id))
 
         cur.execute('''UPDATE orders
             SET recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?, customs_id = ?,
-                postal_code = ?, address = ?, shipping_memo = ?, weight = ?
+                postal_code = ?, address = ?, shipping_memo = ?, weight = ?, manifest_data = ?
             WHERE id = ? AND tenant_id = ?''',
             (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code,
-             address, shipping_memo, weight, order_id, g.company_id))
+             address, shipping_memo, weight, json.dumps(order_manifest, ensure_ascii=False), order_id, g.company_id))
         for manifest_data, item_name, item_detail, piece, item_id in item_updates:
             cur.execute('''UPDATE order_items
                 SET manifest_data = ?, item_product_name = ?, item_option_name = ?,
                     product_quantity = ?, quantity = ?
                 WHERE id = ? AND order_id = ? AND tenant_id = ?''',
                 (manifest_data, item_name, item_detail, piece, piece, int(item_id), order_id, g.company_id))
-        if item_updates:
-            cur.execute('''UPDATE orders SET original_quantity = (
-                SELECT COALESCE(SUM(quantity), 0) FROM order_items
-                WHERE order_id = ? AND tenant_id = ?
-            ) WHERE id = ? AND tenant_id = ?''', (order_id, g.company_id, order_id, g.company_id))
+        for manifest_data, item_name, item_detail, piece in item_inserts:
+            cur.execute('''INSERT INTO order_items (
+                tenant_id, order_id, order_no, sku, item_product_name, item_option_name,
+                product_quantity, option_quantity, quantity, stock_deducted, status, manifest_data
+            ) VALUES (?, ?, ?, '', ?, ?, ?, 1, ?, 0, '준비중', ?)''',
+                (g.company_id, order_id, order['order_no'], item_name, item_detail, piece, piece, manifest_data))
+        if manifest_owned or item_inserts:
+            cur.execute('''SELECT item_product_name, item_option_name, quantity FROM order_items
+                WHERE order_id = ? AND tenant_id = ? ORDER BY id ASC''', (order_id, g.company_id))
+            current_items = [dict(row) for row in cur.fetchall()]
+            product_names = list(dict.fromkeys(str(row.get('item_product_name') or '').strip()
+                                               for row in current_items
+                                               if str(row.get('item_product_name') or '').strip()))
+            option_names = list(dict.fromkeys(str(row.get('item_option_name') or '').strip()
+                                              for row in current_items
+                                              if str(row.get('item_option_name') or '').strip()))
+            total_quantity = sum(int(row.get('quantity') or 0) for row in current_items)
+            cur.execute('''UPDATE orders SET original_product_name = ?, original_option_name = ?, original_quantity = ?
+                WHERE id = ? AND tenant_id = ?''',
+                (' / '.join(product_names), ' / '.join(option_names), total_quantity, order_id, g.company_id))
         conn.commit()
         return jsonify({'status': 'success', 'message': '주문 및 기본형식 품목 정보가 수정되었습니다.'})
     except Exception:
