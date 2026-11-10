@@ -25,6 +25,11 @@
         .panel{overflow:hidden}.panel-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-title{font-weight:720;margin:0;font-size:16px}.table{margin:0}.table thead th{background:#f8faff;color:#65738a;font-size:12px;font-weight:700;border-bottom:1px solid var(--line);padding:14px 16px;white-space:nowrap}.table tbody td{padding:14px 16px;vertical-align:middle;border-color:#edf0f5;font-size:14px}.company-name{font-weight:700;color:#25344b}.legacy-badge{font-size:11px;color:#946700;background:#fff5dc;border-radius:999px;padding:5px 8px;white-space:nowrap}
         .btn-primary{background:#356df3;border-color:#356df3}.btn-primary:hover{background:#285bd4;border-color:#285bd4}.btn-copy{font-size:12px;white-space:nowrap}.form-control,.form-select{border-color:#dfe5ee;border-radius:10px;min-height:42px}.search-wrap{max-width:330px;position:relative}.search-wrap i{position:absolute;left:13px;top:12px;color:#8b97aa}.search-wrap input{padding-left:38px}
         .empty-state{padding:45px 15px;text-align:center;color:var(--muted)}.empty-icon{font-size:28px;color:#aebbd0;margin-bottom:8px}.table-responsive{min-height:180px}
+        #adminShipmentsTable{table-layout:fixed;min-width:1250px}#adminShipmentsTable thead th{position:relative}
+        .admin-column-resize-handle{position:absolute;top:0;right:-3px;bottom:0;z-index:5;width:8px;cursor:col-resize;touch-action:none}
+        .admin-column-resize-handle::after{content:'';position:absolute;top:25%;bottom:25%;left:3px;width:2px;border-radius:2px;background:transparent}
+        .admin-column-resize-handle:hover::after,.admin-column-resize-handle.is-resizing::after{background:#2563eb}
+        body.is-resizing-admin-column{cursor:col-resize!important;user-select:none!important}
         .inventory-content{max-width:1500px}.admin-inventory-camera-view{position:relative;height:min(42dvh,380px);min-height:230px;background:#111827}.admin-inventory-camera-view video{display:block;width:100%;height:100%;object-fit:cover}.inventory-scan-frame{position:absolute;inset:28% 8%;border:2px solid #fff;border-radius:12px;pointer-events:none}.inventory-scan-line{position:absolute;left:8%;right:8%;top:50%;height:3px;background:#ff3347;box-shadow:0 0 10px #ff3347;animation:inventory-scan 1.8s ease-in-out infinite alternate;pointer-events:none}@keyframes inventory-scan{from{transform:translateY(-55px)}to{transform:translateY(55px)}}
         .admin-shell:has(.shipment-content){height:100vh;min-height:0;overflow:hidden}.shipment-main-area{height:100vh;min-height:0;display:flex;flex-direction:column}.shipment-content{width:100%;height:auto;min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden;margin:0 auto;padding:20px 30px}.shipment-content>.d-flex{flex:0 0 auto}.shipment-panel{min-height:0;flex:1;display:flex;flex-direction:column}.shipment-panel .panel-head{flex:0 0 auto}.shipment-table-wrap{flex:1;min-height:0;overflow:auto}.shipment-table-wrap .table{min-width:1150px}.shipment-table-wrap .table thead th{position:sticky;top:0;z-index:2}
         @media(max-width:900px){.sidebar{width:205px;flex-basis:205px}.content{padding:24px 18px}.topbar{padding:0 18px}}
@@ -79,7 +84,7 @@
                     <button class="btn btn-sm btn-outline-danger" id="adminPrintLabelsButton" onclick="adminPrintSelectedLabels()"><i class="bi bi-printer me-1"></i>선택 나르다 송장 출력</button>
                     <button class="btn btn-sm btn-outline-secondary ms-auto" id="adminOpenCompanyButton" onclick="openSelectedCompanyWorkspace()"><i class="bi bi-box-arrow-up-right me-1"></i>선택 업체 주문관리 전체 기능</button>
                 </div>
-                <div class="table-responsive shipment-table-wrap"><table class="table table-hover"><thead><tr><th><input type="checkbox" class="form-check-input" id="checkAllAdminOrders" onchange="toggleAdminOrderSelection(this)"></th><th>거래처</th><th>등록일</th><th>주문번호</th><th>수취인</th><th>택배사</th><th>송장번호</th><th>상품</th><th>상태 / API 결과</th><th>송장</th><th>관리</th></tr></thead><tbody id="ordersBody"><tr><td colspan="11" class="empty-state">불러오는 중입니다.</td></tr></tbody></table></div>
+                <div class="table-responsive shipment-table-wrap"><table class="table table-hover" id="adminShipmentsTable"><thead><tr><th data-column-key="selection"><input type="checkbox" class="form-check-input" id="checkAllAdminOrders" onchange="toggleAdminOrderSelection(this)"></th><th data-column-key="company">거래처</th><th data-column-key="registered">등록일</th><th data-column-key="order_no">주문번호</th><th data-column-key="recipient">수취인</th><th data-column-key="courier">택배사</th><th data-column-key="tracking">송장번호</th><th data-column-key="product">상품</th><th data-column-key="state">상태 / API 결과</th><th data-column-key="invoice">송장</th><th data-column-key="manage">관리</th></tr></thead><tbody id="ordersBody"><tr><td colspan="11" class="empty-state">불러오는 중입니다.</td></tr></tbody></table></div>
             </section>
             <div class="modal fade" id="adminOrderEditModal" tabindex="-1" aria-hidden="true">
                 <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -203,11 +208,47 @@ function renderShipments(){
         const stateLabel=apiState?`${o.status||'주문접수'} · API ${apiState}`:(o.status||'주문접수');
         const stateClass=apiState==='실패'?'text-bg-danger':(o.status==='출고완료'?'text-bg-success':'text-bg-secondary');
         const pdfLink=o.invoice_pdf_url?`<a class="btn btn-sm btn-outline-danger" target="_blank" rel="noopener" href="/api/admin/shipping/narda-pdf-bundle?company_id=${encodeURIComponent(o.tenant_id)}&order_ids=${encodeURIComponent(o.id)}" title="나르다 공식 PDF 송장"><i class="bi bi-file-pdf"></i></a>`:'–';
-        return `<tr><td><input type="checkbox" class="form-check-input admin-order-check" value="${esc(o.id)}" data-company-id="${esc(o.tenant_id)}" onclick="handleAdminOrderSelectionClick(event,this)"></td><td><span class="company-name">${esc(o.company_name)}</span></td><td>${esc(String(o.created_at||'').replace('T',' ').slice(0,16))}</td><td>${esc(o.order_no)}</td><td>${esc(o.recipient_name)}</td><td>${esc(o.courier)}</td><td class="fw-semibold text-primary">${esc(o.tracking_no)}</td><td>${esc([o.original_product_name,o.original_option_name].filter(Boolean).join(' / '))}</td><td><span class="badge ${stateClass}" title="${esc(apiMessage)}">${esc(stateLabel)}</span>${apiState==='실패'&&apiMessage?`<div class="small text-danger mt-1">${esc(apiMessage)}</div>`:''}</td><td>${pdfLink}</td><td><button type="button" class="btn btn-sm btn-outline-primary" onclick="openOrderEdit('${esc(o.id)}','${esc(o.tenant_id)}')" title="이 주문 편집"><i class="bi bi-pencil-square me-1"></i>편집</button></td></tr>`;
+        return `<tr><td data-column-key="selection"><input type="checkbox" class="form-check-input admin-order-check" value="${esc(o.id)}" data-company-id="${esc(o.tenant_id)}" onclick="handleAdminOrderSelectionClick(event,this)"></td><td data-column-key="company"><span class="company-name">${esc(o.company_name)}</span></td><td data-column-key="registered">${esc(String(o.created_at||'').replace('T',' ').slice(0,16))}</td><td data-column-key="order_no">${esc(o.order_no)}</td><td data-column-key="recipient">${esc(o.recipient_name)}</td><td data-column-key="courier">${esc(o.courier)}</td><td data-column-key="tracking" class="fw-semibold text-primary">${esc(o.tracking_no)}</td><td data-column-key="product">${esc([o.original_product_name,o.original_option_name].filter(Boolean).join(' / '))}</td><td data-column-key="state"><span class="badge ${stateClass}" title="${esc(apiMessage)}">${esc(stateLabel)}</span>${apiState==='실패'&&apiMessage?`<div class="small text-danger mt-1">${esc(apiMessage)}</div>`:''}</td><td data-column-key="invoice">${pdfLink}</td><td data-column-key="manage"><button type="button" class="btn btn-sm btn-outline-primary" onclick="openOrderEdit('${esc(o.id)}','${esc(o.tenant_id)}')" title="이 주문 편집"><i class="bi bi-pencil-square me-1"></i>편집</button></td></tr>`;
     }).join('')||'<tr><td colspan="11" class="empty-state"><div class="empty-icon"><i class="bi bi-inbox"></i></div>조건에 맞는 주문 내역이 없습니다.</td></tr>';
+    applyAdminShipmentColumnWidths();
     const master=document.getElementById('checkAllAdminOrders');if(master)master.checked=false;
     lastAdminOrderCheckIndex=-1;
     updateAdminActionButtons();
+}
+const ADMIN_SHIPMENT_WIDTHS_KEY='narda-admin-shipment-column-widths-v1';
+function getAdminShipmentColumnWidths(){try{return JSON.parse(localStorage.getItem(ADMIN_SHIPMENT_WIDTHS_KEY)||'{}')||{};}catch{return {};}}
+function applyAdminShipmentColumnWidths(){
+    const table=document.getElementById('adminShipmentsTable');if(!table)return;
+    const widths=getAdminShipmentColumnWidths();
+    table.querySelectorAll('[data-column-key]').forEach(cell=>{
+        const width=Number(widths[cell.dataset.columnKey]);
+        if(Number.isFinite(width)&&width>=40&&width<=1600)cell.style.width=`${width}px`;
+    });
+}
+function initAdminShipmentColumnResizing(){
+    const table=document.getElementById('adminShipmentsTable');if(!table||table.dataset.resizeBound==='true')return;
+    table.querySelectorAll('thead th[data-column-key]').forEach(th=>{
+        const key=th.dataset.columnKey;if(key==='selection')return;
+        const handle=document.createElement('span');handle.className='admin-column-resize-handle';handle.setAttribute('role','separator');handle.setAttribute('aria-orientation','vertical');handle.setAttribute('aria-label',`${th.textContent.trim()} 열 너비 조절`);
+        handle.addEventListener('pointerdown',event=>{
+            event.preventDefault();event.stopPropagation();
+            const startX=event.clientX,startWidth=th.getBoundingClientRect().width;
+            handle.classList.add('is-resizing');document.body.classList.add('is-resizing-admin-column');
+            const onMove=moveEvent=>{
+                const width=Math.max(70,Math.min(1600,Math.round(startWidth+moveEvent.clientX-startX)));
+                table.querySelectorAll('[data-column-key]').forEach(cell=>{if(cell.dataset.columnKey===key)cell.style.width=`${width}px`;});
+            };
+            const onEnd=()=>{
+                const widths=getAdminShipmentColumnWidths();widths[key]=Math.round(th.getBoundingClientRect().width);
+                try{localStorage.setItem(ADMIN_SHIPMENT_WIDTHS_KEY,JSON.stringify(widths));}catch{}
+                handle.classList.remove('is-resizing');document.body.classList.remove('is-resizing-admin-column');
+                document.removeEventListener('pointermove',onMove);document.removeEventListener('pointerup',onEnd);document.removeEventListener('pointercancel',onEnd);
+            };
+            document.addEventListener('pointermove',onMove);document.addEventListener('pointerup',onEnd,{once:true});document.addEventListener('pointercancel',onEnd,{once:true});
+        });
+        th.appendChild(handle);
+    });
+    table.dataset.resizeBound='true';applyAdminShipmentColumnWidths();
 }
 let lastAdminOrderCheckIndex=-1;
 function handleAdminOrderSelectionClick(event,checkbox){
@@ -401,6 +442,7 @@ async function startAdminInventoryCamera(){
 function stopAdminInventoryCamera(){adminInventoryCameraStream?.getTracks().forEach(track=>track.stop());adminInventoryCameraStream=null;adminInventoryScanControls?.stop();adminInventoryScanControls=null;adminInventoryScanBusy=false;const panel=document.getElementById('adminInventoryCamera'),video=document.getElementById('adminInventoryVideo'),status=document.getElementById('adminInventoryCameraStatus');if(panel)panel.classList.add('d-none');if(video)video.srcObject=null;if(status)status.className='small text-secondary mt-2';}
 window.addEventListener('pagehide',stopAdminInventoryCamera);
 setDefaultAdminShipmentDates();
+initAdminShipmentColumnResizing();
 loadAdminData().then(()=>{if(activePage==='shipments')loadCompanyOrders();});
 </script>
 </body>

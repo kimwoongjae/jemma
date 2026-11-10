@@ -1672,34 +1672,54 @@ def reship_dispatched_orders():
                     manifest[key] = ''
                 original_manifest = json.dumps(manifest, ensure_ascii=False)
 
-            cur.execute('''UPDATE orders SET order_no = ?, tracking_no = '', invoice_pdf_url = '',
-                status = '주문접수', dispatched_at = '', api_dispatch_status = '', api_dispatch_message = '',
-                reship_clear_items = ?, original_product_name = CASE WHEN ? THEN '' ELSE original_product_name END,
-                original_option_name = CASE WHEN ? THEN '' ELSE original_option_name END,
-                manifest_data = CASE WHEN ? THEN ? ELSE manifest_data END
-                WHERE tenant_id = ? AND id = ?''',
-                (new_no, 1 if clear_items else 0, clear_items, clear_items, clear_items,
-                 original_manifest, g.company_id, order['id']))
-            cur.execute('''UPDATE order_items SET order_no = ?, status = '주문접수', stock_deducted = 0
-                WHERE tenant_id = ? AND order_id = ?''', (new_no, g.company_id, order['id']))
-            if clear_items:
-                cur.execute('SELECT id, manifest_data FROM order_items WHERE tenant_id = ? AND order_id = ?',
-                            (g.company_id, order['id']))
-                for item in cur.fetchall():
+            # Preserve the completed shipment as history. Re-shipping creates
+            # a fresh order with no inherited NARDA tracking number or PDF URL.
+            cur.execute('''INSERT INTO orders (
+                tenant_id, order_no, courier, tracking_no, shipping_method,
+                original_product_name, original_option_name, original_quantity,
+                recipient_name, recipient_phone1, recipient_phone2, customs_id,
+                postal_code, address, shipping_memo, status, upload_batch,
+                dispatched_at, weight, customs_validation_status, customs_validation_msg,
+                api_dispatch_status, api_dispatch_message, manifest_data, upload_profile,
+                packaging_type, reship_clear_items
+            ) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '주문접수', ?, '', ?, '', '', '', '', ?, ?, ?, ?)''',
+                (g.company_id, new_no, order.get('courier') or '나르다', order.get('shipping_method') or '택배',
+                 '' if clear_items else order.get('original_product_name'),
+                 '' if clear_items else order.get('original_option_name'), order.get('original_quantity') or 1,
+                 order.get('recipient_name'), order.get('recipient_phone1'), order.get('recipient_phone2'),
+                 order.get('customs_id'), order.get('postal_code'), order.get('address'), order.get('shipping_memo'),
+                 order.get('upload_batch'), order.get('weight') or 0, original_manifest,
+                 order.get('upload_profile') or '', order.get('packaging_type') or '기본포장',
+                 1 if clear_items else 0))
+            new_order_id = cur.lastrowid
+
+            cur.execute('SELECT * FROM order_items WHERE tenant_id = ? AND order_id = ? ORDER BY id ASC',
+                        (g.company_id, order['id']))
+            source_items = [dict(row) for row in cur.fetchall()]
+            for item in source_items:
+                item_manifest = item.get('manifest_data') or ''
+                if clear_items:
                     try:
-                        manifest = json.loads(item['manifest_data'] or '{}')
-                        if not isinstance(manifest, dict):
-                            manifest = {}
+                        item_manifest_obj = json.loads(item_manifest) if item_manifest else {}
+                        if not isinstance(item_manifest_obj, dict):
+                            item_manifest_obj = {}
                     except (TypeError, ValueError):
-                        manifest = {}
+                        item_manifest_obj = {}
                     for key in ('Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', 'HS Code 1'):
-                        manifest[key] = ''
-                    cur.execute('UPDATE order_items SET manifest_data = ? WHERE tenant_id = ? AND order_id = ? AND id = ?',
-                                (json.dumps(manifest, ensure_ascii=False), g.company_id, order['id'], item['id']))
-            updated.append({'id': order['id'], 'old_order_no': old_no, 'order_no': new_no})
+                        item_manifest_obj[key] = ''
+                    item_manifest = json.dumps(item_manifest_obj, ensure_ascii=False)
+                cur.execute('''INSERT INTO order_items (
+                    tenant_id, order_id, order_no, sku, item_product_name, item_option_name,
+                    product_quantity, option_quantity, quantity, stock_deducted, status, manifest_data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '준비중', ?)''',
+                    (g.company_id, new_order_id, new_no, item.get('sku'), item.get('item_product_name') or '',
+                     item.get('item_option_name') or '', item.get('product_quantity') or 1,
+                     item.get('option_quantity') or 1, item.get('quantity') or 1, item_manifest))
+            updated.append({'id': new_order_id, 'source_id': order['id'], 'old_order_no': old_no, 'order_no': new_no})
 
         conn.commit()
-        return jsonify({'status': 'success', 'updated_count': len(updated), 'items_cleared': clear_items, 'orders': updated})
+        return jsonify({'status': 'success', 'updated_count': len(updated), 'items_cleared': clear_items,
+                        'history_preserved': True, 'tracking_cleared': True, 'orders': updated})
     except Exception as e:
         conn.rollback()
         app.logger.exception('Reship failed')
