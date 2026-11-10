@@ -580,20 +580,34 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         except (TypeError, ValueError):
             return 1
 
-    def product_names(order, items):
-        if not items:
-            return ' '.join(value for value in [order['original_product_name'] or '', order['original_option_name'] or ''] if value)
-        names = []
-        for item in items:
-            product = str(item.get('item_product_name') or '').strip()
-            option = str(item.get('item_option_name') or '').strip()
-            names.append(' '.join(value for value in [product, option] if value and value not in product))
-        return '\n'.join(names)
+    def item_manifest(item):
+        if not item:
+            return {}
+        raw = item.get('manifest_data') or {}
+        if isinstance(raw, dict):
+            return raw
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            return {}
 
-    def quantity_lines(items, value_getter, fallback):
-        if not items:
-            return f'{fallback}개'
-        return '\n'.join(f'{value_getter(item)}개' for item in items)
+    def product_name(order, item):
+        if not item:
+            product = str(order['original_product_name'] or '').strip()
+            option = str(order['original_option_name'] or '').strip()
+        else:
+            manifest = item_manifest(item)
+            product = str(item.get('item_product_name') or manifest.get('Item Name') or '').strip()
+            option = str(item.get('item_option_name') or manifest.get('아이템상세정보') or '').strip()
+            # 품목 행에 이름이 누락된 구형 데이터는 주문에 보관된 원본명으로 보완합니다.
+            if not product:
+                product = str(order['original_product_name'] or '').strip()
+            if not option and not item.get('item_product_name'):
+                option = str(order['original_option_name'] or '').strip()
+        if product and option and option not in product:
+            return f'{product} {option}'
+        return product or option
 
     def packaging_fee(order):
         package_type = order['packaging_type'] if 'packaging_type' in order.keys() else '기본포장'
@@ -613,10 +627,10 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         'recipient': ('수취인 / 연락처', lambda o, its: ' / '.join(value for value in [o['recipient_name'] or '', o['recipient_phone1'] or ''] if value)),
         'customs_id': ('통관부호', lambda o, its: o['customs_id'] or ''),
         'address': ('배송지 주소', lambda o, its: o['address'] or ''),
-        'product': ('상품명 + 옵션명', product_names),
-        'product_quantity': ('상품수량', lambda o, its: quantity_lines(its, lambda item: product_quantity(o, item), o['original_quantity'] or 1)),
-        'option_quantity': ('옵션수량', lambda o, its: quantity_lines(its, lambda item: item.get('option_quantity') or 1, 1)),
-        'buy_quantity': ('구매수량', lambda o, its: quantity_lines(its, lambda item: item.get('quantity') or 1, o['original_quantity'] or 1)),
+        'product': ('상품명 + 옵션명', product_name),
+        'product_quantity': ('상품수량', lambda o, item: f"{product_quantity(o, item) if item else (o['original_quantity'] or 1)}개"),
+        'option_quantity': ('옵션수량', lambda o, item: f"{(item.get('option_quantity') or 1) if item else 1}개"),
+        'buy_quantity': ('구매수량', lambda o, item: f"{(item.get('quantity') or 1) if item else (o['original_quantity'] or 1)}개"),
         'courier': ('택배사', lambda o, its: o['courier'] or ''),
         'tracking_no': ('송장번호', lambda o, its: o['tracking_no'] or ''),
         'status': ('상태', lambda o, its: o['status'] or '')
@@ -654,24 +668,22 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
     centered_keys = {'weight', 'packaging', 'shipping_fee', 'product_quantity', 'option_quantity', 'buy_quantity', 'courier', 'tracking_no', 'status'}
     for o in orders:
         row_items = items_by_order.get(o['id'], [])
-        row_idx = ws.max_row + 1
-        product_text = product_names(o, row_items)
-        for col_idx, key in enumerate(ordered_keys, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=column_definitions[key][1](o, row_items))
-            cell.font = body_font
-            cell.border = cell_border
-            cell.alignment = Alignment(
-                horizontal='center' if key in centered_keys else 'left',
-                vertical='center', wrap_text=True
-            )
-            if row_idx % 2 == 1:
-                cell.fill = PatternFill(fill_type='solid', fgColor='F4F7FA')
-
-        estimated_product_lines = max(
-            (max(1, (len(line) + 25) // 26) for line in product_text.splitlines()),
-            default=1
-        )
-        ws.row_dimensions[row_idx].height = min(240, max(22, 19 * max(len(row_items), estimated_product_lines, 1)))
+        # 한 주문에 여러 품목이 있으면 품목마다 한 행을 만들고 주문/송장 정보를 반복합니다.
+        # 이렇게 하면 상품명과 각 수량이 각자의 셀에 한 개씩 들어갑니다.
+        export_items = row_items or [None]
+        for item in export_items:
+            row_idx = ws.max_row + 1
+            for col_idx, key in enumerate(ordered_keys, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=column_definitions[key][1](o, item))
+                cell.font = body_font
+                cell.border = cell_border
+                cell.alignment = Alignment(
+                    horizontal='center' if key in centered_keys else 'left',
+                    vertical='center', wrap_text=True
+                )
+                if row_idx % 2 == 1:
+                    cell.fill = PatternFill(fill_type='solid', fgColor='F4F7FA')
+            ws.row_dimensions[row_idx].height = 30
 
     ws.freeze_panes = 'A2'
     ws.auto_filter.ref = ws.dimensions
