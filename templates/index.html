@@ -64,11 +64,33 @@
             border: 2px dashed #94a3b8;
             background: #ffffff;
             border-radius: 14px;
-            padding: 35px 20px;
+            padding: 10px 14px;
+            min-height: 54px;
             text-align: center;
             cursor: pointer;
             transition: all 0.25s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
         }
+        .upload-dropzone .upload-dropzone-icon { font-size: 20px !important; margin: 0 !important; }
+        .upload-dropzone h5 { font-size: 14px; margin: 0; }
+        .upload-dropzone p { margin: 0; }
+        /* 주문 화면은 업로드·작업 도구를 화면에 두고 주문 행만 내부에서 스크롤합니다. */
+        #orders-pane.orders-workspace { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+        #ordersUploadCard, #ordersToolbarCard { flex: 0 0 auto; }
+        #ordersUploadCard { margin-bottom: 8px !important; }
+        #ordersUploadCard .card-body { padding: 10px !important; }
+        #ordersUploadCard .upload-options-row { margin-bottom: 8px !important; }
+        #ordersToolbarCard { margin-bottom: 8px !important; max-height: min(38dvh, 400px); overflow-y: auto; overscroll-behavior: contain; }
+        #ordersToolbarCard .card-body { padding: 10px !important; }
+        #ordersDataCard { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+        #ordersDataCard .card-body { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+        #ordersDataCard .table-horizontal-scrollbar { flex: 0 0 auto; }
+        #ordersDataCard .orders-table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+        #ordersDataCard .orders-table-scroll thead th { position: sticky; top: 0; z-index: 2; }
+        body.orders-workspace-active { overflow: hidden; }
         .upload-dropzone:hover, .upload-dropzone.dragover {
             border-color: var(--primary-color);
             background: #eff6ff;
@@ -221,8 +243,10 @@
             }
             .nav-tabs .nav-item { flex: 0 0 auto; }
             .nav-tabs .nav-link { padding: 10px 12px; font-size: 12px; }
-            .upload-dropzone { padding: 22px 14px; }
-            .upload-dropzone h5 { font-size: 15px; line-height: 1.45; }
+            .upload-dropzone { min-height: 48px; padding: 8px 10px; gap: 7px; flex-wrap: wrap; }
+            .upload-dropzone h5 { font-size: 13px; line-height: 1.3; }
+            .upload-dropzone p { display: none; }
+            #ordersToolbarCard { max-height: 34dvh; }
             .card-body { padding: 12px !important; }
             .order-search-col, .order-weight-bulk-col { flex: 0 0 100%; width: 100%; }
             .order-filter-half-col { flex: 0 0 50%; width: 50%; }
@@ -447,9 +471,9 @@
         <!-- 1. 주문 관리 탭 -->
         <div class="tab-pane fade show active" id="orders-pane" role="tabpanel">
             <!-- 엑셀 업로드 구역 -->
-            <div class="card mb-4 border-0 shadow-sm">
+            <div class="card mb-4 border-0 shadow-sm" id="ordersUploadCard">
                 <div class="card-body">
-                    <div class="row g-2 align-items-end mb-3">
+                    <div class="row g-2 align-items-end mb-3 upload-options-row">
                         <div class="col-md-5">
                             <label for="uploadProfileSelect" class="form-label fw-bold mb-1">업로드 파일 형식</label>
                             <select id="uploadProfileSelect" class="form-select" onchange="saveSelectedUploadProfile()">
@@ -477,16 +501,16 @@
                         </div>
                     </div>
                     <div class="upload-dropzone" id="dropzone" onclick="document.getElementById('excelFileInput').click()">
-                        <i class="fa-solid fa-cloud-arrow-up text-primary fs-1 mb-2"></i>
-                        <h5 class="fw-bold">발송 리스트 엑셀 파일을 여기에 끌어다 놓거나 클릭하여 선택하세요 (여러 파일 동시 선택 가능)</h5>
-                        <p class="text-muted small mb-0">지원 형식: .xlsx, .xls | Ctrl 또는 Shift 키로 여러 파일을 한 번에 묶어서 업로드할 수 있습니다.</p>
+                        <i class="fa-solid fa-cloud-arrow-up text-primary upload-dropzone-icon"></i>
+                        <h5 class="fw-bold">주문 엑셀 업로드</h5>
+                        <p class="text-muted small">클릭하거나 파일을 끌어오세요 · 여러 파일 선택 가능</p>
                         <input type="file" id="excelFileInput" accept=".xlsx, .xls" multiple style="display:none;" onchange="handleExcelUpload(this)">
                     </div>
                 </div>
             </div>
 
             <!-- 주문 테이블 컨트롤 바 (필터 & 선택 카운터 & 액션 버튼) -->
-            <div class="card border-0 shadow-sm mb-3">
+            <div class="card border-0 shadow-sm mb-3" id="ordersToolbarCard">
                 <div class="card-body p-3">
                     <div class="row g-2 align-items-center mb-2">
                         <!-- 1. 검색창 -->
@@ -616,10 +640,10 @@
             </div>
 
             <!-- 주문 목록 테이블 -->
-            <div class="card border-0 shadow-sm">
+            <div class="card border-0 shadow-sm" id="ordersDataCard">
                 <div class="card-body p-0">
                     <div class="table-horizontal-scrollbar" data-scroll-target="ordersTable" role="scrollbar" aria-label="주문 목록 좌우 스크롤" aria-controls="ordersTable" aria-orientation="horizontal" tabindex="0" title="마우스로 좌우 이동할 수 있습니다"><div></div></div>
-                    <div class="table-responsive">
+                    <div class="table-responsive orders-table-scroll">
                         <table class="table table-bordered table-hover align-middle mb-0" id="ordersTable">
                             <thead class="table-light">
                                 <tr>
@@ -1901,7 +1925,23 @@
         renderOrderListSortRules();
         loadUploadProfiles();
         initBatchScanRows();
+        updateOrdersWorkspaceLayout();
     });
+
+    function updateOrdersWorkspaceLayout() {
+        const pane = document.getElementById('orders-pane');
+        const isOrdersActive = pane?.classList.contains('active') && pane?.classList.contains('show');
+        document.body.classList.toggle('orders-workspace-active', Boolean(isOrdersActive));
+        if (!isOrdersActive) {
+            if (pane) pane.style.height = '';
+            return;
+        }
+        pane.classList.add('orders-workspace');
+        const top = Math.max(0, pane.getBoundingClientRect().top);
+        pane.style.height = `${Math.max(250, window.innerHeight - top - 12)}px`;
+    }
+    document.getElementById('mainTabs')?.addEventListener('shown.bs.tab', () => requestAnimationFrame(updateOrdersWorkspaceLayout));
+    window.addEventListener('resize', updateOrdersWorkspaceLayout, { passive: true });
 
     function initializeDefaultDateRanges() {
         const today = new Date();

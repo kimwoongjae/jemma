@@ -25,7 +25,7 @@
         .panel{overflow:hidden}.panel-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-title{font-weight:720;margin:0;font-size:16px}.table{margin:0}.table thead th{background:#f8faff;color:#65738a;font-size:12px;font-weight:700;border-bottom:1px solid var(--line);padding:14px 16px;white-space:nowrap}.table tbody td{padding:14px 16px;vertical-align:middle;border-color:#edf0f5;font-size:14px}.company-name{font-weight:700;color:#25344b}.legacy-badge{font-size:11px;color:#946700;background:#fff5dc;border-radius:999px;padding:5px 8px;white-space:nowrap}
         .btn-primary{background:#356df3;border-color:#356df3}.btn-primary:hover{background:#285bd4;border-color:#285bd4}.btn-copy{font-size:12px;white-space:nowrap}.form-control,.form-select{border-color:#dfe5ee;border-radius:10px;min-height:42px}.search-wrap{max-width:330px;position:relative}.search-wrap i{position:absolute;left:13px;top:12px;color:#8b97aa}.search-wrap input{padding-left:38px}
         .empty-state{padding:45px 15px;text-align:center;color:var(--muted)}.empty-icon{font-size:28px;color:#aebbd0;margin-bottom:8px}.table-responsive{min-height:180px}
-        .inventory-content{max-width:1500px}.inventory-scan-frame{position:absolute;inset:28% 8%;border:2px solid #fff;border-radius:12px;pointer-events:none}.inventory-scan-line{position:absolute;left:8%;right:8%;top:50%;height:3px;background:#ff3347;box-shadow:0 0 10px #ff3347;animation:inventory-scan 1.8s ease-in-out infinite alternate;pointer-events:none}@keyframes inventory-scan{from{transform:translateY(-55px)}to{transform:translateY(55px)}}
+        .inventory-content{max-width:1500px}.admin-inventory-camera-view{position:relative;height:min(42dvh,380px);min-height:230px;background:#111827}.admin-inventory-camera-view video{display:block;width:100%;height:100%;object-fit:cover}.inventory-scan-frame{position:absolute;inset:28% 8%;border:2px solid #fff;border-radius:12px;pointer-events:none}.inventory-scan-line{position:absolute;left:8%;right:8%;top:50%;height:3px;background:#ff3347;box-shadow:0 0 10px #ff3347;animation:inventory-scan 1.8s ease-in-out infinite alternate;pointer-events:none}@keyframes inventory-scan{from{transform:translateY(-55px)}to{transform:translateY(55px)}}
         .admin-shell:has(.shipment-content){height:100vh;min-height:0;overflow:hidden}.shipment-main-area{height:100vh;min-height:0;display:flex;flex-direction:column}.shipment-content{width:100%;height:auto;min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden;margin:0 auto;padding:20px 30px}.shipment-content>.d-flex{flex:0 0 auto}.shipment-panel{min-height:0;flex:1;display:flex;flex-direction:column}.shipment-panel .panel-head{flex:0 0 auto}.shipment-table-wrap{flex:1;min-height:0;overflow:auto}.shipment-table-wrap .table{min-width:1150px}.shipment-table-wrap .table thead th{position:sticky;top:0;z-index:2}
         @media(max-width:900px){.sidebar{width:205px;flex-basis:205px}.content{padding:24px 18px}.topbar{padding:0 18px}}
         @media(max-width:650px){.admin-shell{display:block}.sidebar{width:100%;padding:13px 14px 10px}.brand{padding:0 4px 12px;font-size:17px}.nav-caption,.side-note{display:none}.side-nav{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}.side-link{white-space:nowrap;padding:9px 11px;font-size:13px;margin:0}.side-link i{font-size:16px;width:auto}.topbar{height:54px;padding:0 16px}.content{padding:22px 14px}.page-title{font-size:23px}.stat-card{padding:15px;min-height:94px}.stat-value{font-size:25px}.panel-head{padding:15px;align-items:flex-start;flex-direction:column}.search-wrap{max-width:none;width:100%}.table tbody td{padding:12px;font-size:13px}.admin-shell:has(.shipment-content){height:auto;min-height:100vh;overflow:visible}.shipment-main-area{height:auto;display:block}.shipment-content{height:auto;overflow:visible}.shipment-panel{min-height:65vh}.shipment-table-wrap{max-height:65vh;overflow:auto}}
@@ -118,7 +118,7 @@
                     </div>
                     <div id="adminInventoryProduct" class="alert alert-light border mt-3 mb-0" role="status">거래처를 선택하고 바코드를 조회하면 상품 정보와 현재 재고가 표시됩니다.</div>
                     <div class="d-flex flex-wrap gap-2 mt-3"><button id="adminInventoryStockIn" class="btn btn-success px-4" onclick="submitAdminInventoryMovement('입고')" disabled><i class="bi bi-box-arrow-in-down me-1"></i>입고 처리</button><button id="adminInventoryStockOut" class="btn btn-danger px-4" onclick="submitAdminInventoryMovement('출고')" disabled><i class="bi bi-box-arrow-up me-1"></i>출고 처리</button></div>
-                    <div id="adminInventoryCamera" class="mt-3 d-none"><div class="d-flex justify-content-between align-items-center mb-2"><strong>바코드 스캔</strong><button type="button" class="btn btn-sm btn-outline-secondary" onclick="stopAdminInventoryCamera()">카메라 끄기</button></div><div class="position-relative overflow-hidden rounded bg-dark"><video id="adminInventoryVideo" autoplay playsinline muted style="display:block;width:100%;max-height:55vh;min-height:230px;object-fit:cover"></video><div class="inventory-scan-frame"></div><div class="inventory-scan-line"></div></div><div id="adminInventoryCameraStatus" class="small text-secondary mt-2">바코드를 화면 중앙의 빨간 선에 맞춰주세요.</div></div>
+                    <div id="adminInventoryCamera" class="mt-3 d-none"><div class="d-flex justify-content-between align-items-center mb-2"><strong>바코드 / QR 코드 스캔</strong><button type="button" class="btn btn-sm btn-outline-secondary" onclick="stopAdminInventoryCamera()">카메라 끄기</button></div><div class="admin-inventory-camera-view overflow-hidden rounded"><video id="adminInventoryVideo" autoplay playsinline muted></video><div class="inventory-scan-frame"></div><div class="inventory-scan-line"></div></div><div id="adminInventoryCameraStatus" class="small text-secondary mt-2" role="status" aria-live="polite">바코드나 QR 코드를 화면 중앙의 빨간 선에 맞춰주세요.</div></div>
                 </div>
             </section>
             {% endif %}
@@ -344,16 +344,59 @@ async function submitAdminInventoryMovement(movement){
 }
 async function startAdminInventoryCamera(){
     if(!document.getElementById('adminInventoryCompany').value){alert('먼저 거래처를 선택해주세요.');return;}
-    const panel=document.getElementById('adminInventoryCamera'),video=document.getElementById('adminInventoryVideo'),status=document.getElementById('adminInventoryCameraStatus');panel.classList.remove('d-none');
+    const panel=document.getElementById('adminInventoryCamera'),video=document.getElementById('adminInventoryVideo'),status=document.getElementById('adminInventoryCameraStatus');
+    stopAdminInventoryCamera();
+    panel.classList.remove('d-none');
+    status.textContent='카메라를 여는 중입니다…';
     try{
-        adminInventoryCameraStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080},focusMode:{ideal:'continuous'}}});video.srcObject=adminInventoryCameraStream;await video.play();
-        const onScan=async(value)=>{if(adminInventoryScanBusy)return;adminInventoryScanBusy=true;document.getElementById('adminInventoryBarcode').value=value;stopAdminInventoryCamera();await lookupAdminInventoryBarcode();};
-        if('BarcodeDetector'in window){let detector;try{detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code']});}catch{detector=new BarcodeDetector();}const scan=async()=>{if(!adminInventoryCameraStream)return;try{const codes=await detector.detect(video);if(codes.length&&codes[0].rawValue){await onScan(codes[0].rawValue);return;}}catch{}if(adminInventoryCameraStream)requestAnimationFrame(scan);};adminInventoryScanBusy=false;requestAnimationFrame(scan);
-        }else if(window.ZXingBrowser?.BrowserMultiFormatReader){const reader=new ZXingBrowser.BrowserMultiFormatReader();adminInventoryScanControls=await reader.decodeFromVideoElement(video,(result)=>{if(result?.getText())onScan(result.getText());});}
-        else{status.textContent='이 브라우저는 바코드 스캔을 지원하지 않습니다. Chrome 최신 버전에서 열어주세요.';}
-    }catch(error){stopAdminInventoryCamera();alert(`카메라를 열지 못했습니다. 브라우저 카메라 권한과 HTTPS 연결을 확인해주세요.\n${error.message}`);}
+        if(!navigator.mediaDevices?.getUserMedia)throw new Error('이 브라우저에서 카메라를 사용할 수 없습니다. HTTPS 주소로 접속했는지 확인해주세요.');
+        adminInventoryCameraStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},focusMode:{ideal:'continuous'}}});
+        video.srcObject=adminInventoryCameraStream;
+        await video.play();
+        status.textContent='바코드나 QR 코드를 화면 중앙의 빨간 선에 맞춰주세요.';
+        const onScan=value=>{
+            if(adminInventoryScanBusy||!value)return;
+            adminInventoryScanBusy=true;
+            const input=document.getElementById('adminInventoryBarcode');
+            input.value=String(value).trim();
+            stopAdminInventoryCamera();
+            input.focus();
+            input.select();
+            document.getElementById('adminInventoryProduct').innerHTML='<span class="text-success fw-semibold">스캔 완료. 바코드 입력란을 확인하고 상품 조회를 눌러주세요.</span>';
+        };
+        const zxing=window.ZXingBrowser;
+        if(zxing?.BrowserMultiFormatReader){
+            const reader=new zxing.BrowserMultiFormatReader();
+            adminInventoryScanControls=await reader.decodeFromVideoElement(video,result=>{if(result?.getText())onScan(result.getText());});
+        }else if('BarcodeDetector'in window){
+            const supported=typeof BarcodeDetector.getSupportedFormats==='function'?await BarcodeDetector.getSupportedFormats():[];
+            const requested=['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39','code_93','itf','codabar'];
+            const formats=requested.filter(format=>supported.includes(format));
+            const detector=new BarcodeDetector(formats.length?{formats}:undefined);
+            let candidate='',sameCount=0;
+            const scan=async()=>{
+                if(!adminInventoryCameraStream||adminInventoryScanBusy)return;
+                try{
+                    const codes=await detector.detect(video);
+                    const value=codes.find(code=>code.rawValue)?.rawValue||'';
+                    if(value===candidate&&value)sameCount++;else{candidate=value;sameCount=value?1:0;}
+                    if(sameCount>=2){onScan(value);return;}
+                }catch{}
+                if(adminInventoryCameraStream)requestAnimationFrame(scan);
+            };
+            requestAnimationFrame(scan);
+        }else{
+            throw new Error('이 브라우저의 스캔 기능을 사용할 수 없습니다. Chrome을 최신 버전으로 업데이트해주세요.');
+        }
+    }catch(error){
+        adminInventoryCameraStream?.getTracks().forEach(track=>track.stop());
+        adminInventoryCameraStream=null;
+        video.srcObject=null;
+        status.textContent=`카메라를 열거나 스캔할 수 없습니다: ${error.message} 브라우저의 카메라 권한과 HTTPS 연결을 확인해주세요.`;
+        status.className='small text-danger mt-2';
+    }
 }
-function stopAdminInventoryCamera(){adminInventoryCameraStream?.getTracks().forEach(track=>track.stop());adminInventoryCameraStream=null;adminInventoryScanControls?.stop();adminInventoryScanControls=null;adminInventoryScanBusy=false;const panel=document.getElementById('adminInventoryCamera'),video=document.getElementById('adminInventoryVideo');if(panel)panel.classList.add('d-none');if(video)video.srcObject=null;}
+function stopAdminInventoryCamera(){adminInventoryCameraStream?.getTracks().forEach(track=>track.stop());adminInventoryCameraStream=null;adminInventoryScanControls?.stop();adminInventoryScanControls=null;adminInventoryScanBusy=false;const panel=document.getElementById('adminInventoryCamera'),video=document.getElementById('adminInventoryVideo'),status=document.getElementById('adminInventoryCameraStatus');if(panel)panel.classList.add('d-none');if(video)video.srcObject=null;if(status)status.className='small text-secondary mt-2';}
 window.addEventListener('pagehide',stopAdminInventoryCamera);
 setDefaultAdminShipmentDates();
 loadAdminData().then(()=>{if(activePage==='shipments')loadCompanyOrders();});
