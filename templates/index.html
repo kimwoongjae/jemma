@@ -168,6 +168,29 @@
         #dispatchedTable [data-column-key="courier_tracking"] { width: 240px; }
         #dispatchedTable [data-column-key="status"] { width: 100px; }
         #dispatchedTable td[data-column-key="product"] { overflow-wrap: anywhere; word-break: keep-all; }
+        #ordersTable thead th, #dispatchedTable thead th { position: relative; }
+        .column-resize-handle {
+            position: absolute;
+            top: 0;
+            right: -3px;
+            bottom: 0;
+            z-index: 5;
+            width: 8px;
+            cursor: col-resize;
+            touch-action: none;
+        }
+        .column-resize-handle::after {
+            content: '';
+            position: absolute;
+            top: 25%;
+            bottom: 25%;
+            left: 3px;
+            width: 2px;
+            border-radius: 2px;
+            background: transparent;
+        }
+        .column-resize-handle:hover::after, .column-resize-handle.is-resizing::after { background: #2563eb; }
+        body.is-resizing-table-column { cursor: col-resize !important; user-select: none !important; }
         /* 라벨 인쇄 전용 스타일 */
         .shipping-label-card {
             width: 100mm;
@@ -1883,6 +1906,7 @@
         loadUploadProfiles();
         initBatchScanRows();
         updateOrdersWorkspaceLayout();
+        initResizableOrderTables();
     });
 
     function updateOrdersWorkspaceLayout() {
@@ -3868,6 +3892,7 @@
             const cells = new Map(Array.from(row.cells).map(cell => [cell.dataset.columnKey, cell]));
             row.replaceChildren(...[cells.get('selection'), ...order.map(key => cells.get(key))].filter(Boolean));
         });
+        applySavedColumnWidths('ordersTable', 'jamma-orders-column-widths-v1');
     }
 
     function startOrderColumnDrag(event) {
@@ -3984,6 +4009,7 @@
             if (!cells.size) return;
             row.replaceChildren(...[cells.get('selection'), ...order.map(key => cells.get(key))].filter(Boolean));
         });
+        applySavedColumnWidths('dispatchedTable', 'jamma-dispatched-column-widths-v1');
     }
 
     function startDispatchedColumnDrag(event) {
@@ -4024,6 +4050,72 @@
     document.addEventListener('dragend', () => {
         document.querySelectorAll('#dispatchedTable thead th').forEach(th => th.classList.remove('table-primary', 'opacity-50'));
     });
+
+    function applySavedColumnWidths(tableId, storageKey) {
+        const table = document.getElementById(tableId);
+        if (!table) return;
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch {}
+        for (const [key, rawWidth] of Object.entries(saved)) {
+            const width = Number(rawWidth);
+            if (!Number.isFinite(width) || width < 40 || width > 1600) continue;
+            table.querySelectorAll('[data-column-key]').forEach(cell => {
+                if (cell.dataset.columnKey === key) cell.style.width = `${width}px`;
+            });
+        }
+    }
+
+    function initResizableOrderTables() {
+        [
+            ['ordersTable', 'jamma-orders-column-widths-v1'],
+            ['dispatchedTable', 'jamma-dispatched-column-widths-v1']
+        ].forEach(([tableId, storageKey]) => {
+            const table = document.getElementById(tableId);
+            if (!table || table.dataset.resizeBound === 'true') return;
+            table.querySelectorAll('thead th[data-column-key]').forEach(th => {
+                if (th.dataset.columnKey === 'selection' || th.querySelector('.column-resize-handle')) return;
+                const handle = document.createElement('span');
+                handle.className = 'column-resize-handle';
+                handle.setAttribute('role', 'separator');
+                handle.setAttribute('aria-orientation', 'vertical');
+                handle.setAttribute('aria-label', `${th.textContent.trim()} 열 너비 조절`);
+                handle.addEventListener('pointerdown', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const key = th.dataset.columnKey;
+                    const startX = event.clientX;
+                    const startWidth = th.getBoundingClientRect().width;
+                    const minWidth = key === 'manage' || key === 'status' ? 60 : 70;
+                    handle.classList.add('is-resizing');
+                    document.body.classList.add('is-resizing-table-column');
+                    const onMove = moveEvent => {
+                        const width = Math.max(minWidth, Math.min(1600, Math.round(startWidth + moveEvent.clientX - startX)));
+                        table.querySelectorAll('[data-column-key]').forEach(cell => {
+                            if (cell.dataset.columnKey === key) cell.style.width = `${width}px`;
+                        });
+                    };
+                    const onEnd = () => {
+                        const width = Math.round(th.getBoundingClientRect().width);
+                        let saved = {};
+                        try { saved = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch {}
+                        saved[key] = width;
+                        try { localStorage.setItem(storageKey, JSON.stringify(saved)); } catch {}
+                        handle.classList.remove('is-resizing');
+                        document.body.classList.remove('is-resizing-table-column');
+                        document.removeEventListener('pointermove', onMove);
+                        document.removeEventListener('pointerup', onEnd);
+                        document.removeEventListener('pointercancel', onEnd);
+                    };
+                    document.addEventListener('pointermove', onMove);
+                    document.addEventListener('pointerup', onEnd, { once: true });
+                    document.addEventListener('pointercancel', onEnd, { once: true });
+                });
+                th.appendChild(handle);
+            });
+            table.dataset.resizeBound = 'true';
+            applySavedColumnWidths(tableId, storageKey);
+        });
+    }
 
     function initTableHorizontalScrollbars() {
         document.querySelectorAll('.table-horizontal-scrollbar[data-scroll-target]').forEach(scrollbar => {
@@ -4154,7 +4246,7 @@
                 <td data-column-key="product_quantity" class="text-center fw-bold text-dark">${productQtyHtml}</td>
                 <td data-column-key="option_quantity" class="text-center fw-bold text-secondary">${optionQtyHtml}</td>
                 <td data-column-key="buy_quantity" class="text-center fs-6 fw-bold text-primary">${buyQtyHtml}</td>
-                <td data-column-key="courier_tracking" class="bg-white"><div>${courierBadge}</div>${o.tracking_no ? `<div><code class="text-primary fw-bold">${o.tracking_no}</code></div>${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}` : '<span class="text-muted small">미발급</span>'}</td>
+                <td data-column-key="courier_tracking" class="bg-white"><div>${courierBadge}</div>${o.tracking_no ? `<div><a href="https://app.narda-jp.com/tracking.html?quickNo=${encodeURIComponent(String(o.tracking_no).trim())}" target="_blank" rel="noopener noreferrer" class="text-decoration-none"><code class="text-primary fw-bold" title="새 탭에서 나르다 배송조회 열기">${escapeHtml(o.tracking_no)} <i class="fa-solid fa-arrow-up-right-from-square small"></i></code></a></div>${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}` : '<span class="text-muted small">미발급</span>'}</td>
                 <td data-column-key="status" class="text-center bg-white"><span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span></td>`;
             tbody.appendChild(tr);
         });
