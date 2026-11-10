@@ -375,28 +375,6 @@ def admin_inventory_movement(company_id):
         conn.close()
 
 
-@app.route('/api/admin/companies/<int:company_id>/inventory/logs', methods=['GET'])
-def admin_inventory_logs(company_id):
-    if session.get('account_role') != 'admin':
-        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
-    try:
-        limit = min(max(int(request.args.get('limit', 100)), 1), 500)
-    except (TypeError, ValueError):
-        limit = 100
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        if not _admin_inventory_company_exists(cur, company_id):
-            return jsonify({'error': '활성 거래처를 찾을 수 없습니다.'}), 404
-        cur.execute('''SELECT id, sku, product_name, option_name, change_type, change_qty,
-                              resulting_stock, memo, created_at
-                       FROM inventory_logs WHERE tenant_id = ? ORDER BY id DESC LIMIT ?''',
-                    (company_id, limit))
-        return jsonify([dict(row) for row in cur.fetchall()])
-    finally:
-        conn.close()
-
-
 @app.route('/admin/companies/<int:company_id>/shipping-rates', methods=['GET'])
 def admin_company_shipping_rates_page(company_id):
     if session.get('account_role') != 'admin':

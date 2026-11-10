@@ -39,12 +39,12 @@
         <nav class="side-nav">
             <a class="side-link {{ 'active' if active_page == 'companies' else '' }}" href="/admin/companies"><i class="bi bi-buildings"></i>거래처 현황</a>
             <a class="side-link {{ 'active' if active_page == 'shipments' else '' }}" href="/admin/shipments"><i class="bi bi-truck"></i>발송 현황</a>
-            <a class="side-link {{ 'active' if active_page == 'inventory' else '' }}" href="/admin/inventory"><i class="bi bi-boxes"></i>입출고 목록</a>
+            <a class="side-link {{ 'active' if active_page == 'inventory' else '' }}" href="/admin/inventory"><i class="bi bi-boxes"></i>입출고 처리</a>
         </nav>
         <div class="side-note"><i class="bi bi-shield-lock me-1"></i>관리자 전용 화면입니다.</div>
     </aside>
     <section class="main-area {{ 'shipment-main-area' if active_page == 'shipments' else '' }}">
-        <header class="topbar"><div class="crumb"><i class="bi bi-grid-1x2 me-2"></i>관리자 <span class="mx-2">/</span>{{ '거래처 현황' if active_page == 'companies' else ('발송 현황' if active_page == 'shipments' else '입출고 목록') }}</div><div class="d-flex align-items-center gap-3"><span class="admin-pill"><i class="bi bi-person-check me-1"></i>관리자</span><button class="btn btn-sm btn-outline-secondary" onclick="logout()"><i class="bi bi-box-arrow-right me-1"></i>로그아웃</button></div></header>
+        <header class="topbar"><div class="crumb"><i class="bi bi-grid-1x2 me-2"></i>관리자 <span class="mx-2">/</span>{{ '거래처 현황' if active_page == 'companies' else ('발송 현황' if active_page == 'shipments' else '입출고 처리') }}</div><div class="d-flex align-items-center gap-3"><span class="admin-pill"><i class="bi bi-person-check me-1"></i>관리자</span><button class="btn btn-sm btn-outline-secondary" onclick="logout()"><i class="bi bi-box-arrow-right me-1"></i>로그아웃</button></div></header>
         <main class="content {{ 'shipment-content' if active_page == 'shipments' else ('inventory-content' if active_page == 'inventory' else '') }}">
             {% if active_page == 'companies' %}
             <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4"><div><h1 class="page-title">거래처 현황</h1><div class="page-subtitle">등록된 거래처와 계정, 주문 현황을 관리합니다.</div></div><button class="btn btn-outline-secondary" onclick="loadAdminData()"><i class="bi bi-arrow-clockwise me-1"></i>새로고침</button></div>
@@ -105,11 +105,10 @@
             </div>
             {% else %}
             <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
-                <div><h1 class="page-title">입출고 목록</h1><div class="page-subtitle">거래처를 선택하고 바코드를 스캔해 해당 업체 재고를 입고하거나 출고합니다.</div></div>
-                <button class="btn btn-outline-secondary" onclick="loadAdminInventoryLogs()"><i class="bi bi-arrow-clockwise me-1"></i>새로고침</button>
+                <div><h1 class="page-title">재고 입출고 처리</h1><div class="page-subtitle">거래처의 상품을 바코드로 조회한 뒤 입고 또는 출고 수량을 반영합니다.</div></div>
             </div>
-            <section class="panel mb-4">
-                <div class="panel-head"><div><h2 class="panel-title">바코드 입출고 처리</h2><div class="text-secondary small mt-1">상품은 선택한 업체의 재고 목록에서만 조회됩니다.</div></div></div>
+            <section class="panel">
+                <div class="panel-head"><div><h2 class="panel-title">바코드로 재고 처리</h2><div class="text-secondary small mt-1">처리한 수량은 선택된 거래처의 재고에 반영됩니다.</div></div></div>
                 <div class="p-3 p-md-4">
                     <div class="row g-3 align-items-end">
                         <div class="col-12 col-lg-4"><label for="adminInventoryCompany" class="form-label fw-semibold">거래처</label><select id="adminInventoryCompany" class="form-select" onchange="onAdminInventoryCompanyChange()"><option value="">거래처를 선택하세요</option></select></div>
@@ -117,14 +116,10 @@
                         <div class="col-12 col-lg-3"><label for="adminInventoryQuantity" class="form-label fw-semibold">수량</label><input id="adminInventoryQuantity" class="form-control" type="number" min="1" step="1" value="1" inputmode="numeric"></div>
                         <div class="col-12"><label for="adminInventoryMemo" class="form-label fw-semibold">메모 <span class="text-secondary fw-normal">(선택)</span></label><input id="adminInventoryMemo" class="form-control" maxlength="250" placeholder="예: 정기 입고, 파손 출고"></div>
                     </div>
-                    <div id="adminInventoryProduct" class="alert alert-light border mt-3 mb-0" role="status">거래처와 바코드를 선택하면 상품 정보와 현재 재고가 표시됩니다.</div>
+                    <div id="adminInventoryProduct" class="alert alert-light border mt-3 mb-0" role="status">거래처를 선택하고 바코드를 조회하면 상품 정보와 현재 재고가 표시됩니다.</div>
                     <div class="d-flex flex-wrap gap-2 mt-3"><button id="adminInventoryStockIn" class="btn btn-success px-4" onclick="submitAdminInventoryMovement('입고')" disabled><i class="bi bi-box-arrow-in-down me-1"></i>입고 처리</button><button id="adminInventoryStockOut" class="btn btn-danger px-4" onclick="submitAdminInventoryMovement('출고')" disabled><i class="bi bi-box-arrow-up me-1"></i>출고 처리</button></div>
                     <div id="adminInventoryCamera" class="mt-3 d-none"><div class="d-flex justify-content-between align-items-center mb-2"><strong>바코드 스캔</strong><button type="button" class="btn btn-sm btn-outline-secondary" onclick="stopAdminInventoryCamera()">카메라 끄기</button></div><div class="position-relative overflow-hidden rounded bg-dark"><video id="adminInventoryVideo" autoplay playsinline muted style="display:block;width:100%;max-height:55vh;min-height:230px;object-fit:cover"></video><div class="inventory-scan-frame"></div><div class="inventory-scan-line"></div></div><div id="adminInventoryCameraStatus" class="small text-secondary mt-2">바코드를 화면 중앙의 빨간 선에 맞춰주세요.</div></div>
                 </div>
-            </section>
-            <section class="panel">
-                <div class="panel-head"><div><h2 class="panel-title">최근 입출고 내역</h2><div id="adminInventoryHistoryCaption" class="text-secondary small mt-1">거래처를 선택하면 최근 100건을 표시합니다.</div></div></div>
-                <div class="table-responsive" style="max-height:calc(100vh - 430px);overflow:auto"><table class="table table-hover"><thead class="position-sticky top-0"><tr><th>처리일시</th><th>구분</th><th>바코드</th><th>상품명</th><th>변동 수량</th><th>처리 후 재고</th><th>메모</th></tr></thead><tbody id="adminInventoryLogsBody"><tr><td colspan="7" class="empty-state">거래처를 선택해주세요.</td></tr></tbody></table></div>
             </section>
             {% endif %}
         </main>
@@ -327,7 +322,7 @@ function setDefaultAdminShipmentDates(){
     to.value=localDate(today);
 }
 let adminInventoryProduct=null,adminInventoryCameraStream=null,adminInventoryScanControls=null,adminInventoryScanBusy=false;
-function onAdminInventoryCompanyChange(){adminInventoryProduct=null;document.getElementById('adminInventoryProduct').textContent='거래처의 바코드를 조회하세요.';setAdminInventoryActions(false);loadAdminInventoryLogs();}
+function onAdminInventoryCompanyChange(){adminInventoryProduct=null;document.getElementById('adminInventoryBarcode').value='';document.getElementById('adminInventoryProduct').textContent='거래처의 바코드를 조회하세요.';setAdminInventoryActions(false);}
 function setAdminInventoryActions(enabled){document.getElementById('adminInventoryStockIn').disabled=!enabled;document.getElementById('adminInventoryStockOut').disabled=!enabled;}
 async function lookupAdminInventoryBarcode(){
     const companyId=document.getElementById('adminInventoryCompany').value,barcode=document.getElementById('adminInventoryBarcode').value.trim(),box=document.getElementById('adminInventoryProduct');
@@ -344,16 +339,8 @@ async function submitAdminInventoryMovement(movement){
     if(!adminInventoryProduct){alert('먼저 바코드 상품을 조회해주세요.');return;}if(!Number.isInteger(quantity)||quantity<1){alert('수량은 1 이상의 정수로 입력해주세요.');return;}
     setAdminInventoryActions(false);
     try{const res=await fetch(`/api/admin/companies/${encodeURIComponent(companyId)}/inventory/movement`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({barcode:adminInventoryProduct.sku,movement,quantity,memo:document.getElementById('adminInventoryMemo').value})});const data=await res.json();if(!res.ok)throw new Error(data.error||'입출고 처리에 실패했습니다.');
-        document.getElementById('adminInventoryProduct').innerHTML=`<div class="d-flex flex-wrap gap-2 align-items-center"><span class="badge text-bg-success">${esc(data.movement)} 완료</span><strong>${esc(data.product_name)}</strong><span>처리 ${Number(data.quantity).toLocaleString()}개 · 현재 재고 <strong>${Number(data.stock_quantity).toLocaleString()}개</strong></span></div>`;adminInventoryProduct.stock_quantity=data.stock_quantity;await loadAdminInventoryLogs();document.getElementById('adminInventoryBarcode').focus();document.getElementById('adminInventoryBarcode').select();
+        document.getElementById('adminInventoryProduct').innerHTML=`<div class="d-flex flex-wrap gap-2 align-items-center"><span class="badge text-bg-success">${esc(data.movement)} 완료</span><strong>${esc(data.product_name)}</strong><span>처리 ${Number(data.quantity).toLocaleString()}개 · 현재 재고 <strong>${Number(data.stock_quantity).toLocaleString()}개</strong></span></div>`;adminInventoryProduct.stock_quantity=data.stock_quantity;document.getElementById('adminInventoryBarcode').focus();document.getElementById('adminInventoryBarcode').select();
     }catch(error){alert(error.message);}finally{setAdminInventoryActions(Boolean(adminInventoryProduct));}
-}
-async function loadAdminInventoryLogs(){
-    const companyId=document.getElementById('adminInventoryCompany')?.value,body=document.getElementById('adminInventoryLogsBody');if(!body)return;
-    if(!companyId){body.innerHTML='<tr><td colspan="7" class="empty-state">거래처를 선택해주세요.</td></tr>';document.getElementById('adminInventoryHistoryCaption').textContent='거래처를 선택하면 최근 100건을 표시합니다.';return;}
-    body.innerHTML='<tr><td colspan="7" class="empty-state">입출고 내역을 불러오는 중입니다.</td></tr>';
-    try{const res=await fetch(`/api/admin/companies/${encodeURIComponent(companyId)}/inventory/logs?limit=100`);const logs=await res.json();if(!res.ok)throw new Error(logs.error||'입출고 내역 조회에 실패했습니다.');document.getElementById('adminInventoryHistoryCaption').textContent=`최근 ${logs.length.toLocaleString()}건 · 입고와 출고 처리 시 자동 저장됩니다.`;
-        body.innerHTML=logs.map(log=>`<tr><td class="text-nowrap">${esc(String(log.created_at||'').replace('T',' ').slice(0,19))}</td><td><span class="badge ${log.change_type==='입고'?'text-bg-success':log.change_type==='출고'?'text-bg-danger':'text-bg-secondary'}">${esc(log.change_type)}</span></td><td>${esc(log.sku)}</td><td>${esc([log.product_name,log.option_name].filter(Boolean).join(' / '))}</td><td class="${Number(log.change_qty)<0?'text-danger':'text-success'} fw-semibold">${Number(log.change_qty)>0?'+':''}${Number(log.change_qty).toLocaleString()}</td><td>${Number(log.resulting_stock).toLocaleString()}</td><td>${esc(log.memo)}</td></tr>`).join('')||'<tr><td colspan="7" class="empty-state">저장된 입출고 내역이 없습니다.</td></tr>';
-    }catch(error){body.innerHTML=`<tr><td colspan="7" class="text-danger text-center p-4">${esc(error.message)}</td></tr>`;}
 }
 async function startAdminInventoryCamera(){
     if(!document.getElementById('adminInventoryCompany').value){alert('먼저 거래처를 선택해주세요.');return;}
@@ -369,7 +356,7 @@ async function startAdminInventoryCamera(){
 function stopAdminInventoryCamera(){adminInventoryCameraStream?.getTracks().forEach(track=>track.stop());adminInventoryCameraStream=null;adminInventoryScanControls?.stop();adminInventoryScanControls=null;adminInventoryScanBusy=false;const panel=document.getElementById('adminInventoryCamera'),video=document.getElementById('adminInventoryVideo');if(panel)panel.classList.add('d-none');if(video)video.srcObject=null;}
 window.addEventListener('pagehide',stopAdminInventoryCamera);
 setDefaultAdminShipmentDates();
-loadAdminData().then(()=>{if(activePage==='shipments')loadCompanyOrders();else if(activePage==='inventory')loadAdminInventoryLogs();});
+loadAdminData().then(()=>{if(activePage==='shipments')loadCompanyOrders();});
 </script>
 </body>
 </html>
