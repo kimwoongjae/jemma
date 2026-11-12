@@ -2940,21 +2940,35 @@
     function getCleanCombinedName(o, it, itemIndex = 0) {
         if (o && Number(o.reship_clear_items) === 1) return '';
         const cleanDispatchLabel = value => String(value || '').replace(/\s*\(출고\s*품목\)\s*/g, ' ').trim();
-        // 상품명과 옵션명은 업로드 파일에서 저장한 원문만 표시한다.
-        // 재고 마스터의 이름은 바코드 매칭에 사용하되 주문 표시명을 대체하지 않는다.
+        // 주문이 단일 품목이면 업로드 파일의 상품명/옵션명 원문을 표시한다.
+        // 여러 품목으로 분리된 주문만 해당 품목별로 저장된 분리 이름을 쓴다.
+        // 재고 마스터의 옵션수량(option_quantity)은 표시명에 절대 덧붙이지 않는다.
+        const splitItems = o && Array.isArray(o.items) ? o.items : [];
+        const isMultiItemOrder = splitItems.length > 1;
+        const originalProduct = o && o.original_product_name != null ? o.original_product_name : '';
+        const originalOption = o && o.original_option_name != null ? o.original_option_name : '';
+        const itemProduct = it && it.item_product_name != null ? it.item_product_name : '';
+        const itemOption = it && it.item_option_name != null ? it.item_option_name : '';
         const pName = cleanDispatchLabel(
-            (it && it.item_product_name) ||
-            (o && o.original_product_name) || ''
+            isMultiItemOrder ? (itemProduct || originalProduct) : (originalProduct || itemProduct)
         );
-        let itemOpt = cleanDispatchLabel(
-            (it && it.item_option_name) ||
-            (o && o.original_option_name) || ''
-        );
+        const selectedOption = isMultiItemOrder && itemOption && itemOption !== '단일옵션'
+            ? itemOption
+            : (originalOption || itemOption);
+        let itemOpt = cleanDispatchLabel(selectedOption);
         if (itemOpt === '단일옵션' || itemOpt.toLowerCase() === 'nan') itemOpt = '';
         let combinedName = pName;
         if (itemOpt) {
-            if (itemOpt.includes(pName)) combinedName = itemOpt;
-            else if (pName.includes(itemOpt)) combinedName = pName;
+            const normalizedProduct = pName.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+            const normalizedOption = itemOpt.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+            const numericOption = normalizedOption.match(/^(\d+)\s*(개|봉|입|세트|box|박스)?$/i);
+            // 숫자 옵션 2는 상품명 안의 120 같은 숫자에 포함됐다는 이유로 중복 처리하지 않는다.
+            // 다만 상품명이 이미 '... 4봉'처럼 같은 옵션을 완성해 갖고 있으면 다시 붙이지 않는다.
+            const optionAlreadyInProduct = numericOption
+                ? new RegExp(`(?:^|[^\\d])${numericOption[1]}\\s*(?:${numericOption[2] || ''})?(?=$|[^\\d])`, 'i').test(normalizedProduct)
+                : normalizedProduct.includes(normalizedOption);
+            if (normalizedOption.includes(normalizedProduct)) combinedName = itemOpt;
+            else if (optionAlreadyInProduct) combinedName = pName;
             else combinedName = `${pName} ${itemOpt}`.trim();
         }
         return combinedName;
