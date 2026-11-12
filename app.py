@@ -14,7 +14,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 from database import init_db, get_connection
-from excel_processor import HEADER_MAP, NARDA_MANIFEST_PROFILE, process_excel_file, process_narda_manifest_file, save_orders_to_db
+from excel_processor import HEADER_MAP, NARDA_MANIFEST_PROFILE, get_auto_header_aliases, process_excel_file, process_narda_manifest_file, save_orders_to_db
 from shipping_api import (
     issue_tracking_numbers, complete_dispatch,
     export_shipping_excel
@@ -1124,27 +1124,44 @@ def download_order_upload_template():
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
-    headers = [
-        '주문번호', '택배사', '송장번호', '배송방법', '상품명', '옵션명', '바코드', '상품수량',
-        '수취인', '수취인전화번호1', '수취인전화번호2', '개인통관고유부호',
-        '우편번호', '주소', '배송요청사항'
+    field_order = [
+        'order_no', 'courier', 'tracking_no', 'shipping_method', 'product_name', 'option_name', 'sku', 'quantity',
+        'recipient_name', 'recipient_phone1', 'recipient_phone2', 'customs_id', 'postal_code', 'address', 'shipping_memo'
     ]
-    descriptions = [
-        ('주문번호', '주문을 구분하는 번호입니다. 비워두면 사이트에서 임시 번호를 만듭니다.'),
-        ('택배사', '택배사명입니다. 예: 나르다'),
-        ('송장번호', '기존 송장번호가 있는 경우 입력합니다. 신규 송장 발급 예정이면 비워둡니다.'),
-        ('배송방법', '배송 방식입니다. 예: 택배'),
-        ('상품명', '주문 상품명입니다. 재고 상품명과 맞춰 입력해주세요.'),
-        ('옵션명', '상품 옵션명입니다. 옵션이 없으면 비워도 됩니다.'),
-        ('바코드', '재고관리의 바코드(SKU)와 정확히 같아야 합니다. 입력하면 상품명/옵션명 대신 바코드로 재고 상품을 찾습니다.'),
-        ('상품수량', '주문한 상품 수량입니다.'),
-        ('수취인', '받는 분 성명입니다.'),
-        ('수취인전화번호1', '받는 분 연락처입니다.'),
-        ('수취인전화번호2', '보조 연락처입니다. 없으면 비워도 됩니다.'),
-        ('개인통관고유부호', '해외 배송에 필요한 개인통관고유부호입니다.'),
-        ('우편번호', '배송지 우편번호입니다.'),
-        ('주소', '배송지 전체 주소입니다.'),
-        ('배송요청사항', '배송 요청 또는 문 앞 요청사항입니다.')
+    descriptions = {
+        'order_no': '주문을 구분하는 번호입니다. 비워두면 사이트에서 임시 번호를 만듭니다.',
+        'courier': '택배사명입니다. 예: 나르다',
+        'tracking_no': '기존 송장번호가 있는 경우 입력합니다. 신규 송장 발급 예정이면 비워둡니다.',
+        'shipping_method': '배송 방식입니다. 예: 택배',
+        'product_name': '주문 파일에 기재된 상품명입니다. 화면에도 업로드한 상품명과 옵션명이 표시됩니다.',
+        'option_name': '주문 파일에 기재된 옵션명입니다. 옵션이 없으면 비워도 됩니다.',
+        'sku': '선택 입력 항목입니다. 입력해도 상품명과 옵션명은 주문 파일의 값을 그대로 사용합니다.',
+        'quantity': '주문한 상품 수량입니다.',
+        'recipient_name': '받는 분 성명입니다.',
+        'recipient_phone1': '받는 분 연락처입니다.',
+        'recipient_phone2': '보조 연락처입니다. 없으면 비워도 됩니다.',
+        'customs_id': '해외 배송에 필요한 개인통관고유부호입니다.',
+        'postal_code': '배송지 우편번호입니다.',
+        'address': '배송지 전체 주소입니다.',
+        'shipping_memo': '배송 요청 또는 문 앞 요청사항입니다.'
+    }
+    field_labels = {
+        'order_no': '주문번호', 'courier': '택배사', 'tracking_no': '송장번호',
+        'shipping_method': '배송방법', 'product_name': '상품명', 'option_name': '옵션명',
+        'sku': '바코드', 'quantity': '상품수량', 'recipient_name': '수취인',
+        'recipient_phone1': '수취인전화번호1', 'recipient_phone2': '수취인전화번호2',
+        'customs_id': '개인통관고유부호', 'postal_code': '우편번호', 'address': '주소',
+        'shipping_memo': '배송요청사항'
+    }
+    aliases = get_auto_header_aliases()
+    header_by_key = {
+        key: (aliases.get(key) or [field_labels[key]])[0]
+        for key in field_order
+    }
+    headers = [header_by_key[key] for key in field_order]
+    descriptions_rows = [
+        (header_by_key['order_no'], descriptions['order_no']),
+        *[(header_by_key[key], descriptions[key]) for key in field_order if key != 'order_no']
     ]
 
     wb = Workbook()
@@ -1164,7 +1181,7 @@ def download_order_upload_template():
 
     guide = wb.create_sheet('작성안내')
     guide.append(['엑셀 열 제목', '작성 안내'])
-    for row in descriptions:
+    for row in descriptions_rows:
         guide.append(list(row))
     for cell in guide[1]:
         cell.fill = header_fill
@@ -1175,6 +1192,21 @@ def download_order_upload_template():
     guide.column_dimensions['A'].width = 28
     guide.column_dimensions['B'].width = 85
     guide.freeze_panes = 'A2'
+
+    alias_sheet = wb.create_sheet('자동 인식어')
+    alias_sheet.append(['주문 항목', '자동으로 인식하는 열 제목'])
+    for cell in alias_sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(name='맑은 고딕', bold=True, color='FFFFFF')
+    for key in field_order:
+        for alias in aliases.get(key) or [field_labels[key]]:
+            alias_sheet.append([field_labels[key], alias])
+    for row in alias_sheet.iter_rows(min_row=1):
+        for cell in row:
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
+    alias_sheet.column_dimensions['A'].width = 28
+    alias_sheet.column_dimensions['B'].width = 40
+    alias_sheet.freeze_panes = 'A2'
 
     output = BytesIO()
     wb.save(output)
@@ -1414,40 +1446,6 @@ def get_orders():
         for o in orders:
             o['items'] = items_by_order.get(o['id'], [])
 
-        # 기존 주문 중 분할 품목명에 원본의 합쳐진 문자열이 저장된 경우에도,
-        # 바코드가 재고 옵션에 연결되어 있으면 품목별 재고 상품명/옵션명을 화면에 제공합니다.
-        item_skus = list(dict.fromkeys(
-            str(item.get('sku') or '').strip()
-            for order in orders for item in order.get('items', [])
-            if str(item.get('sku') or '').strip()
-        ))
-        if item_skus:
-            sku_placeholders = ','.join(['?'] * len(item_skus))
-            display_names_by_sku = {}
-            cur.execute(f'''SELECT po.sku, p.product_name, po.option_name
-                FROM product_options po
-                LEFT JOIN products p ON p.id = po.product_id AND p.tenant_id = po.tenant_id
-                WHERE po.tenant_id = ? AND po.sku IN ({sku_placeholders})
-                ORDER BY po.id ASC''', [g.company_id] + item_skus)
-            for row in cur.fetchall():
-                display_names_by_sku.setdefault(str(row['sku'] or '').strip(), {
-                    'display_product_name': row['product_name'] or '',
-                    'display_option_name': row['option_name'] or ''
-                })
-            cur.execute(f'''SELECT sku, product_name, option_name FROM products
-                WHERE tenant_id = ? AND sku IN ({sku_placeholders})''', [g.company_id] + item_skus)
-            for row in cur.fetchall():
-                display_names_by_sku.setdefault(str(row['sku'] or '').strip(), {
-                    'display_product_name': row['product_name'] or '',
-                    'display_option_name': row['option_name'] or ''
-                })
-            for order in orders:
-                if int(order.get('reship_clear_items') or 0):
-                    continue
-                for item in order.get('items', []):
-                    display_names = display_names_by_sku.get(str(item.get('sku') or '').strip())
-                    if display_names:
-                        item.update(display_names)
     else:
         for o in orders:
             o['items'] = []

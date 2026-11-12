@@ -133,7 +133,7 @@
                 <div class="d-flex gap-2"><button class="btn btn-outline-secondary" type="button" onclick="loadAutoHeaderAliases()"><i class="bi bi-arrow-clockwise me-1"></i>새로고침</button><button class="btn btn-primary" type="button" id="saveAutoHeaderAliasesButton" onclick="saveAutoHeaderAliases()"><i class="bi bi-floppy me-1"></i>저장</button></div>
             </div>
             <section class="panel">
-                <div class="panel-head"><div><h2 class="panel-title">열 제목 인식어</h2><div class="text-secondary small mt-1">각 입력란에 같은 항목으로 인식할 제목을 쉼표로 구분해 입력하세요. 예: 수취인, 수령인, 받는분</div></div></div>
+                <div class="panel-head"><div><h2 class="panel-title">열 제목 인식어</h2><div class="text-secondary small mt-1">인식어를 한 줄씩 편집하거나 추가·삭제할 수 있습니다. 각 항목은 하나 이상 남겨야 자동 인식과 양식 다운로드에 사용할 수 있습니다.</div></div></div>
                 <div class="p-3 p-md-4">
                     <div id="autoHeaderAliasesFields" class="row g-3"><div class="col-12 text-secondary">인식어 설정을 불러오는 중입니다.</div></div>
                     <div id="autoHeaderAliasesMessage" class="small mt-3" role="status" aria-live="polite"></div>
@@ -470,14 +470,32 @@ async function loadAutoHeaderAliases(){
         if(!response.ok)throw new Error(data.error||'인식어 설정을 불러오지 못했습니다.');
         const aliases=data.aliases||{};const labels=data.field_labels||{};
         autoHeaderAliasKeys=Object.keys(aliases);
-        fields.innerHTML=autoHeaderAliasKeys.map(key=>`<div class="col-12 col-lg-6"><label class="form-label fw-semibold" for="autoHeaderAlias_${esc(key)}">${esc(labels[key]||key)}</label><textarea class="form-control" rows="2" id="autoHeaderAlias_${esc(key)}" data-auto-header-alias="${esc(key)}" placeholder="쉼표로 구분해 입력">${esc((aliases[key]||[]).join(', '))}</textarea></div>`).join('');
+        fields.innerHTML=autoHeaderAliasKeys.map(key=>`<div class="col-12 col-lg-6"><div class="border rounded-3 p-3 h-100"><label class="form-label fw-semibold">${esc(labels[key]||key)}</label><div class="d-grid gap-2" data-auto-alias-list="${esc(key)}">${(aliases[key]||[]).map(value=>autoHeaderAliasRow(key,value)).join('')}</div><button type="button" class="btn btn-sm btn-outline-primary mt-2" data-add-auto-header-alias="${esc(key)}"><i class="bi bi-plus-lg me-1"></i>인식어 추가</button></div></div>`).join('');
+        bindAutoHeaderAliasControls();
     }catch(error){fields.innerHTML=`<div class="col-12 text-danger">${esc(error.message)}</div>`;}
+}
+function autoHeaderAliasRow(key,value=''){
+    return `<div class="input-group auto-header-alias-row"><input class="form-control" data-auto-header-alias="${esc(key)}" value="${esc(value)}" aria-label="인식어"><button type="button" class="btn btn-outline-danger" data-remove-auto-header-alias aria-label="인식어 삭제"><i class="bi bi-trash"></i></button></div>`;
+}
+function bindAutoHeaderAliasControls(){
+    const fields=document.getElementById('autoHeaderAliasesFields');
+    if(!fields)return;
+    fields.onclick=event=>{
+        const removeButton=event.target.closest('[data-remove-auto-header-alias]');
+        if(removeButton){removeButton.closest('.auto-header-alias-row')?.remove();return;}
+        const addButton=event.target.closest('[data-add-auto-header-alias]');
+        if(!addButton)return;
+        const list=addButton.closest('.border')?.querySelector('[data-auto-alias-list]');
+        if(!list)return;
+        list.insertAdjacentHTML('beforeend',autoHeaderAliasRow(addButton.dataset.addAutoHeaderAlias,''));
+        list.lastElementChild?.querySelector('input')?.focus();
+    };
 }
 async function saveAutoHeaderAliases(){
     const button=document.getElementById('saveAutoHeaderAliasesButton');const message=document.getElementById('autoHeaderAliasesMessage');
     if(!button)return;
     const aliases={};
-    document.querySelectorAll('[data-auto-header-alias]').forEach(input=>{aliases[input.dataset.autoHeaderAlias]=input.value.split(/[,;\n]/).map(value=>value.trim()).filter(Boolean);});
+    autoHeaderAliasKeys.forEach(key=>{aliases[key]=[...document.querySelectorAll('[data-auto-header-alias]')].filter(input=>input.dataset.autoHeaderAlias===key).map(input=>input.value.trim()).filter(Boolean);});
     button.disabled=true;if(message){message.className='small mt-3 text-secondary';message.textContent='저장 중입니다…';}
     try{
         const response=await fetch('/api/admin/auto-header-aliases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases})});

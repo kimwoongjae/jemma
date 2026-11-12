@@ -2940,16 +2940,13 @@
     function getCleanCombinedName(o, it, itemIndex = 0) {
         if (o && Number(o.reship_clear_items) === 1) return '';
         const cleanDispatchLabel = value => String(value || '').replace(/\s*\(출고\s*품목\)\s*/g, ' ').trim();
-        // Use the already split order item (and its SKU-matched inventory name) first.
-        // The original order label may contain separators such as ?, /, or + and
-        // must not overwrite the item-level names after the server has split it.
+        // 상품명과 옵션명은 업로드 파일에서 저장한 원문만 표시한다.
+        // 재고 마스터의 이름은 바코드 매칭에 사용하되 주문 표시명을 대체하지 않는다.
         const pName = cleanDispatchLabel(
-            (it && it.display_product_name) ||
             (it && it.item_product_name) ||
             (o && o.original_product_name) || ''
         );
         let itemOpt = cleanDispatchLabel(
-            (it && it.display_option_name) ||
             (it && it.item_option_name) ||
             (o && o.original_option_name) || ''
         );
