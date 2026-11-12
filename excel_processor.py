@@ -23,7 +23,7 @@ HEADER_MAP = {
     'option_name': ['옵션이름', '옵션명', '선택사항', 'option_name', '옵션정보', '옵션', '상품옵션', '선택옵션'],
     'sku': ['바코드', '상품바코드', '바코드번호', 'SKU', '상품코드', '옵션코드', 'sku'],
     'quantity': ['상품수량', '수량', '주문수량', 'qty', 'quantity', '구매수량'],
-    'recipient_name': ['수취인이름', '수취인', '받는사람', '받는분', '고객명', 'recipient_name', '수취인명'],
+    'recipient_name': ['수취인이름', '수취인', '수령인', '받는사람', '받는분', '고객명', 'recipient_name', '수취인명'],
     'recipient_phone1': ['수취인전화번호1', '수취인 전화번호1', '전화번호1', '연락처1', '수취인연락처', 'recipient_phone1', '수취인휴대폰', '휴대폰번호', '휴대전화', '수취인연락처1'],
     'recipient_phone2': ['수취인전화번호2', '수취인 전화번호2', '전화번호2', '연락처2', 'recipient_phone2', '기타연락처', '전화번호', '수취인연락처2'],
     'customs_id': ['개인통관부호', '개인통관고유부호', '통관부호', 'customs_id', '통관고유부호', '개인통관고유번호', '통관번호'],
@@ -32,10 +32,34 @@ HEADER_MAP = {
     'shipping_memo': ['배송메세지', '배송요청사항', '배송메모', '배송요청', 'shipping_memo', '배송메시지']
 }
 
-def detect_columns(df_columns):
+def get_auto_header_aliases():
+    """Load administrator-managed auto-detection aliases, falling back to built-ins."""
+    aliases = {key: list(values) for key, values in HEADER_MAP.items()}
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT flag_value FROM system_flags WHERE flag_key = ?', ('auto_header_aliases',))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            stored = json.loads(row['flag_value'] if hasattr(row, 'keys') else row[0])
+            if isinstance(stored, dict):
+                for key in aliases:
+                    values = stored.get(key)
+                    if isinstance(values, list):
+                        aliases[key] = list(dict.fromkeys(
+                            str(value).strip() for value in values if str(value or '').strip()
+                        ))
+    except Exception:
+        # Preserve uploads if settings are unavailable; built-in matching is still safe.
+        pass
+    return aliases
+
+
+def detect_columns(df_columns, header_map=None):
     mapping = {}
     col_list = [str(c).strip() for c in df_columns]
-    for key, candidates in HEADER_MAP.items():
+    for key, candidates in (header_map or HEADER_MAP).items():
         found = None
         for cand in candidates:
             cand_clean = re.sub(r'\s+', '', cand).lower()
@@ -472,7 +496,7 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
     except (TypeError, ValueError):
         header_row = 1
     df = pd.read_excel(file_path, dtype=str, header=None if header_row == 0 else header_row - 1)
-    col_map = detect_columns(df.columns)
+    col_map = detect_columns(df.columns, get_auto_header_aliases())
     invalid_profile_columns = []
     for key, reference in (column_mapping or {}).items():
         if key not in HEADER_MAP or not str(reference or '').strip():

@@ -45,11 +45,12 @@
             <a class="side-link {{ 'active' if active_page == 'companies' else '' }}" href="/admin/companies"><i class="bi bi-buildings"></i>거래처 현황</a>
             <a class="side-link {{ 'active' if active_page == 'shipments' else '' }}" href="/admin/shipments"><i class="bi bi-truck"></i>발송 현황</a>
             <a class="side-link {{ 'active' if active_page == 'inventory' else '' }}" href="/admin/inventory"><i class="bi bi-boxes"></i>입출고 처리</a>
+            <a class="side-link {{ 'active' if active_page == 'upload_columns' else '' }}" href="/admin/upload-columns"><i class="bi bi-file-earmark-spreadsheet"></i>자동 열 인식 파일 편집</a>
         </nav>
         <div class="side-note"><i class="bi bi-shield-lock me-1"></i>관리자 전용 화면입니다.</div>
     </aside>
     <section class="main-area {{ 'shipment-main-area' if active_page == 'shipments' else '' }}">
-        <header class="topbar"><div class="crumb"><i class="bi bi-grid-1x2 me-2"></i>관리자 <span class="mx-2">/</span>{{ '거래처 현황' if active_page == 'companies' else ('발송 현황' if active_page == 'shipments' else '입출고 처리') }}</div><div class="d-flex align-items-center gap-3"><span class="admin-pill"><i class="bi bi-person-check me-1"></i>관리자</span><button class="btn btn-sm btn-outline-secondary" onclick="logout()"><i class="bi bi-box-arrow-right me-1"></i>로그아웃</button></div></header>
+        <header class="topbar"><div class="crumb"><i class="bi bi-grid-1x2 me-2"></i>관리자 <span class="mx-2">/</span>{{ '거래처 현황' if active_page == 'companies' else ('발송 현황' if active_page == 'shipments' else ('입출고 처리' if active_page == 'inventory' else '자동 열 인식 파일 편집')) }}</div><div class="d-flex align-items-center gap-3"><span class="admin-pill"><i class="bi bi-person-check me-1"></i>관리자</span><button class="btn btn-sm btn-outline-secondary" onclick="logout()"><i class="bi bi-box-arrow-right me-1"></i>로그아웃</button></div></header>
         <main class="content {{ 'shipment-content' if active_page == 'shipments' else ('inventory-content' if active_page == 'inventory' else '') }}">
             {% if active_page == 'companies' %}
             <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4"><div><h1 class="page-title">거래처 현황</h1><div class="page-subtitle">등록된 거래처와 계정, 주문 현황을 관리합니다.</div></div><button class="btn btn-outline-secondary" onclick="loadAdminData()"><i class="bi bi-arrow-clockwise me-1"></i>새로고침</button></div>
@@ -108,7 +109,7 @@
                     </div>
                 </div>
             </div>
-            {% else %}
+            {% elif active_page == 'inventory' %}
             <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
                 <div><h1 class="page-title">재고 입출고 처리</h1><div class="page-subtitle">거래처의 상품을 바코드로 조회한 뒤 입고 또는 출고 수량을 반영합니다.</div></div>
             </div>
@@ -124,6 +125,18 @@
                     <div id="adminInventoryProduct" class="alert alert-light border mt-3 mb-0" role="status">거래처를 선택하고 바코드를 조회하면 상품 정보와 현재 재고가 표시됩니다.</div>
                     <div class="d-flex flex-wrap gap-2 mt-3"><button id="adminInventoryStockIn" class="btn btn-success px-4" onclick="submitAdminInventoryMovement('입고')" disabled><i class="bi bi-box-arrow-in-down me-1"></i>입고 처리</button><button id="adminInventoryStockOut" class="btn btn-danger px-4" onclick="submitAdminInventoryMovement('출고')" disabled><i class="bi bi-box-arrow-up me-1"></i>출고 처리</button></div>
                     <div id="adminInventoryCamera" class="mt-3 d-none"><div class="d-flex justify-content-between align-items-center mb-2"><strong>바코드 / QR 코드 스캔</strong><button type="button" class="btn btn-sm btn-outline-secondary" onclick="stopAdminInventoryCamera()">카메라 끄기</button></div><div class="admin-inventory-camera-view overflow-hidden rounded"><video id="adminInventoryVideo" autoplay playsinline muted></video><div class="inventory-scan-frame"></div><div class="inventory-scan-line"></div></div><div id="adminInventoryCameraStatus" class="small text-secondary mt-2" role="status" aria-live="polite">바코드나 QR 코드를 화면 중앙의 빨간 선에 맞춰주세요.</div></div>
+                </div>
+            </section>
+            {% else %}
+            <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-4">
+                <div><h1 class="page-title">자동 열 인식 파일 편집</h1><div class="page-subtitle">엑셀 제목 행에서 주문 항목을 찾을 때 사용할 열 이름과 별칭을 관리합니다.</div></div>
+                <div class="d-flex gap-2"><button class="btn btn-outline-secondary" type="button" onclick="loadAutoHeaderAliases()"><i class="bi bi-arrow-clockwise me-1"></i>새로고침</button><button class="btn btn-primary" type="button" id="saveAutoHeaderAliasesButton" onclick="saveAutoHeaderAliases()"><i class="bi bi-floppy me-1"></i>저장</button></div>
+            </div>
+            <section class="panel">
+                <div class="panel-head"><div><h2 class="panel-title">열 제목 인식어</h2><div class="text-secondary small mt-1">각 입력란에 같은 항목으로 인식할 제목을 쉼표로 구분해 입력하세요. 예: 수취인, 수령인, 받는분</div></div></div>
+                <div class="p-3 p-md-4">
+                    <div id="autoHeaderAliasesFields" class="row g-3"><div class="col-12 text-secondary">인식어 설정을 불러오는 중입니다.</div></div>
+                    <div id="autoHeaderAliasesMessage" class="small mt-3" role="status" aria-live="polite"></div>
                 </div>
             </section>
             {% endif %}
@@ -444,6 +457,36 @@ window.addEventListener('pagehide',stopAdminInventoryCamera);
 setDefaultAdminShipmentDates();
 initAdminShipmentColumnResizing();
 loadAdminData().then(()=>{if(activePage==='shipments')loadCompanyOrders();});
+let autoHeaderAliasKeys=[];
+async function loadAutoHeaderAliases(){
+    const fields=document.getElementById('autoHeaderAliasesFields');
+    const message=document.getElementById('autoHeaderAliasesMessage');
+    if(!fields)return;
+    fields.innerHTML='<div class="col-12 text-secondary">인식어 설정을 불러오는 중입니다.</div>';
+    if(message)message.textContent='';
+    try{
+        const response=await fetch('/api/admin/auto-header-aliases');
+        const data=await response.json();
+        if(!response.ok)throw new Error(data.error||'인식어 설정을 불러오지 못했습니다.');
+        const aliases=data.aliases||{};const labels=data.field_labels||{};
+        autoHeaderAliasKeys=Object.keys(aliases);
+        fields.innerHTML=autoHeaderAliasKeys.map(key=>`<div class="col-12 col-lg-6"><label class="form-label fw-semibold" for="autoHeaderAlias_${esc(key)}">${esc(labels[key]||key)}</label><textarea class="form-control" rows="2" id="autoHeaderAlias_${esc(key)}" data-auto-header-alias="${esc(key)}" placeholder="쉼표로 구분해 입력">${esc((aliases[key]||[]).join(', '))}</textarea></div>`).join('');
+    }catch(error){fields.innerHTML=`<div class="col-12 text-danger">${esc(error.message)}</div>`;}
+}
+async function saveAutoHeaderAliases(){
+    const button=document.getElementById('saveAutoHeaderAliasesButton');const message=document.getElementById('autoHeaderAliasesMessage');
+    if(!button)return;
+    const aliases={};
+    document.querySelectorAll('[data-auto-header-alias]').forEach(input=>{aliases[input.dataset.autoHeaderAlias]=input.value.split(/[,;\n]/).map(value=>value.trim()).filter(Boolean);});
+    button.disabled=true;if(message){message.className='small mt-3 text-secondary';message.textContent='저장 중입니다…';}
+    try{
+        const response=await fetch('/api/admin/auto-header-aliases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({aliases})});
+        const data=await response.json();if(!response.ok)throw new Error(data.error||'인식어 설정을 저장하지 못했습니다.');
+        if(message){message.className='small mt-3 text-success';message.textContent='자동 열 인식 설정을 저장했습니다.';}
+    }catch(error){if(message){message.className='small mt-3 text-danger';message.textContent=error.message;}}
+    finally{button.disabled=false;}
+}
+if(activePage==='upload_columns')loadAutoHeaderAliases();
 </script>
 </body>
 </html>

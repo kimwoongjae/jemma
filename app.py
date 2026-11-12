@@ -14,7 +14,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 from database import init_db, get_connection
-from excel_processor import NARDA_MANIFEST_PROFILE, process_excel_file, process_narda_manifest_file, save_orders_to_db
+from excel_processor import HEADER_MAP, NARDA_MANIFEST_PROFILE, process_excel_file, process_narda_manifest_file, save_orders_to_db
 from shipping_api import (
     issue_tracking_numbers, complete_dispatch,
     export_shipping_excel
@@ -284,6 +284,67 @@ def admin_inventory_page():
     if session.get('account_role') != 'admin':
         return redirect('/login')
     return render_template('admin.html', active_page='inventory')
+
+
+@app.route('/admin/upload-columns', methods=['GET'])
+def admin_upload_columns_page():
+    if session.get('account_role') != 'admin':
+        return redirect('/login')
+    return render_template('admin.html', active_page='upload_columns')
+
+
+@app.route('/api/admin/auto-header-aliases', methods=['GET', 'POST'])
+def admin_auto_header_aliases():
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+
+    field_labels = {
+        'order_no': '주문번호', 'courier': '택배사', 'tracking_no': '송장번호',
+        'shipping_method': '배송방법', 'product_name': '상품명', 'option_name': '옵션명',
+        'sku': '바코드 (SKU)', 'quantity': '상품수량', 'recipient_name': '수취인 / 수령인',
+        'recipient_phone1': '연락처 1', 'recipient_phone2': '연락처 2', 'customs_id': '개인통관고유부호',
+        'postal_code': '우편번호', 'address': '주소', 'shipping_memo': '배송요청사항'
+    }
+    aliases = {key: list(values) for key, values in HEADER_MAP.items()}
+    conn = get_connection()
+    cur = conn.cursor()
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        submitted = data.get('aliases')
+        if not isinstance(submitted, dict):
+            conn.close()
+            return jsonify({'error': '인식어 목록 형식이 올바르지 않습니다.'}), 400
+        cleaned = {}
+        for key in HEADER_MAP:
+            values = submitted.get(key, aliases[key])
+            if not isinstance(values, list):
+                conn.close()
+                return jsonify({'error': f'{field_labels.get(key, key)} 인식어는 목록으로 입력해주세요.'}), 400
+            normalized = list(dict.fromkeys(str(value).strip()[:80] for value in values if str(value or '').strip()))
+            if not normalized:
+                conn.close()
+                return jsonify({'error': f'{field_labels.get(key, key)} 인식어를 하나 이상 입력해주세요.'}), 400
+            cleaned[key] = normalized[:50]
+        cur.execute('''
+            INSERT INTO system_flags (flag_key, flag_value) VALUES (?, ?)
+            ON CONFLICT(flag_key) DO UPDATE SET flag_value = excluded.flag_value
+        ''', ('auto_header_aliases', json.dumps(cleaned, ensure_ascii=False)))
+        conn.commit()
+        aliases = cleaned
+    else:
+        cur.execute('SELECT flag_value FROM system_flags WHERE flag_key = ?', ('auto_header_aliases',))
+        row = cur.fetchone()
+        if row:
+            try:
+                saved = json.loads(row['flag_value'] if hasattr(row, 'keys') else row[0])
+                if isinstance(saved, dict):
+                    for key in aliases:
+                        if isinstance(saved.get(key), list) and saved[key]:
+                            aliases[key] = saved[key]
+            except (TypeError, ValueError):
+                pass
+    conn.close()
+    return jsonify({'aliases': aliases, 'field_labels': field_labels})
 
 
 def _admin_inventory_company_exists(cur, company_id):

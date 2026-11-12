@@ -1297,7 +1297,10 @@
                         <h5 class="fw-bold mb-1"><i class="fa-solid fa-arrow-down-wide-short text-primary me-2"></i>리스트 정렬</h5>
                         <p class="text-muted small mb-0">업로드 형식별 목록 표시 순서와 정렬 기준을 설정합니다.</p>
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadUploadProfiles()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="openUploadProfileModal('')"><i class="fa-solid fa-plus me-1"></i>형식 추가</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadUploadProfiles()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
+                    </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">
@@ -2154,11 +2157,17 @@
                 <td class="fw-semibold">${escapeHtml(label)}</td>
                 <td class="text-center"><span class="badge bg-primary-subtle text-primary">${Number(config.sort_priority)}</span></td>
                 <td>${escapeHtml(getUploadSortRules(config).map((rule, index) => `${index + 1}. ${uploadSortFieldLabel(rule.field, rule.direction)}`).join(' → '))}</td>
-                <td class="text-center"><button type="button" class="btn btn-sm btn-outline-primary" data-sort-profile="${escapeHtml(profileName)}"><i class="fa-solid fa-pen-to-square me-1"></i>정렬 편집</button></td>
+                <td class="text-center text-nowrap"><div class="d-inline-flex gap-1">
+                    ${profileName && profileName !== NARDA_MANIFEST_PROFILE ? `<button type="button" class="btn btn-sm btn-outline-secondary" data-edit-profile="${escapeHtml(profileName)}"><i class="fa-solid fa-pen-to-square me-1"></i>업로드형식 편집</button>` : ''}
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-sort-profile="${escapeHtml(profileName)}"><i class="fa-solid fa-arrow-down-wide-short me-1"></i>정렬 편집</button>
+                </div></td>
             </tr>
         `).join('');
         tbody.querySelectorAll('[data-sort-profile]').forEach(button => {
             button.addEventListener('click', () => openUploadSortModal(button.dataset.sortProfile || ''));
+        });
+        tbody.querySelectorAll('[data-edit-profile]').forEach(button => {
+            button.addEventListener('click', () => openUploadProfileModal(button.dataset.editProfile));
         });
     }
 
@@ -2219,10 +2228,10 @@
         localStorage.setItem('selectedUploadProfile', value);
     }
 
-    function openUploadProfileModal() {
+    function openUploadProfileModal(profileNameOverride = null) {
         renderUploadProfileMappingFields();
         const select = document.getElementById('uploadProfileSelect');
-        const selectedName = select?.value || '';
+        const selectedName = profileNameOverride !== null ? profileNameOverride : (select?.value || '');
         const profile = uploadProfilesCache.find(item => item.profile_name && item.profile_name === selectedName) ||
             (selectedName === NARDA_MANIFEST_PROFILE ? {
                 profile_name: NARDA_MANIFEST_PROFILE, mapping: {}, header_row: 1,
