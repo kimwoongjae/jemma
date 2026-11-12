@@ -306,14 +306,25 @@ def admin_auto_header_aliases():
         'postal_code': '우편번호', 'address': '주소', 'shipping_memo': '배송요청사항'
     }
     aliases = {key: list(values) for key, values in HEADER_MAP.items()}
+    enabled_fields = list(HEADER_MAP.keys())
     conn = get_connection()
     cur = conn.cursor()
     if request.method == 'POST':
         data = request.get_json() or {}
         submitted = data.get('aliases')
+        submitted_fields = data.get('enabled_fields', enabled_fields)
         if not isinstance(submitted, dict):
             conn.close()
             return jsonify({'error': '인식어 목록 형식이 올바르지 않습니다.'}), 400
+        if not isinstance(submitted_fields, list):
+            conn.close()
+            return jsonify({'error': '기본 양식 항목 목록 형식이 올바르지 않습니다.'}), 400
+        enabled_fields = list(dict.fromkeys(
+            str(key) for key in submitted_fields if str(key) in HEADER_MAP
+        ))
+        if not enabled_fields:
+            conn.close()
+            return jsonify({'error': '기본 양식에 포함할 항목을 하나 이상 선택해주세요.'}), 400
         cleaned = {}
         for key in HEADER_MAP:
             values = submitted.get(key, aliases[key])
@@ -329,6 +340,10 @@ def admin_auto_header_aliases():
             INSERT INTO system_flags (flag_key, flag_value) VALUES (?, ?)
             ON CONFLICT(flag_key) DO UPDATE SET flag_value = excluded.flag_value
         ''', ('auto_header_aliases', json.dumps(cleaned, ensure_ascii=False)))
+        cur.execute('''
+            INSERT INTO system_flags (flag_key, flag_value) VALUES (?, ?)
+            ON CONFLICT(flag_key) DO UPDATE SET flag_value = excluded.flag_value
+        ''', ('auto_header_template_fields', json.dumps(enabled_fields, ensure_ascii=False)))
         conn.commit()
         aliases = cleaned
     else:
@@ -343,8 +358,19 @@ def admin_auto_header_aliases():
                             aliases[key] = saved[key]
             except (TypeError, ValueError):
                 pass
+        cur.execute('SELECT flag_value FROM system_flags WHERE flag_key = ?', ('auto_header_template_fields',))
+        row = cur.fetchone()
+        if row:
+            try:
+                saved_fields = json.loads(row['flag_value'] if hasattr(row, 'keys') else row[0])
+                if isinstance(saved_fields, list):
+                    enabled_fields = [key for key in saved_fields if key in HEADER_MAP]
+                    if not enabled_fields:
+                        enabled_fields = list(HEADER_MAP.keys())
+            except (TypeError, ValueError):
+                pass
     conn.close()
-    return jsonify({'aliases': aliases, 'field_labels': field_labels})
+    return jsonify({'aliases': aliases, 'field_labels': field_labels, 'enabled_fields': enabled_fields})
 
 
 def _admin_inventory_company_exists(cur, company_id):
@@ -1154,14 +1180,28 @@ def download_order_upload_template():
         'shipping_memo': '배송요청사항'
     }
     aliases = get_auto_header_aliases()
+    template_fields = list(field_order)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT flag_value FROM system_flags WHERE flag_key = ?', ('auto_header_template_fields',))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        try:
+            saved_fields = json.loads(row['flag_value'] if hasattr(row, 'keys') else row[0])
+            if isinstance(saved_fields, list):
+                template_fields = [key for key in saved_fields if key in field_order]
+        except (TypeError, ValueError):
+            pass
+    if not template_fields:
+        template_fields = list(field_order)
     header_by_key = {
         key: (aliases.get(key) or [field_labels[key]])[0]
-        for key in field_order
+        for key in template_fields
     }
-    headers = [header_by_key[key] for key in field_order]
+    headers = [header_by_key[key] for key in template_fields]
     descriptions_rows = [
-        (header_by_key['order_no'], descriptions['order_no']),
-        *[(header_by_key[key], descriptions[key]) for key in field_order if key != 'order_no']
+        *[(header_by_key[key], descriptions[key]) for key in template_fields]
     ]
 
     wb = Workbook()
@@ -1198,7 +1238,7 @@ def download_order_upload_template():
     for cell in alias_sheet[1]:
         cell.fill = header_fill
         cell.font = Font(name='맑은 고딕', bold=True, color='FFFFFF')
-    for key in field_order:
+    for key in template_fields:
         for alias in aliases.get(key) or [field_labels[key]]:
             alias_sheet.append([field_labels[key], alias])
     for row in alias_sheet.iter_rows(min_row=1):

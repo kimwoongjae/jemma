@@ -2951,10 +2951,17 @@
             (o && o.original_option_name) || ''
         );
         if (itemOpt === '단일옵션' || itemOpt.toLowerCase() === 'nan') itemOpt = '';
-        if (!itemOpt) return pName;
-        if (itemOpt.includes(pName)) return itemOpt;
-        if (pName.includes(itemOpt)) return pName;
-        return `${pName} ${itemOpt}`.trim();
+        let combinedName = pName;
+        if (itemOpt) {
+            if (itemOpt.includes(pName)) combinedName = itemOpt;
+            else if (pName.includes(itemOpt)) combinedName = pName;
+            else combinedName = `${pName} ${itemOpt}`.trim();
+        }
+        const optionQuantity = Math.max(1, parseInt((it && it.option_quantity) || 1, 10) || 1);
+        if (optionQuantity > 1 && !new RegExp(`(?:^|\\s)${optionQuantity}$`).test(combinedName)) {
+            combinedName = `${combinedName} ${optionQuantity}`.trim();
+        }
+        return combinedName;
     }
 
     function getOrderQuantities(o, it) {
