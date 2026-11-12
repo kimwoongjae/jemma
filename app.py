@@ -1421,7 +1421,8 @@ def get_orders():
         if customs_status == '오류':
             query += " AND (customs_validation_status = '오류' OR status = '통관오류')"
         elif customs_status == '일치':
-            query += " AND customs_validation_status = '일치'"
+            # 검증 API의 정상 응답은 '정상'으로 저장되지만, 과거 데이터/일부 경로는 '일치'를 저장합니다.
+            query += " AND customs_validation_status IN ('정상', '일치')"
         elif customs_status == '미검증':
             query += " AND (customs_validation_status = '' OR customs_validation_status IS NULL)"
 
