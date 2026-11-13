@@ -1106,6 +1106,20 @@
                     <div id="inventoryLogDateList" class="d-flex flex-wrap gap-2" style="max-height: 150px; overflow-y: auto;">
                         <span class="text-muted small">날짜 목록을 불러오는 중입니다.</span>
                     </div>
+                    <div class="row g-2 align-items-end mt-2">
+                        <div class="col-md-3 col-sm-6">
+                            <label class="form-label small mb-1" for="inventoryLogDateFrom">입출고일 시작</label>
+                            <input type="date" id="inventoryLogDateFrom" class="form-control" aria-label="입출고일 시작 날짜">
+                        </div>
+                        <div class="col-md-3 col-sm-6">
+                            <label class="form-label small mb-1" for="inventoryLogDateTo">입출고일 종료</label>
+                            <input type="date" id="inventoryLogDateTo" class="form-control" aria-label="입출고일 종료 날짜">
+                        </div>
+                        <div class="col-md-3">
+                            <button type="button" class="btn btn-outline-primary w-100" onclick="searchInventoryLogDateRange()"><i class="fa-solid fa-magnifying-glass me-1"></i>기간 검색</button>
+                        </div>
+                        <div class="col-md-3 text-muted small pb-2">선택한 기간의 입출고 내역을 조회합니다.</div>
+                    </div>
                 </div>
             </div>
             <div class="card border-0 shadow-sm mb-3">
@@ -1133,7 +1147,7 @@
                                 <i class="fa-solid fa-file-excel me-1"></i> 선택 내역 엑셀 다운로드
                             </button>
                             <button class="btn btn-outline-secondary" onclick="exportAllLogs()">
-                                <i class="fa-solid fa-download me-1"></i> 선택 날짜 엑셀 다운로드
+                                <i class="fa-solid fa-download me-1"></i> 현재 검색결과 엑셀 다운로드
                             </button>
                         </div>
                     </div>
@@ -1972,11 +1986,11 @@
         };
         const fromValue = toInputDate(start);
         const toValue = toInputDate(today);
-        ['orderDateFrom', 'dispatchedDateFrom'].forEach(id => {
+        ['orderDateFrom', 'dispatchedDateFrom', 'inventoryLogDateFrom'].forEach(id => {
             const input = document.getElementById(id);
             if (input && !input.value) input.value = fromValue;
         });
-        ['orderDateTo', 'dispatchedDateTo'].forEach(id => {
+        ['orderDateTo', 'dispatchedDateTo', 'inventoryLogDateTo'].forEach(id => {
             const input = document.getElementById(id);
             if (input && !input.value) input.value = toValue;
         });
@@ -5345,31 +5359,59 @@
 
     async function selectInventoryLogDate(date) {
         inventorySelectedDate = date;
+        const dateFromInput = document.getElementById('inventoryLogDateFrom');
+        const dateToInput = document.getElementById('inventoryLogDateTo');
+        if (dateFromInput) dateFromInput.value = '';
+        if (dateToInput) dateToInput.value = '';
+        await loadInventoryLogs();
+    }
+
+    async function searchInventoryLogDateRange() {
+        const dateFrom = document.getElementById('inventoryLogDateFrom')?.value || '';
+        const dateTo = document.getElementById('inventoryLogDateTo')?.value || '';
+        if (dateFrom && dateTo && dateFrom > dateTo) {
+            alert('시작 날짜는 종료 날짜보다 늦을 수 없습니다.');
+            return;
+        }
+        inventorySelectedDate = '';
         await loadInventoryLogs();
     }
 
     async function loadInventoryLogs(refreshDates = true) {
         const search = document.getElementById('logSearchInput')?.value || '';
         const type = document.getElementById('logTypeFilter')?.value || '전체';
+        const dateFrom = document.getElementById('inventoryLogDateFrom')?.value || '';
+        const dateTo = document.getElementById('inventoryLogDateTo')?.value || '';
+        const hasDateRange = Boolean(dateFrom || dateTo);
 
         try {
             if (refreshDates) {
-                const datesRes = await fetch(`/api/inventory/logs/dates?search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}`);
+                const dateParams = new URLSearchParams({ search, type, date_from: dateFrom, date_to: dateTo });
+                const datesRes = await fetch(`/api/inventory/logs/dates?${dateParams.toString()}`);
                 if (!datesRes.ok) throw new Error(`입출고 날짜 조회 실패 (${datesRes.status})`);
                 const dateGroups = await datesRes.json();
                 if (!Array.isArray(dateGroups)) throw new Error('입출고 날짜 응답 형식이 올바르지 않습니다.');
-                if (!dateGroups.some(group => group.date === inventorySelectedDate)) {
+                if (hasDateRange) {
+                    inventorySelectedDate = '';
+                } else if (!dateGroups.some(group => group.date === inventorySelectedDate)) {
                     inventorySelectedDate = dateGroups[0]?.date || '';
                 }
                 renderInventoryLogDateList(dateGroups);
             }
 
-            if (!inventorySelectedDate) {
+            if (!hasDateRange && !inventorySelectedDate) {
                 inventoryLogsList = [];
                 renderLogsTable(inventoryLogsList);
                 return;
             }
-            const res = await fetch(`/api/inventory/logs?date=${encodeURIComponent(inventorySelectedDate)}&search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}`);
+            const logParams = new URLSearchParams({ search, type });
+            if (hasDateRange) {
+                logParams.set('date_from', dateFrom);
+                logParams.set('date_to', dateTo);
+            } else {
+                logParams.set('date', inventorySelectedDate);
+            }
+            const res = await fetch(`/api/inventory/logs?${logParams.toString()}`);
             if (!res.ok) throw new Error(`입출고 내역 조회 실패 (${res.status})`);
             inventoryLogsList = await res.json();
             renderLogsTable(inventoryLogsList);
@@ -5429,10 +5471,19 @@
         window.location.href = `/api/inventory/export-logs?ids=${ids.join(',')}`;
     }
     function exportAllLogs() {
-        if (!inventorySelectedDate) { alert('다운로드할 날짜별 입출고 내역이 없습니다.'); return; }
         const search = document.getElementById('logSearchInput')?.value || '';
         const type = document.getElementById('logTypeFilter')?.value || '전체';
-        window.location.href = `/api/inventory/export-logs?date=${encodeURIComponent(inventorySelectedDate)}&search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}`;
+        const dateFrom = document.getElementById('inventoryLogDateFrom')?.value || '';
+        const dateTo = document.getElementById('inventoryLogDateTo')?.value || '';
+        if (!dateFrom && !dateTo && !inventorySelectedDate) { alert('다운로드할 입출고 내역이 없습니다.'); return; }
+        const params = new URLSearchParams({ search, type });
+        if (dateFrom || dateTo) {
+            params.set('date_from', dateFrom);
+            params.set('date_to', dateTo);
+        } else {
+            params.set('date', inventorySelectedDate);
+        }
+        window.location.href = `/api/inventory/export-logs?${params.toString()}`;
     }
 
     async function deleteSelectedLogs() {

@@ -3250,6 +3250,8 @@ def move_orders_status():
 @app.route('/api/inventory/logs', methods=['GET'])
 def get_inventory_logs():
     selected_date = request.args.get('date', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     limit = int(request.args.get('limit', 200))
     search = request.args.get('search', '').strip()
     change_type = request.args.get('type', '').strip()
@@ -3272,12 +3274,23 @@ def get_inventory_logs():
         params.extend([wild, wild, wild])
 
     has_valid_date = bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date))
-    if has_valid_date:
+    has_valid_range = bool(
+        re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from)
+        or re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to)
+    )
+    if has_valid_range:
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
+            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?'
+            params.append(date_from)
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
+            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?'
+            params.append(date_to)
+    elif has_valid_date:
         query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
         params.append(selected_date)
 
-    # 날짜를 선택하면 그 날짜의 전체 내역을 표시하고, 날짜를 선택하지 않은 경우 최근 내역만 표시합니다.
-    if has_valid_date:
+    # 날짜 또는 기간을 지정하면 해당 범위 전체를 표시하고, 미지정 시 최근 내역만 표시합니다.
+    if has_valid_date or has_valid_range:
         query += ' ORDER BY id DESC'
     else:
         query += ' ORDER BY id DESC LIMIT ?'
@@ -3295,6 +3308,8 @@ def get_inventory_logs():
 def get_inventory_log_dates():
     search = request.args.get('search', '').strip()
     change_type = request.args.get('type', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     conn = get_connection()
     cur = conn.cursor()
     query = "SELECT SUBSTR(CAST(created_at AS TEXT), 1, 10) AS date, COUNT(*) AS count FROM inventory_logs WHERE tenant_id = ?"
@@ -3309,6 +3324,12 @@ def get_inventory_log_dates():
         query += ' AND (sku LIKE ? OR product_name LIKE ? OR memo LIKE ?)'
         wild = f'%{search}%'
         params.extend([wild, wild, wild])
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
+        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?"
+        params.append(date_from)
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
+        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?"
+        params.append(date_to)
     query += ' GROUP BY date ORDER BY date DESC'
     cur.execute(query, params)
     dates = [dict(row) for row in cur.fetchall()]
@@ -3319,6 +3340,8 @@ def get_inventory_log_dates():
 def export_inventory_logs():
     ids_str = request.args.get('ids', '').strip()
     selected_date = request.args.get('date', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     search = request.args.get('search', '').strip()
     change_type = request.args.get('type', '').strip()
     conn = get_connection()
@@ -3328,6 +3351,27 @@ def export_inventory_logs():
         ids = [int(x) for x in ids_str.split(',') if x.strip().isdigit()]
         placeholders = ','.join(['?'] * len(ids))
         cur.execute(f'SELECT * FROM inventory_logs WHERE tenant_id = ? AND id IN ({placeholders}) ORDER BY id ASC', [g.company_id] + ids)
+    elif (re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from)
+          or re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to)):
+        query = 'SELECT * FROM inventory_logs WHERE tenant_id = ?'
+        params = [g.company_id]
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
+            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?'
+            params.append(date_from)
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
+            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?'
+            params.append(date_to)
+        if change_type and change_type != '전체':
+            if change_type == '출고':
+                query += " AND change_type IN ('출고', '주문출고')"
+            else:
+                query += ' AND change_type = ?'
+                params.append(change_type)
+        if search:
+            query += ' AND (sku LIKE ? OR product_name LIKE ? OR memo LIKE ?)'
+            wild = f'%{search}%'
+            params.extend([wild, wild, wild])
+        cur.execute(query + ' ORDER BY id ASC', params)
     elif re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date):
         query = 'SELECT * FROM inventory_logs WHERE tenant_id = ? AND SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
         params = [g.company_id, selected_date]
@@ -3376,7 +3420,12 @@ def export_inventory_logs():
     return send_file(
         output,
         as_attachment=True,
-        download_name=f'입출고내역_{selected_date}.xlsx' if re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date) else '입출고내역리스트.xlsx',
+        download_name=(
+            f'입출고내역_{date_from or "시작"}_{date_to or "종료"}.xlsx'
+            if (re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from) or re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to))
+            else f'입출고내역_{selected_date}.xlsx' if re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date)
+            else '입출고내역리스트.xlsx'
+        ),
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
