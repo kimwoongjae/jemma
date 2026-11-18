@@ -948,9 +948,10 @@ def admin_issue_tracking():
     try:
         result = _enqueue_narda_dispatch(order_ids, company_id)
         return jsonify({'status': 'success', **result})
-    except Exception:
-        app.logger.exception('Admin NARDA queue submission failed')
-        return jsonify({'error': '나르다 발송 대기열에 추가하지 못했습니다.'}), 500
+    except Exception as error:
+        error_id = uuid.uuid4().hex[:10]
+        app.logger.exception('Admin NARDA queue submission failed [%s]', error_id)
+        return jsonify({'error': f'대기열 등록 실패 [{error_id}]: {type(error).__name__}: {str(error)[:240]}'}), 500
 
 
 @app.route('/api/admin/shipping/issue-tracking/status', methods=['GET'])
@@ -2688,9 +2689,10 @@ def api_issue_tracking():
     try:
         result = _enqueue_narda_dispatch(order_ids, g.company_id)
         return jsonify({'status': 'success', **result})
-    except Exception:
-        app.logger.exception('NARDA queue submission failed')
-        return jsonify({'error': '나르다 발송 대기열에 추가하지 못했습니다.'}), 500
+    except Exception as error:
+        error_id = uuid.uuid4().hex[:10]
+        app.logger.exception('NARDA queue submission failed [%s]', error_id)
+        return jsonify({'error': f'대기열 등록 실패 [{error_id}]: {type(error).__name__}: {str(error)[:240]}'}), 500
 
 
 @app.route('/api/shipping/issue-tracking/status', methods=['GET'])
