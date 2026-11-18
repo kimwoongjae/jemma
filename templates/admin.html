@@ -223,9 +223,9 @@ function renderShipments(){
     document.getElementById('ordersBody').innerHTML=rows.map(o=>{
         const apiState=String(o.api_dispatch_status||'').trim(), apiMessage=String(o.api_dispatch_message||'').trim();
         const stateLabel=apiState?`${o.status||'주문접수'} · API ${apiState}`:(o.status||'주문접수');
-        const stateClass=apiState==='실패'?'text-bg-danger':(o.status==='출고완료'?'text-bg-success':'text-bg-secondary');
+        const stateClass=apiState==='실패'?'text-bg-danger':apiState==='확인필요'?'text-bg-warning':(apiState==='전송중'?'text-bg-info':o.status==='출고완료'?'text-bg-success':'text-bg-secondary');
         const pdfLink=o.invoice_pdf_url?`<a class="btn btn-sm btn-outline-danger" target="_blank" rel="noopener" href="/api/admin/shipping/narda-pdf-bundle?company_id=${encodeURIComponent(o.tenant_id)}&order_ids=${encodeURIComponent(o.id)}" title="나르다 공식 PDF 송장"><i class="bi bi-file-pdf"></i></a>`:'–';
-        return `<tr><td data-column-key="selection"><input type="checkbox" class="form-check-input admin-order-check" value="${esc(o.id)}" data-company-id="${esc(o.tenant_id)}" onclick="handleAdminOrderSelectionClick(event,this)"></td><td data-column-key="company"><span class="company-name">${esc(o.company_name)}</span></td><td data-column-key="registered">${esc(String(o.created_at||'').replace('T',' ').slice(0,16))}</td><td data-column-key="order_no">${esc(o.order_no)}</td><td data-column-key="recipient">${esc(o.recipient_name)}</td><td data-column-key="courier">${esc(o.courier)}</td><td data-column-key="tracking" class="fw-semibold text-primary">${esc(o.tracking_no)}</td><td data-column-key="product">${esc([o.original_product_name,o.original_option_name].filter(Boolean).join(' / '))}</td><td data-column-key="state"><span class="badge ${stateClass}" title="${esc(apiMessage)}">${esc(stateLabel)}</span>${apiState==='실패'&&apiMessage?`<div class="small text-danger mt-1">${esc(apiMessage)}</div>`:''}</td><td data-column-key="invoice">${pdfLink}</td><td data-column-key="manage"><button type="button" class="btn btn-sm btn-outline-primary" onclick="openOrderEdit('${esc(o.id)}','${esc(o.tenant_id)}')" title="이 주문 편집"><i class="bi bi-pencil-square me-1"></i>편집</button></td></tr>`;
+        return `<tr><td data-column-key="selection"><input type="checkbox" class="form-check-input admin-order-check" value="${esc(o.id)}" data-company-id="${esc(o.tenant_id)}" onclick="handleAdminOrderSelectionClick(event,this)"></td><td data-column-key="company"><span class="company-name">${esc(o.company_name)}</span></td><td data-column-key="registered">${esc(String(o.created_at||'').replace('T',' ').slice(0,16))}</td><td data-column-key="order_no">${esc(o.order_no)}</td><td data-column-key="recipient">${esc(o.recipient_name)}</td><td data-column-key="courier">${esc(o.courier)}</td><td data-column-key="tracking" class="fw-semibold text-primary">${esc(o.tracking_no)}</td><td data-column-key="product">${esc([o.original_product_name,o.original_option_name].filter(Boolean).join(' / '))}</td><td data-column-key="state"><span class="badge ${stateClass}" title="${esc(apiMessage)}">${esc(stateLabel)}</span>${['실패','확인필요','전송중','대기중'].includes(apiState)&&apiMessage?`<div class="small ${apiState==='확인필요'?'text-danger':'text-muted'} mt-1">${esc(apiMessage)}</div>`:''}</td><td data-column-key="invoice">${pdfLink}</td><td data-column-key="manage"><button type="button" class="btn btn-sm btn-outline-primary" onclick="openOrderEdit('${esc(o.id)}','${esc(o.tenant_id)}')" title="이 주문 편집"><i class="bi bi-pencil-square me-1"></i>편집</button></td></tr>`;
     }).join('')||'<tr><td colspan="11" class="empty-state"><div class="empty-icon"><i class="bi bi-inbox"></i></div>조건에 맞는 주문 내역이 없습니다.</td></tr>';
     applyAdminShipmentColumnWidths();
     const master=document.getElementById('checkAllAdminOrders');if(master)master.checked=false;
@@ -342,13 +342,47 @@ async function saveAdminOrderEdit(){
 async function adminIssueTracking(){
     const selected=getSelectedAdminOrders(),companyId=getSelectedAdminCompanyId(selected);
     if(!companyId||!selected.length){alert('송장을 발급할 한 거래처의 주문만 선택해주세요.');return;}
-    if(!confirm(`선택한 ${selected.length}건을 해당 거래처의 나르다 설정으로 송장 발급할까요?\n\n거래처의 재고 출고 설정에 따라 재고 확인 및 차감도 함께 처리됩니다.`))return;
-    const button=document.getElementById('adminIssueTrackingButton');button.disabled=true;button.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>나르다 전송 중…';
+    if(!confirm(`선택한 ${selected.length}건을 한 건씩 순차 발급할까요?\n중복 방지를 위해 이미 대기 또는 확인 필요 상태인 건은 다시 전송하지 않습니다.`))return;
+    const button=document.getElementById('adminIssueTrackingButton');button.disabled=true;button.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>대기열 등록 중…';
     try{
-        const res=await fetch('/api/admin/shipping/issue-tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,order_ids:selected.map(item=>item.id)})});
-        const data=await res.json();if(!res.ok)throw new Error(data.error||'송장 발급을 처리하지 못했습니다.');
-        const failures=(data.failed||[]).map(item=>`${item.order_no||item.recipient_name||''}: ${item.error||'실패'}`).slice(0,8).join('\n');
-        alert(`${data.message}${failures?`\n\n실패 사유\n${failures}`:''}`);await loadCompanyOrders();
+        const enqueueRes=await fetch('/api/admin/shipping/issue-tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,order_ids:selected.map(item=>item.id)})});
+        const enqueueText=await enqueueRes.text();let queue;
+        try{queue=JSON.parse(enqueueText);}catch{throw new Error(`대기열 응답을 읽지 못했습니다 (HTTP ${enqueueRes.status}).`);}
+        if(!enqueueRes.ok||queue.status!=='success')throw new Error(queue.error||'발송 대기열 등록 실패');
+        const watchIds=[...new Set([...(queue.queued_ids||[]),...(queue.active_ids||[])].map(Number))];
+        const results=[],terminal=new Set();
+        const rejected=(queue.rejected||[]).map(item=>`${item.order_no||item.order_id||''}: ${item.error||'전송 제외'}`);
+        let pollErrors=0;
+        while(terminal.size<watchIds.length&&pollErrors<5){
+            try{
+                const params=new URLSearchParams({company_id:String(companyId),order_ids:watchIds.join(',')});
+                const response=await fetch(`/api/admin/shipping/issue-tracking/status?${params.toString()}`);
+                const text=await response.text();let data;
+                try{data=JSON.parse(text);}catch{throw new Error(`상태 응답을 읽지 못했습니다 (HTTP ${response.status}).`);}
+                if(!response.ok)throw new Error(data.error||`상태 조회 실패 (${response.status})`);
+                pollErrors=0;
+                for(const order of data.orders||[]){
+                    const id=Number(order.id),state=String(order.api_dispatch_status||'').trim();
+                    if(terminal.has(id))continue;
+                    if(['성공','실패','확인필요'].includes(state)){
+                        terminal.add(id);results.push({...order,final_state:state});
+                    }
+                }
+                button.innerHTML=`<span class="spinner-border spinner-border-sm me-1"></span>나르다 전송 ${terminal.size}/${watchIds.length}`;
+            }catch(error){
+                pollErrors++;
+                if(pollErrors>=5){
+                    watchIds.filter(id=>!terminal.has(id)).forEach(id=>{terminal.add(id);results.push({id,order_no:String(id),final_state:'확인필요',api_dispatch_message:error.message});});
+                }
+            }
+            if(terminal.size<watchIds.length&&pollErrors<5)await new Promise(resolve=>setTimeout(resolve,1500));
+        }
+        const succeeded=results.filter(item=>item.final_state==='성공');
+        const failed=results.filter(item=>item.final_state==='실패');
+        const unknown=results.filter(item=>item.final_state==='확인필요');
+        const details=[...rejected,...failed.map(item=>`${item.order_no||''}: ${item.api_dispatch_message||'실패'}`),...unknown.map(item=>`${item.order_no||''}: 확인 필요 — 나르다 등록 여부 확인 후 재전송하세요.`)].slice(0,12).join('\n');
+        alert(`나르다 송장 처리 결과\n성공 ${succeeded.length}건 · 실패 ${failed.length}건 · 확인 필요 ${unknown.length}건${details?`\n\n${details}`:''}`);
+        await loadCompanyOrders();
     }catch(error){alert(error.message);}
     finally{button.innerHTML='<i class="bi bi-upc-scan me-1"></i>선택 나르다 송장발급';updateAdminActionButtons();}
 }

@@ -5,6 +5,8 @@ import re
 import uuid
 import time
 import secrets
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -45,6 +47,111 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # DB 초기화
 init_db()
+
+# 나르다 등록은 웹 요청을 붙잡지 않고 백그라운드에서 주문별로 순차 처리합니다.
+_narda_dispatch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='narda-dispatch')
+
+
+def _process_narda_dispatch_queue(order_ids, tenant_id):
+    for order_id in order_ids:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute('''SELECT api_dispatch_status FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
+        row = cur.fetchone()
+        conn.close()
+        if not row or str(row['api_dispatch_status'] or '').strip() != '대기중':
+            continue
+        try:
+            result = issue_tracking_numbers([order_id], tenant_id=tenant_id)
+            if not isinstance(result, dict):
+                continue
+            # Normal NARDA rejection and response-unknown outcomes are persisted by shipping_api.
+        except Exception as error:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute('''UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
+                WHERE tenant_id = ? AND id = ? AND api_dispatch_status IN ('대기중', '전송중')''',
+                (f'서버 처리 중 응답을 확인하지 못했습니다. 나르다 등록 여부를 확인해주세요. ({str(error)[:180]})', tenant_id, order_id))
+            conn.commit()
+            conn.close()
+            app.logger.exception('Background NARDA dispatch failed for order id=%s', order_id)
+
+
+def _enqueue_narda_dispatch(order_ids, tenant_id):
+    clean_ids = list(dict.fromkeys(int(value) for value in order_ids if str(value).isdigit()))
+    if not clean_ids:
+        return {'queued_ids': [], 'active_ids': [], 'rejected': [{'order_id': None, 'error': '유효한 주문이 없습니다.'}]}
+    if len(clean_ids) > 500:
+        return {'queued_ids': [], 'active_ids': [], 'rejected': [{'order_id': None, 'error': '한 번에 최대 500건까지 처리할 수 있습니다.'}]}
+
+    conn = get_connection()
+    cur = conn.cursor()
+    queued_ids, active_ids, rejected = [], [], []
+    try:
+        for order_id in clean_ids:
+            cur.execute('''SELECT id, order_no, status, tracking_no, api_dispatch_status
+                FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
+            row = cur.fetchone()
+            if not row:
+                rejected.append({'order_id': order_id, 'error': '주문을 찾을 수 없습니다.'})
+                continue
+            order = dict(row)
+            dispatch_state = str(order.get('api_dispatch_status') or '').strip()
+            if dispatch_state in ('대기중', '전송중'):
+                active_ids.append(order_id)
+                continue
+            if dispatch_state == '확인필요':
+                rejected.append({'order_id': order_id, 'order_no': order.get('order_no'),
+                                 'error': '이전 전송 결과를 확인해야 합니다. 나르다 등록 여부를 확인한 뒤 전송 상태를 초기화해주세요.'})
+                continue
+            if str(order.get('tracking_no') or '').strip() or order.get('status') == '출고완료':
+                rejected.append({'order_id': order_id, 'order_no': order.get('order_no'),
+                                 'error': '이미 송장 또는 발송 완료 상태인 주문입니다.'})
+                continue
+            cur.execute('''UPDATE orders
+                SET api_dispatch_status = '대기중', api_dispatch_message = '나르다 순차 전송 대기열에 등록됨'
+                WHERE tenant_id = ? AND id = ?
+                  AND COALESCE(TRIM(tracking_no), '') = ''
+                  AND status != '출고완료'
+                  AND COALESCE(api_dispatch_status, '') NOT IN ('대기중', '전송중', '확인필요', '성공')''',
+                (tenant_id, order_id))
+            if cur.rowcount == 1:
+                queued_ids.append(order_id)
+            else:
+                cur.execute('''SELECT api_dispatch_status FROM orders WHERE tenant_id = ? AND id = ?''',
+                            (tenant_id, order_id))
+                latest = cur.fetchone()
+                if latest and str(latest['api_dispatch_status'] or '').strip() in ('대기중', '전송중'):
+                    active_ids.append(order_id)
+                else:
+                    rejected.append({'order_id': order_id, 'order_no': order.get('order_no'),
+                                     'error': '주문 상태가 변경되어 전송 대기열에 추가하지 않았습니다.'})
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if queued_ids:
+        _narda_dispatch_executor.submit(_process_narda_dispatch_queue, queued_ids, tenant_id)
+    return {'queued_ids': queued_ids, 'active_ids': active_ids, 'rejected': rejected}
+
+
+def _resume_narda_queue_after_restart():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT tenant_id, id FROM orders WHERE api_dispatch_status = '대기중' ORDER BY tenant_id, id")
+    groups = {}
+    for row in cur.fetchall():
+        item = dict(row)
+        groups.setdefault(int(item['tenant_id']), []).append(int(item['id']))
+    conn.close()
+    for tenant_id, order_ids in groups.items():
+        _narda_dispatch_executor.submit(_process_narda_dispatch_queue, order_ids, tenant_id)
+
+
+_resume_narda_queue_after_restart()
 
 
 @app.before_request
@@ -808,46 +915,80 @@ def admin_company_orders():
 def admin_issue_tracking():
     if session.get('account_role') != 'admin':
         return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     company_id = data.get('company_id')
     order_ids = data.get('order_ids') or []
     if not str(company_id or '').isdigit():
         return jsonify({'error': '거래처를 먼저 선택하세요.'}), 400
-    company_id = int(company_id)
     if not isinstance(order_ids, list) or not order_ids:
         return jsonify({'error': '송장을 발급할 주문을 선택하세요.'}), 400
+    company_id = int(company_id)
     try:
-        order_ids = list(dict.fromkeys(int(order_id) for order_id in order_ids))
+        order_ids = list(dict.fromkeys(int(value) for value in order_ids))
     except (TypeError, ValueError):
         return jsonify({'error': '주문 선택 정보가 올바르지 않습니다.'}), 400
-
     conn = get_connection()
     cur = conn.cursor()
     cur.execute('SELECT id FROM companies WHERE id = ? AND active = 1', (company_id,))
     company = cur.fetchone()
-    if company:
-        placeholders = ','.join(['?'] * len(order_ids))
-        cur.execute(f'SELECT COUNT(*) AS order_count FROM orders WHERE tenant_id = ? AND id IN ({placeholders})', [company_id] + order_ids)
-        owned_count = cur.fetchone()['order_count']
+    if company and order_ids:
+        marks = ','.join(['?'] * len(order_ids))
+        cur.execute(f'SELECT COUNT(*) AS count FROM orders WHERE tenant_id = ? AND id IN ({marks})', [company_id] + order_ids)
+        owned_count = cur.fetchone()['count']
     else:
         owned_count = 0
     conn.close()
     if not company:
         return jsonify({'error': '활성 상태의 거래처를 찾을 수 없습니다.'}), 404
     if owned_count != len(order_ids):
-        return jsonify({'error': '선택한 주문 중 해당 거래처에 속하지 않는 주문이 있습니다. 목록을 새로고침해주세요.'}), 400
+        return jsonify({'error': '선택한 주문 중 해당 거래처에 속하지 않는 주문이 있습니다.'}), 400
+    try:
+        result = _enqueue_narda_dispatch(order_ids, company_id)
+        return jsonify({'status': 'success', **result})
+    except Exception:
+        app.logger.exception('Admin NARDA queue submission failed')
+        return jsonify({'error': '나르다 발송 대기열에 추가하지 못했습니다.'}), 500
 
-    result = issue_tracking_numbers(order_ids, tenant_id=company_id)
-    updated = result.get('updated_orders', []) if isinstance(result, dict) else result
-    failed = result.get('failed_orders', []) if isinstance(result, dict) else []
-    return jsonify({
-        'status': 'success' if updated else 'error',
-        'updated': updated,
-        'failed': failed,
-        'success_count': len(updated),
-        'failed_count': len(failed),
-        'message': f"송장 발급 {len(updated)}건 성공, {len(failed)}건 실패"
-    })
+
+@app.route('/api/admin/shipping/issue-tracking/status', methods=['GET'])
+def admin_issue_tracking_status():
+    if session.get('account_role') != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.'}), 403
+    company_id = request.args.get('company_id', '').strip()
+    raw_ids = request.args.get('order_ids', '')
+    if not company_id.isdigit():
+        return jsonify({'error': '거래처를 확인해주세요.'}), 400
+    order_ids = list(dict.fromkeys(int(value) for value in raw_ids.split(',') if value.strip().isdigit()))
+    if not order_ids or len(order_ids) > 500:
+        return jsonify({'error': '조회할 주문을 확인해주세요.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    marks = ','.join(['?'] * len(order_ids))
+    cur.execute(f'''SELECT id, order_no, tracking_no, api_dispatch_status, api_dispatch_message
+        FROM orders WHERE tenant_id = ? AND id IN ({marks})''', [int(company_id)] + order_ids)
+    rows = [dict(row) for row in cur.fetchall()]
+    now = datetime.now()
+    for order in rows:
+        if str(order.get('api_dispatch_status') or '').strip() != '전송중':
+            continue
+        match = re.search(r'시작시각=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', str(order.get('api_dispatch_message') or ''))
+        started_at = None
+        if match:
+            try:
+                started_at = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                pass
+        if not started_at or (now - started_at).total_seconds() > 110:
+            message = '나르다 응답을 확인할 수 없습니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다. 나르다 등록 여부를 확인해주세요.'
+            cur.execute('''UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
+                WHERE tenant_id = ? AND id = ? AND api_dispatch_status = '전송중' ''',
+                (message, int(company_id), order['id']))
+            if cur.rowcount:
+                order['api_dispatch_status'] = '확인필요'
+                order['api_dispatch_message'] = message
+    conn.commit()
+    conn.close()
+    return jsonify({'orders': rows})
 
 
 @app.route('/api/admin/orders/<int:order_id>/edit', methods=['POST'])
@@ -2533,27 +2674,83 @@ def bulk_update_weight():
 # ----------------- 4. 배송 & 송장 & 출고 API -----------------
 @app.route('/api/shipping/issue-tracking', methods=['POST'])
 def api_issue_tracking():
-    data = request.get_json() or {}
-    order_ids = data.get('order_ids', [])
-    if not order_ids:
+    data = request.get_json(silent=True) or {}
+    order_ids = data.get('order_ids') or []
+    if not isinstance(order_ids, list) or not order_ids:
         return jsonify({'error': '송장을 발급할 주문을 선택하세요.'}), 400
+    try:
+        order_ids = list(dict.fromkeys(int(value) for value in order_ids))
+    except (TypeError, ValueError):
+        return jsonify({'error': '주문 선택 정보가 올바르지 않습니다.'}), 400
+    try:
+        result = _enqueue_narda_dispatch(order_ids, g.company_id)
+        return jsonify({'status': 'success', **result})
+    except Exception:
+        app.logger.exception('NARDA queue submission failed')
+        return jsonify({'error': '나르다 발송 대기열에 추가하지 못했습니다.'}), 500
 
-    res = issue_tracking_numbers(order_ids, tenant_id=g.company_id)
-    if isinstance(res, dict):
-        updated = res.get('updated_orders', [])
-        failed = res.get('failed_orders', [])
-    else:
-        updated = res
-        failed = []
 
-    return jsonify({
-        'status': 'success' if updated else 'error',
-        'updated': updated,
-        'failed': failed,
-        'success_count': len(updated),
-        'failed_count': len(failed),
-        'message': f"송장 발급 {len(updated)}건 성공, {len(failed)}건 실패"
-    })
+@app.route('/api/shipping/issue-tracking/status', methods=['GET'])
+def api_issue_tracking_status():
+    raw_ids = request.args.get('order_ids', '')
+    order_ids = list(dict.fromkeys(int(value) for value in raw_ids.split(',') if value.strip().isdigit()))
+    if not order_ids or len(order_ids) > 500:
+        return jsonify({'error': '조회할 주문을 확인해주세요.'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    marks = ','.join(['?'] * len(order_ids))
+    cur.execute(f'''SELECT id, order_no, tracking_no, api_dispatch_status, api_dispatch_message
+        FROM orders WHERE tenant_id = ? AND id IN ({marks})''', [g.company_id] + order_ids)
+    rows = [dict(row) for row in cur.fetchall()]
+    now = datetime.now()
+    for order in rows:
+        if str(order.get('api_dispatch_status') or '').strip() != '전송중':
+            continue
+        started_at = None
+        match = re.search(r'시작시각=(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', str(order.get('api_dispatch_message') or ''))
+        if match:
+            try:
+                started_at = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                pass
+        if not started_at or (now - started_at).total_seconds() > 110:
+            message = '나르다 응답을 확인할 수 없습니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다. 나르다 등록 여부를 확인해주세요.'
+            cur.execute('''UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
+                WHERE tenant_id = ? AND id = ? AND api_dispatch_status = '전송중' ''',
+                (message, g.company_id, order['id']))
+            if cur.rowcount:
+                order['api_dispatch_status'] = '확인필요'
+                order['api_dispatch_message'] = message
+    conn.commit()
+    conn.close()
+    return jsonify({'orders': rows})
+
+
+@app.route('/api/shipping/issue-tracking/reset-pending', methods=['POST'])
+def reset_pending_tracking_requests():
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get('order_ids') or []
+    order_ids = list(dict.fromkeys(int(value) for value in raw_ids if str(value).isdigit()))
+    if not order_ids or len(order_ids) > 500:
+        return jsonify({'error': '초기화할 주문을 선택해주세요. (최대 500건)'}), 400
+    conn = get_connection()
+    cur = conn.cursor()
+    marks = ','.join(['?'] * len(order_ids))
+    try:
+        cur.execute(f'''UPDATE orders
+            SET api_dispatch_status = '', api_dispatch_message = '사용자 확인 후 초기화됨'
+            WHERE tenant_id = ? AND id IN ({marks}) AND api_dispatch_status = '확인필요'
+              AND COALESCE(TRIM(tracking_no), '') = '' ''', [g.company_id] + order_ids)
+        reset_count = cur.rowcount
+        conn.commit()
+        return jsonify({'status': 'success', 'reset_count': reset_count})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('NARDA pending status reset failed')
+        return jsonify({'error': '전송 상태를 초기화하지 못했습니다.'}), 500
+    finally:
+        conn.close()
+
 
 @app.route('/api/shipping/dispatch', methods=['POST'])
 def api_dispatch():

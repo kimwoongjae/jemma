@@ -9,7 +9,6 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from io import BytesIO
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from database import get_connection
 
 # 스레드별 HTTP 세션을 사용해 동시 요청 사이의 세션/쿠키 공유를 방지합니다.
@@ -20,7 +19,9 @@ def get_narda_session():
     session = getattr(_narda_thread_local, 'session', None)
     if session is None:
         session = requests.Session()
-        adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=Retry(total=2, backoff_factor=0.3))
+        # 주문 등록 POST는 응답이 끊겼더라도 나르다에서 접수됐을 수 있습니다.
+        # 자동 재시도하면 같은 주문이 중복 등록될 수 있으므로 재시도를 비활성화합니다.
+        adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=0)
         session.mount('http://', adapter)
         session.mount('https://', adapter)
         _narda_thread_local.session = session
@@ -124,6 +125,8 @@ def call_narda_regist_order(ord_row, items, settings):
             json=payload,
             timeout=25
         )
+        if resp.status_code >= 500:
+            return {"success": False, "unknown": True, "error": f"나르다 서버 HTTP {resp.status_code} 응답"}
         res = resp.json()
         if res.get("resultCode") == 0 and res.get("result"):
             r = res["result"][0]
@@ -137,7 +140,8 @@ def call_narda_regist_order(ord_row, items, settings):
         else:
             return {"success": False, "error": res.get("errorMsg") or res.get("error_msg") or "나르다 API 오류"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        # A transport/protocol failure can mean NARDA accepted the order but its reply was lost.
+        return {"success": False, "unknown": True, "error": str(e)}
 
 def issue_tracking_numbers(order_ids, tenant_id=None):
     conn = get_connection()
@@ -168,6 +172,12 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
     if not order_ids:
         conn.close()
         return {'updated_orders': [], 'failed_orders': []}
+    if len(order_ids) > 1:
+        conn.close()
+        return {'updated_orders': [], 'failed_orders': [
+            {'order_id': oid, 'error': '중복 전송과 요청 시간 초과 방지를 위해 서버 대기열에서 한 건씩 처리해야 합니다.'}
+            for oid in order_ids
+        ]}
     placeholders = ','.join(['?'] * len(order_ids))
     cur.execute(f'SELECT * FROM orders WHERE tenant_id = ? AND id IN ({placeholders})', [tenant_id] + order_ids)
     orders_by_id = {int(row['id']): dict(row) for row in cur.fetchall()}
@@ -180,6 +190,16 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
     for oid in order_ids:
         ord_dict = orders_by_id.get(oid)
         if not ord_dict:
+            continue
+        dispatch_state = str(ord_dict.get('api_dispatch_status') or '').strip()
+        if dispatch_state in ('전송중', '확인필요'):
+            failed_orders.append({
+                'order_id': oid,
+                'order_no': ord_dict.get('order_no'),
+                'recipient_name': ord_dict.get('recipient_name'),
+                'status': dispatch_state,
+                'error': '이전 전송 결과가 확인되지 않아 중복 발급 방지를 위해 전송하지 않았습니다.'
+            })
             continue
         raw_items = items_by_order.get(oid, [])
         existing_tracking = ord_dict.get('tracking_no') or ''
@@ -319,19 +339,20 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
     if orders_data:
         active_ids = [item['oid'] for item in orders_data]
         active_placeholders = ','.join(['?'] * len(active_ids))
+        started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        waiting_message = f'나르다 API 응답 대기 중 | 시작시각={started_at}'
         cur.execute(f'''
             UPDATE orders
-            SET api_dispatch_status = '전송중', api_dispatch_message = '나르다 API 응답 대기 중'
+            SET api_dispatch_status = '전송중', api_dispatch_message = ?
             WHERE tenant_id = ? AND id IN ({active_placeholders})
-        ''', [tenant_id] + active_ids)
+        ''', [waiting_message, tenant_id] + active_ids)
     conn.commit()
 
     if not orders_data:
         conn.close()
         return {'updated_orders': [], 'failed_orders': failed_orders}
 
-    # 실제 나르다 API 전송 10건을 동시 5건으로 확인했고 모두 성공하여,
-    # 처리량을 높이되 요청 시간 초과 위험을 줄이도록 동시 요청을 5건으로 제한합니다.
+    # 서버 대기열은 주문별로 이 함수를 호출하므로 외부 API 요청도 한 번에 한 건만 실행됩니다.
     def call_api_single(item):
         if item.get('is_cached'):
             return (item['oid'], item['ord_dict'], {
@@ -342,7 +363,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
         api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
         return (item['oid'], item['ord_dict'], api_res)
 
-    workers_count = min(5, len(orders_data)) if orders_data else 1
+    workers_count = 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers_count) as executor:
         api_results = list(executor.map(call_api_single, orders_data))
 
@@ -351,15 +372,19 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
     for oid, ord_dict, api_res in api_results:
         if not api_res.get('success'):
             err_msg = api_res.get('error') or '등록 실패'
+            result_status = '확인필요' if api_res.get('unknown') else '실패'
+            if api_res.get('unknown'):
+                err_msg = f'나르다 응답을 확인하지 못했습니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다. 나르다 등록 여부를 확인해주세요. ({err_msg})'
             print(f"나르다 API 발급 실패 (주문번호 {ord_dict['order_no']}): {err_msg}")
             cur.execute('''
-                UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
+                UPDATE orders SET api_dispatch_status = ?, api_dispatch_message = ?
                 WHERE id = ? AND tenant_id = ?
-            ''', (str(err_msg), oid, tenant_id))
+            ''', (result_status, str(err_msg), oid, tenant_id))
             failed_orders.append({
                 'order_id': oid,
                 'order_no': ord_dict['order_no'],
                 'recipient_name': ord_dict['recipient_name'],
+                'status': result_status,
                 'error': err_msg
             })
             continue
@@ -367,15 +392,16 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
         tracking_no = api_res.get('tracking_no')
         pdf_url = api_res.get('pdf_url', '')
         if not tracking_no or not str(tracking_no).strip():
-            err_msg = '나르다 응답에 송장번호가 없어 발송 완료로 처리하지 않았습니다.'
+            err_msg = '나르다 응답은 성공으로 표시했지만 송장번호가 없어 접수 여부를 확인해야 합니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다.'
             cur.execute('''
-                UPDATE orders SET api_dispatch_status = '실패', api_dispatch_message = ?
+                UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
                 WHERE id = ? AND tenant_id = ?
             ''', (err_msg, oid, tenant_id))
             failed_orders.append({
                 'order_id': oid,
                 'order_no': ord_dict['order_no'],
                 'recipient_name': ord_dict['recipient_name'],
+                'status': '확인필요',
                 'error': err_msg
             })
             continue
