@@ -1942,6 +1942,9 @@ def edit_order(order_id):
         weight = max(0.0, float(data.get('weight', 0.0) or 0.0))
     except (TypeError, ValueError):
         return jsonify({'error': '무게는 0 이상의 숫자로 입력해주세요.'}), 400
+    packaging_type = str(data.get('packaging_type') or '기본포장').strip()
+    if packaging_type not in ORDER_PACKAGING_TYPES:
+        return jsonify({'error': '포장 방식을 확인해주세요.'}), 400
 
     conn = get_connection()
     cur = conn.cursor()
@@ -2031,10 +2034,10 @@ def edit_order(order_id):
 
         cur.execute('''UPDATE orders
             SET recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?, customs_id = ?,
-                postal_code = ?, address = ?, shipping_memo = ?, weight = ?, manifest_data = ?
+                postal_code = ?, address = ?, shipping_memo = ?, weight = ?, packaging_type = ?, manifest_data = ?
             WHERE id = ? AND tenant_id = ?''',
             (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code,
-             address, shipping_memo, weight, json.dumps(order_manifest, ensure_ascii=False), order_id, g.company_id))
+             address, shipping_memo, weight, packaging_type, json.dumps(order_manifest, ensure_ascii=False), order_id, g.company_id))
         for manifest_data, item_name, item_detail, piece, item_id in item_updates:
             cur.execute('''UPDATE order_items
                 SET manifest_data = ?, item_product_name = ?, item_option_name = ?,
@@ -2069,6 +2072,25 @@ def edit_order(order_id):
         return jsonify({'error': '주문 정보를 저장하지 못했습니다. 다시 시도해주세요.'}), 500
     finally:
         conn.close()
+
+@app.route('/api/dispatched-orders/<int:order_id>/edit', methods=['POST'])
+def edit_dispatched_order(order_id):
+    """Edit shipment/customer/customs details without changing dispatch or stock state."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''SELECT id FROM orders WHERE id = ? AND tenant_id = ? AND (
+            status IN ('출고완료', '송장발급')
+            OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != '')
+        )''', (order_id, g.company_id))
+        if not cur.fetchone():
+            return jsonify({'error': '발송 내역을 찾을 수 없습니다.'}), 404
+    finally:
+        conn.close()
+    # Reuse the validated order editor. It updates only order/item data; it does
+    # not re-run shipping API calls, stock deductions, or dispatch transitions.
+    return edit_order(order_id)
+
 
 @app.route('/api/orders/check-dispatch-availability', methods=['POST'])
 def check_dispatch_availability():

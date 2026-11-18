@@ -861,11 +861,12 @@
                                     <th data-column-key="buy_quantity" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 80px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">구매수량</th>
                                     <th data-column-key="courier_tracking" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" style="cursor: grab;" title="좌우로 드래그해 열 순서를 변경">택배사 / 송장번호</th>
                                     <th data-column-key="status" draggable="true" ondragstart="startDispatchedColumnDrag(event)" ondragover="allowDispatchedColumnDrop(event)" ondrop="dropDispatchedColumn(event)" class="text-center" style="width: 85px; cursor: grab;" title="좌우로 드래그해 열 순서를 변경">상태</th>
+                                    <th data-column-key="manage" class="text-center" style="width: 80px;">관리</th>
                                 </tr>
                             </thead>
                             <tbody id="dispatchedTableBody">
                                 <tr>
-                                    <td colspan="15" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
+                                    <td colspan="16" class="text-center py-5 text-muted">발송 처리된 주문 내역이 없습니다.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1696,6 +1697,7 @@
             <div class="modal-body">
                 <form id="editOrderForm" onsubmit="event.preventDefault(); saveOrderEdit();">
                     <input type="hidden" id="editOrderId">
+                    <input type="hidden" id="editOrderContext" value="order">
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label small fw-bold">주문번호</label>
@@ -1704,6 +1706,15 @@
                         <div class="col-md-6">
                             <label class="form-label small fw-bold">포장 무게 (kg)</label>
                             <input type="number" step="0.01" min="0" class="form-control" id="editWeight" placeholder="0.00">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">포장 방식</label>
+                            <select class="form-select" id="editPackagingType">
+                                <option value="기본포장">기본포장</option>
+                                <option value="추가포장">추가포장</option>
+                                <option value="박스포장">박스포장</option>
+                                <option value="추가+박스포장">추가+박스포장</option>
+                            </select>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label small fw-bold">수취인 성명</label>
@@ -2723,6 +2734,8 @@
                       dispatchedOrdersList.find(o => o.id === orderId);
         if (!order) return;
         document.getElementById('editOrderId').value = order.id;
+        document.getElementById('editOrderContext').value = 'order';
+        document.getElementById('editOrderModal').querySelector('.modal-title').innerHTML = '<i class="fa-solid fa-pen-to-square me-2 text-primary"></i>주문 및 수취인 정보 수정';
         document.getElementById('editOrderNo').value = order.order_no;
         document.getElementById('editRecipientName').value = order.recipient_name || '';
         document.getElementById('editRecipientPhone1').value = order.recipient_phone1 || '';
@@ -2732,10 +2745,19 @@
         document.getElementById('editAddress').value = order.address || '';
         document.getElementById('editShippingMemo').value = order.shipping_memo || '';
         document.getElementById('editWeight').value = order.weight && order.weight > 0 ? order.weight : '';
+        document.getElementById('editPackagingType').value = ['기본포장','추가포장','박스포장','추가+박스포장'].includes(order.packaging_type) ? order.packaging_type : '기본포장';
         renderEditManifestDetails(order);
         
         const modal = new bootstrap.Modal(document.getElementById('editOrderModal'));
         modal.show();
+    }
+
+    function openDispatchedEditModal(orderId) {
+        const order = dispatchedOrdersList.find(o => Number(o.id) === Number(orderId));
+        if (!order) return;
+        openEditOrderModal(orderId);
+        document.getElementById('editOrderContext').value = 'dispatched';
+        document.getElementById('editOrderModal').querySelector('.modal-title').innerHTML = '<i class="fa-solid fa-pen-to-square me-2 text-primary"></i>발송 정보 수정';
     }
 
     function renderEditManifestDetails(order) {
@@ -2786,6 +2808,7 @@
             address: document.getElementById('editAddress').value,
             shipping_memo: document.getElementById('editShippingMemo').value,
             weight: parseFloat(document.getElementById('editWeight').value) || 0.0,
+            packaging_type: document.getElementById('editPackagingType').value,
             ctns: document.getElementById('editManifestCtns').value,
             manifest_items: [...document.querySelectorAll('#editManifestDetailsBody tr[data-item-id]')].map(row => ({
                 id: row.dataset.itemId || null,
@@ -2794,7 +2817,11 @@
         };
 
         try {
-            const res = await fetch(`/api/orders/${orderId}/edit`, {
+            const editContext = document.getElementById('editOrderContext').value;
+            const editUrl = editContext === 'dispatched'
+                ? `/api/dispatched-orders/${orderId}/edit`
+                : `/api/orders/${orderId}/edit`;
+            const res = await fetch(editUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -2804,8 +2831,12 @@
                 const modalEl = document.getElementById('editOrderModal');
                 const modalInst = bootstrap.Modal.getInstance(modalEl);
                 if (modalInst) modalInst.hide();
-                loadOrders();
-                loadCustomsErrorOrders();
+                if (editContext === 'dispatched') {
+                    await loadDispatchedOrders();
+                } else {
+                    loadOrders();
+                    loadCustomsErrorOrders();
+                }
             } else {
                 alert('저장 실패: ' + (data.error || '오류'));
             }
@@ -4291,7 +4322,7 @@
         tbody.innerHTML = '';
 
         if (!orders || orders.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="15" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="16" class="text-center py-5 text-muted">발송 처리(출고완료)된 주문 내역이 없습니다.</td></tr>`;
             updateDispatchedSelectionCount();
             return;
         }
@@ -4340,7 +4371,8 @@
                 <td data-column-key="option_quantity" class="text-center fw-bold text-secondary">${optionQtyHtml}</td>
                 <td data-column-key="buy_quantity" class="text-center fs-6 fw-bold text-primary">${buyQtyHtml}</td>
                 <td data-column-key="courier_tracking" class="bg-white"><div>${courierBadge}</div>${o.tracking_no ? `<div><a href="https://app.narda-jp.com/tracking.html?quickNo=${encodeURIComponent(String(o.tracking_no).trim())}" target="_blank" rel="noopener noreferrer" class="text-decoration-none"><code class="text-primary fw-bold" title="새 탭에서 나르다 배송조회 열기">${escapeHtml(o.tracking_no)} <i class="fa-solid fa-arrow-up-right-from-square small"></i></code></a></div>${o.invoice_pdf_url ? `<div class="mt-1"><a href="${o.invoice_pdf_url}" target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-outline-danger py-0 px-2" style="font-size: 11px;"><i class="fa-solid fa-file-pdf me-1"></i>송장 PDF</a></div>` : ''}` : '<span class="text-muted small">미발급</span>'}</td>
-                <td data-column-key="status" class="text-center bg-white"><span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span></td>`;
+                <td data-column-key="status" class="text-center bg-white"><span class="badge bg-success py-1 px-2"><i class="fa-solid fa-truck me-1"></i>출고완료</span></td>
+                <td data-column-key="manage" class="text-center bg-white"><button type="button" class="btn btn-sm btn-outline-primary" onclick="openDispatchedEditModal(${Number(o.id)})" title="발송 정보 편집"><i class="fa-solid fa-pen-to-square"></i></button></td>`;
             tbody.appendChild(tr);
         });
         applyDispatchedColumnOrder();
