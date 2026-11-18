@@ -52,16 +52,25 @@ init_db()
 _narda_dispatch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='narda-dispatch')
 
 
-def _process_narda_dispatch_queue(order_ids, tenant_id):
+def _process_narda_dispatch_queue(order_ids, tenant_id, force_retry=False):
     for order_id in order_ids:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute('''SELECT api_dispatch_status FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
         row = cur.fetchone()
         conn.close()
-        if not row or str(row['api_dispatch_status'] or '').strip() != '대기중':
+        state = str(row['api_dispatch_status'] or '').strip() if row else ''
+        if not row or (not force_retry and state != '대기중'):
             continue
         try:
+            if force_retry:
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute('''UPDATE orders SET api_dispatch_status = '대기중',
+                    api_dispatch_message = '사용자 재전송 요청 대기열 처리 중'
+                    WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
+                conn.commit()
+                conn.close()
             result = issue_tracking_numbers([order_id], tenant_id=tenant_id)
             if not isinstance(result, dict):
                 continue
@@ -89,7 +98,7 @@ def _enqueue_narda_dispatch(order_ids, tenant_id):
     queued_ids, active_ids, rejected = [], [], []
     try:
         for order_id in clean_ids:
-            cur.execute('''SELECT id, order_no, status, tracking_no, api_dispatch_status
+            cur.execute('''SELECT id, order_no, status, tracking_no, api_dispatch_status, api_dispatch_message
                 FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
             row = cur.fetchone()
             if not row:
@@ -100,20 +109,10 @@ def _enqueue_narda_dispatch(order_ids, tenant_id):
             if dispatch_state in ('대기중', '전송중'):
                 active_ids.append(order_id)
                 continue
-            if dispatch_state == '확인필요':
-                rejected.append({'order_id': order_id, 'order_no': order.get('order_no'),
-                                 'error': '이전 전송 결과를 확인해야 합니다. 나르다 등록 여부를 확인한 뒤 전송 상태를 초기화해주세요.'})
-                continue
-            if str(order.get('tracking_no') or '').strip() or order.get('status') == '출고완료':
-                rejected.append({'order_id': order_id, 'order_no': order.get('order_no'),
-                                 'error': '이미 송장 또는 발송 완료 상태인 주문입니다.'})
-                continue
             cur.execute('''UPDATE orders
                 SET api_dispatch_status = '대기중', api_dispatch_message = '나르다 순차 전송 대기열에 등록됨'
                 WHERE tenant_id = ? AND id = ?
-                  AND COALESCE(TRIM(tracking_no), '') = ''
-                  AND status != '출고완료'
-                  AND COALESCE(api_dispatch_status, '') NOT IN ('대기중', '전송중', '확인필요', '성공')''',
+                  AND COALESCE(api_dispatch_status, '') NOT IN ('대기중', '전송중')''',
                 (tenant_id, order_id))
             if cur.rowcount == 1:
                 queued_ids.append(order_id)
@@ -135,6 +134,10 @@ def _enqueue_narda_dispatch(order_ids, tenant_id):
 
     if queued_ids:
         _narda_dispatch_executor.submit(_process_narda_dispatch_queue, queued_ids, tenant_id)
+    if active_ids:
+        # 재전송 클릭은 현재 요청 뒤에 직렬로 추가합니다. 같은 주문을 동시 전송하지는 않지만,
+        # 사용자가 다시 요청한 만큼 나르다 API를 다시 호출합니다.
+        _narda_dispatch_executor.submit(_process_narda_dispatch_queue, active_ids, tenant_id, True)
     return {'queued_ids': queued_ids, 'active_ids': active_ids, 'rejected': rejected}
 
 

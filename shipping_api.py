@@ -192,30 +192,16 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
         if not ord_dict:
             continue
         dispatch_state = str(ord_dict.get('api_dispatch_status') or '').strip()
-        if dispatch_state in ('전송중', '확인필요'):
+        if dispatch_state == '전송중':
             failed_orders.append({
                 'order_id': oid,
                 'order_no': ord_dict.get('order_no'),
                 'recipient_name': ord_dict.get('recipient_name'),
                 'status': dispatch_state,
-                'error': '이전 전송 결과가 확인되지 않아 중복 발급 방지를 위해 전송하지 않았습니다.'
+                'error': '현재 이 주문의 나르다 요청이 처리 중입니다. 처리가 끝난 뒤 다시 요청해주세요.'
             })
             continue
         raw_items = items_by_order.get(oid, [])
-        existing_tracking = ord_dict.get('tracking_no') or ''
-        existing_pdf = ord_dict.get('invoice_pdf_url') or ''
-
-        if existing_tracking and existing_pdf and existing_tracking.startswith('30'):
-            orders_data.append({
-                'oid': oid,
-                'ord_dict': ord_dict,
-                'items': [],
-                'deduct_items': raw_items,
-                'is_cached': True,
-                'tracking_no': existing_tracking,
-                'pdf_url': existing_pdf
-            })
-            continue
 
         items = []
         for raw_item in raw_items:
