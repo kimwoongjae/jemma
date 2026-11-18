@@ -982,8 +982,8 @@ def admin_issue_tracking_status():
                 started_at = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S')
             except ValueError:
                 pass
-        if not started_at or (now - started_at).total_seconds() > 110:
-            message = '나르다 응답을 확인할 수 없습니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다. 나르다 등록 여부를 확인해주세요.'
+        if not started_at or (now - started_at).total_seconds() > 360:
+            message = '나르다 응답을 6분 넘게 확인하지 못했습니다. 자동 재시도 후에도 응답이 없어 나르다 등록 여부를 확인해주세요.'
             cur.execute('''UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
                 WHERE tenant_id = ? AND id = ? AND api_dispatch_status = '전송중' ''',
                 (message, int(company_id), order['id']))
@@ -2718,8 +2718,8 @@ def api_issue_tracking_status():
                 started_at = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S')
             except ValueError:
                 pass
-        if not started_at or (now - started_at).total_seconds() > 110:
-            message = '나르다 응답을 확인할 수 없습니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다. 나르다 등록 여부를 확인해주세요.'
+        if not started_at or (now - started_at).total_seconds() > 360:
+            message = '나르다 응답을 6분 넘게 확인하지 못했습니다. 자동 재시도 후에도 응답이 없어 나르다 등록 여부를 확인해주세요.'
             cur.execute('''UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
                 WHERE tenant_id = ? AND id = ? AND api_dispatch_status = '전송중' ''',
                 (message, g.company_id, order['id']))

@@ -342,7 +342,7 @@ async function saveAdminOrderEdit(){
 async function adminIssueTracking(){
     const selected=getSelectedAdminOrders(),companyId=getSelectedAdminCompanyId(selected);
     if(!companyId||!selected.length){alert('송장을 발급할 한 거래처의 주문만 선택해주세요.');return;}
-    if(!confirm(`선택한 ${selected.length}건을 한 건씩 순차 발급할까요?\n중복 방지를 위해 이미 대기 또는 확인 필요 상태인 건은 다시 전송하지 않습니다.`))return;
+    if(!confirm(`선택한 ${selected.length}건을 한 건씩 순차 발급할까요?\n이전 응답이 불명확한 건도 다시 전송하며, 나르다에서 중복 송장이 발급될 수 있습니다.`))return;
     const button=document.getElementById('adminIssueTrackingButton');button.disabled=true;button.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>대기열 등록 중…';
     try{
         const enqueueRes=await fetch('/api/admin/shipping/issue-tracking',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,order_ids:selected.map(item=>item.id)})});

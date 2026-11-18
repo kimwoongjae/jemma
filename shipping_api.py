@@ -123,7 +123,8 @@ def call_narda_regist_order(ord_row, items, settings):
             url,
             headers={"Content-Type": "application/json"},
             json=payload,
-            timeout=25
+            # NARDA 응답이 늦은 경우를 고려해 연결 15초, 응답 90초까지 기다립니다.
+            timeout=(15, 90)
         )
         if resp.status_code >= 500:
             return {"success": False, "unknown": True, "error": f"나르다 서버 HTTP {resp.status_code} 응답"}
@@ -347,6 +348,13 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
                 'pdf_url': item['pdf_url']
             })
         api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
+        retry_count = 0
+        while api_res.get('unknown') and retry_count < 2:
+            retry_count += 1
+            time.sleep(2 * retry_count)
+            api_res = call_narda_regist_order(item['ord_dict'], item['items'], settings)
+        if api_res.get('unknown'):
+            api_res['error'] = f"나르다 응답을 받지 못해 자동 재전송 2회 후에도 결과를 확인하지 못했습니다. ({api_res.get('error') or '응답 없음'})"
         return (item['oid'], item['ord_dict'], api_res)
 
     workers_count = 1
@@ -360,7 +368,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
             err_msg = api_res.get('error') or '등록 실패'
             result_status = '확인필요' if api_res.get('unknown') else '실패'
             if api_res.get('unknown'):
-                err_msg = f'나르다 응답을 확인하지 못했습니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다. 나르다 등록 여부를 확인해주세요. ({err_msg})'
+                err_msg = f'나르다 응답을 확인하지 못했습니다. 자동 재전송 후에도 결과가 불명확합니다. 나르다 등록 여부를 확인해주세요. ({err_msg})'
             print(f"나르다 API 발급 실패 (주문번호 {ord_dict['order_no']}): {err_msg}")
             cur.execute('''
                 UPDATE orders SET api_dispatch_status = ?, api_dispatch_message = ?
@@ -378,7 +386,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
         tracking_no = api_res.get('tracking_no')
         pdf_url = api_res.get('pdf_url', '')
         if not tracking_no or not str(tracking_no).strip():
-            err_msg = '나르다 응답은 성공으로 표시했지만 송장번호가 없어 접수 여부를 확인해야 합니다. 중복 발급 방지를 위해 자동 재전송하지 않았습니다.'
+            err_msg = '나르다 응답은 성공으로 표시했지만 송장번호를 받지 못했습니다. 나르다 등록 여부와 송장번호를 확인해주세요.'
             cur.execute('''
                 UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
                 WHERE id = ? AND tenant_id = ?
