@@ -1717,6 +1717,161 @@ def get_dispatched_orders():
     conn.close()
     return jsonify(orders)
 
+@app.route('/api/dispatched-orders/tracking-template', methods=['GET'])
+def download_dispatched_tracking_template():
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = '송장번호 수정'
+    sheet.append(['주문번호', '나르다 송장번호'])
+    header_fill = PatternFill(fill_type='solid', fgColor='24476B')
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(name='맑은 고딕', bold=True, color='FFFFFF')
+        cell.alignment = Alignment(horizontal='center')
+    sheet.column_dimensions['A'].width = 32
+    sheet.column_dimensions['B'].width = 28
+    sheet.freeze_panes = 'A2'
+    sheet.auto_filter.ref = 'A1:B1'
+
+    guide = workbook.create_sheet('작성안내')
+    guide.append(['열 이름', '작성 방법'])
+    guide.append(['주문번호', '발송내역 목록에 등록된 주문번호를 그대로 입력합니다.'])
+    guide.append(['나르다 송장번호', '주문번호에 해당하는 새 나르다 송장번호를 입력합니다.'])
+    guide.append(['주의', '발송 완료된 나르다 건만 수정됩니다. 송장번호 외 주문 상태와 재고는 변경되지 않습니다.'])
+    guide.column_dimensions['A'].width = 24
+    guide.column_dimensions['B'].width = 78
+    for cell in guide[1]:
+        cell.fill = header_fill
+        cell.font = Font(name='맑은 고딕', bold=True, color='FFFFFF')
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(output, as_attachment=True, download_name='나르다_송장번호_수정양식.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@app.route('/api/dispatched-orders/tracking-upload', methods=['POST'])
+def upload_dispatched_tracking_numbers():
+    from io import BytesIO
+    import openpyxl
+
+    uploaded = request.files.get('file')
+    if not uploaded or not uploaded.filename:
+        return jsonify({'error': '송장번호 수정 엑셀 파일을 선택해주세요.'}), 400
+    if not uploaded.filename.lower().endswith('.xlsx'):
+        return jsonify({'error': '.xlsx 파일만 업로드할 수 있습니다.'}), 400
+    try:
+        workbook = openpyxl.load_workbook(BytesIO(uploaded.read()), data_only=True, read_only=True)
+    except Exception:
+        return jsonify({'error': '엑셀 파일을 읽지 못했습니다. 다운로드한 송장 수정 양식을 사용해주세요.'}), 400
+
+    def normalize_header(value):
+        return ''.join(char for char in str(value or '').strip().lower()
+                       if char.isalnum() or '\uac00' <= char <= '\ud7a3')
+
+    order_headers = {'주문번호', 'orderno', 'orderid'}
+    tracking_headers = {'나르다송장번호', '송장번호', 'trackingno', 'nardatrackingno'}
+    sheet = workbook['송장번호 수정'] if '송장번호 수정' in workbook.sheetnames else workbook.active
+    rows = sheet.iter_rows(values_only=True)
+    header_row = None
+    order_col = tracking_col = None
+    for row_number, row in enumerate(rows, start=1):
+        normalized = [normalize_header(value) for value in row]
+        found_order = next((i for i, value in enumerate(normalized) if value in order_headers), None)
+        found_tracking = next((i for i, value in enumerate(normalized) if value in tracking_headers), None)
+        if found_order is not None and found_tracking is not None:
+            header_row, order_col, tracking_col = row_number, found_order, found_tracking
+            break
+    if header_row is None:
+        return jsonify({'error': '열 제목에서 주문번호와 나르다 송장번호를 찾지 못했습니다.'}), 400
+
+    def cell_text(value):
+        if value is None:
+            return ''
+        if isinstance(value, bool):
+            return str(value)
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value).strip()
+
+    records = []
+    errors = []
+    skipped_count = 0
+    for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+        if row_number <= header_row:
+            continue
+        order_no = cell_text(row[order_col] if order_col < len(row) else None)
+        tracking_no = cell_text(row[tracking_col] if tracking_col < len(row) else None)
+        if not order_no and not tracking_no:
+            continue
+        if not order_no or not tracking_no:
+            errors.append({'row': row_number, 'error': '주문번호와 나르다 송장번호를 모두 입력해주세요.'})
+            continue
+        records.append({'row': row_number, 'order_no': order_no, 'tracking_no': tracking_no})
+
+    if not records and not errors:
+        return jsonify({'error': '업로드할 주문번호와 송장번호가 없습니다.'}), 400
+    seen_orders = set()
+    seen_tracking = set()
+    for record in records:
+        if record['order_no'] in seen_orders:
+            errors.append({'row': record['row'], 'error': '엑셀에 같은 주문번호가 중복되어 있습니다.'})
+        seen_orders.add(record['order_no'])
+        if record['tracking_no'] in seen_tracking:
+            errors.append({'row': record['row'], 'error': '엑셀에 같은 송장번호가 중복되어 있습니다.'})
+        seen_tracking.add(record['tracking_no'])
+    if errors:
+        return jsonify({'error': '엑셀 내용을 수정한 뒤 다시 업로드해주세요. 오류가 있어 이번 파일은 저장하지 않았습니다.',
+                        'errors': errors, 'updated_count': 0}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    updates = []
+    try:
+        for record in records:
+            cur.execute('''SELECT id, order_no, courier, tracking_no, status FROM orders
+                WHERE tenant_id = ? AND order_no = ?''', (g.company_id, record['order_no']))
+            matches = [dict(row) for row in cur.fetchall()]
+            if len(matches) != 1:
+                errors.append({'row': record['row'], 'error': '업체 내 주문번호가 없거나 중복되어 정확히 찾을 수 없습니다.'})
+                continue
+            order = matches[0]
+            courier = ''.join(str(order.get('courier') or '').lower().split())
+            is_narda = '나르다' in courier or 'narda' in courier
+            is_dispatched = order.get('status') in ('출고완료', '송장발급') or bool(str(order.get('tracking_no') or '').strip())
+            if not is_narda or not is_dispatched:
+                errors.append({'row': record['row'], 'error': '발송 완료된 나르다 건이 아닙니다.'})
+                continue
+            updates.append((record, order))
+
+        if errors:
+            conn.rollback()
+            return jsonify({'error': '일치하지 않는 발송 건이 있어 이번 파일은 저장하지 않았습니다.',
+                            'errors': errors, 'updated_count': 0}), 400
+
+        for record, order in updates:
+            cur.execute('''UPDATE orders SET tracking_no = ?,
+                    invoice_pdf_url = CASE WHEN tracking_no != ? THEN '' ELSE invoice_pdf_url END
+                WHERE id = ? AND tenant_id = ?''',
+                (record['tracking_no'], record['tracking_no'], order['id'], g.company_id))
+        conn.commit()
+        return jsonify({'status': 'success', 'updated_count': len(updates), 'skipped_count': skipped_count,
+                        'message': '송장번호를 수정했습니다.'})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Dispatched tracking number Excel update failed')
+        return jsonify({'error': '송장번호를 저장하지 못했습니다. 잠시 후 다시 시도해주세요.'}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/dispatched-orders/reship', methods=['POST'])
 def reship_dispatched_orders():
     data = request.get_json(silent=True) or {}
