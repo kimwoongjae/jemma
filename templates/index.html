@@ -1822,7 +1822,7 @@
 </div>
 
 <!-- ================= 모달: 나르다 송장 발급 실시간 진행 팝업 ================= -->
-<div class="modal fade" id="issueTrackingProgressModal" tabindex="-1">
+<div class="modal fade" id="issueTrackingProgressModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content shadow-lg border-0">
             <div class="modal-header bg-primary text-white py-3">
@@ -1863,7 +1863,6 @@
                     <i class="fa-solid fa-circle-check me-1"></i>처리가 완료되었습니다.
                 </span>
                 <div class="d-flex gap-2">
-                    <button type="button" class="btn btn-secondary btn-sm px-3" data-bs-dismiss="modal">닫기</button>
                     <button type="button" class="btn btn-primary btn-sm px-3" id="btnGoPrintCenter" onclick="goToPrintCenterFromModal()">
                         <i class="fa-solid fa-print me-1"></i>송장 출력 센터로 이동
                     </button>

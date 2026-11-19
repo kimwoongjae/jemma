@@ -644,21 +644,47 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
             return {}
 
     def product_name(order, item):
-        if not item:
-            product = str(order['original_product_name'] or '').strip()
-            option = str(order['original_option_name'] or '').strip()
-        else:
+        row_items = items_by_order.get(order['id'], [])
+        is_multi_item_order = len(row_items) > 1
+        if is_multi_item_order and item:
             manifest = item_manifest(item)
             product = str(item.get('item_product_name') or manifest.get('Item Name') or '').strip()
             option = str(item.get('item_option_name') or manifest.get('아이템상세정보') or '').strip()
-            # 품목 행에 이름이 누락된 구형 데이터는 주문에 보관된 원본명으로 보완합니다.
-            if not product:
-                product = str(order['original_product_name'] or '').strip()
-            if not option and not item.get('item_product_name'):
-                option = str(order['original_option_name'] or '').strip()
-        if product and option and option not in product:
-            return f'{product} {option}'
-        return product or option
+        else:
+            product = str(order['original_product_name'] or '').strip()
+            option = str(order['original_option_name'] or '').strip()
+            if not product and item:
+                manifest = item_manifest(item)
+                product = str(item.get('item_product_name') or manifest.get('Item Name') or '').strip()
+            if not option and item:
+                manifest = item_manifest(item)
+                option = str(item.get('item_option_name') or manifest.get('아이템상세정보') or '').strip()
+
+        clean_label = lambda value: re.sub(r'\s*\(출고\s*품목\)\s*', ' ', str(value or '')).strip()
+        product = clean_label(product)
+        option = clean_label(option)
+        if option in ('단일옵션', '단일상품') or option.lower() == 'nan':
+            option = ''
+        if not product:
+            return option
+        if not option:
+            return product
+
+        normalized_product = re.sub(r'\s+', ' ', product).strip().casefold()
+        normalized_option = re.sub(r'\s+', ' ', option).strip().casefold()
+        numeric_option = re.fullmatch(r'(\d+)\s*(개|봉|입|세트|box|박스)?', normalized_option, re.IGNORECASE)
+        if numeric_option:
+            suffix = re.escape(numeric_option.group(2) or '')
+            option_already_in_product = re.search(
+                rf'(?<!\d){re.escape(numeric_option.group(1))}\s*{suffix}(?!\d)',
+                normalized_product, re.IGNORECASE) is not None
+        else:
+            option_already_in_product = normalized_option in normalized_product
+        if normalized_option in normalized_product:
+            return option
+        if option_already_in_product:
+            return product
+        return f'{product} {option}'.strip()
 
     def packaging_fee(order):
         package_type = order['packaging_type'] if 'packaging_type' in order.keys() else '기본포장'
