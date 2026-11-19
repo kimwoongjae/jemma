@@ -401,12 +401,9 @@ def _create_company_account(company_name, username, password, join_code=None):
         cur.execute('INSERT INTO companies (name, invite_code) VALUES (?, ?)', (company_name, invite_code))
         company_id = cur.lastrowid
 
-        api_key = os.environ.get('NARDA_API_KEY', '')
-        customer_code = os.environ.get('NARDA_CUSTOMER_CODE', 'TOA')
-        narda_id = os.environ.get('NARDA_ID', 'calroid')
         cur.execute('''INSERT INTO courier_settings
             (tenant_id, courier_name, customer_code, api_key, narda_id, sender_name, sender_phone, sender_address, is_mock, stock_only_dispatch)
-            VALUES (?, '나르다', ?, ?, ?, '', '', '', 0, 0)''', (company_id, customer_code, api_key, narda_id))
+            VALUES (?, '나르다', '', '', '', '', '', '', 0, 0)''', (company_id,))
         cur.execute('INSERT INTO split_delimiters (tenant_id, symbol) VALUES (?, ?)', (company_id, '+'))
         for symbol in ['-', '/', ',', '?', '&']:
             cur.execute('INSERT INTO split_delimiters (tenant_id, symbol) VALUES (?, ?)', (company_id, symbol))
@@ -4330,21 +4327,37 @@ def save_settings():
     data = request.get_json() or {}
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute('''
-        UPDATE courier_settings
-        SET courier_name = '나르다', customer_code = ?, api_key = ?, narda_id = ?,
-            is_mock = 0, stock_only_dispatch = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE tenant_id = ?
-    ''', (
-        data.get('customer_code', ''),
-        data.get('api_key', ''),
-        data.get('narda_id', 'calroid'),
+    tenant_id = int(g.company_id)
+    values = (
+        str(data.get('customer_code') or '').strip(),
+        str(data.get('api_key') or '').strip(),
+        str(data.get('narda_id') or '').strip(),
         1 if data.get('stock_only_dispatch') else 0,
-        g.company_id
-    ))
-    conn.commit()
-    conn.close()
-    return jsonify({'status': 'success'})
+    )
+    try:
+        cur.execute('SELECT id FROM courier_settings WHERE tenant_id = ? ORDER BY id LIMIT 1', (tenant_id,))
+        setting = cur.fetchone()
+        if setting:
+            cur.execute('''
+                UPDATE courier_settings
+                SET courier_name = '나르다', customer_code = ?, api_key = ?, narda_id = ?,
+                    is_mock = 0, stock_only_dispatch = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = ?
+            ''', (*values, tenant_id))
+        else:
+            cur.execute('''
+                INSERT INTO courier_settings
+                    (tenant_id, courier_name, customer_code, api_key, narda_id, is_mock, stock_only_dispatch, updated_at)
+                VALUES (?, '나르다', ?, ?, ?, 0, ?, CURRENT_TIMESTAMP)
+            ''', (tenant_id, *values))
+        conn.commit()
+        return jsonify({'status': 'success'})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Courier settings save failed for tenant_id=%s', tenant_id)
+        return jsonify({'error': '나르다 API 설정을 저장하지 못했습니다.'}), 500
+    finally:
+        conn.close()
 
 import sys
 import io

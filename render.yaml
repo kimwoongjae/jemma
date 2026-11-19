@@ -22,9 +22,3 @@ services:
         sync: false
       - key: LEGACY_OWNER_PASSWORD
         sync: false
-      - key: NARDA_CUSTOMER_CODE
-        sync: false
-      - key: NARDA_API_KEY
-        sync: false
-      - key: NARDA_ID
-        sync: false

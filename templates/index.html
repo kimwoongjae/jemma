@@ -1408,7 +1408,7 @@
                                 </div>
                                 <div class="mb-3" id="nardaIdGroup">
                                     <label class="form-label fw-bold">나르다 회원 ID (narda_id) <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="settingNardaId" placeholder="예: calroid" value="calroid">
+                                    <input type="text" class="form-control" id="settingNardaId" placeholder="예: calroid">
                                     <div class="text-muted small">나르다 API 계정 아이디입니다.</div>
                                 </div>
                                 <div class="mb-3">
@@ -5978,7 +5978,7 @@
             if (s && s.courier_name) {
                 document.getElementById('settingCustomerCode').value = s.customer_code || '';
                 document.getElementById('settingApiKey').value = s.api_key || '';
-                document.getElementById('settingNardaId').value = s.narda_id || 'calroid';
+                document.getElementById('settingNardaId').value = s.narda_id || '';
                 document.getElementById('settingStockOnlyDispatch').checked = Number(s.stock_only_dispatch || 0) === 1;
             }
         } catch (e) {}
