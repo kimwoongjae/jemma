@@ -122,40 +122,46 @@ repair_legacy_order_item_quantities()
 
 # 나르다 등록은 웹 요청을 붙잡지 않고 백그라운드에서 주문별로 순차 처리합니다.
 _narda_dispatch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='narda-dispatch')
+NARDA_QUEUE_DB_CHUNK_SIZE = 30
 
 
 def _process_narda_dispatch_queue(order_ids, tenant_id, force_retry=False):
-    for order_id in order_ids:
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute('''SELECT api_dispatch_status FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
-        row = cur.fetchone()
-        conn.close()
-        state = str(row['api_dispatch_status'] or '').strip() if row else ''
-        if not row or (not force_retry and state != '대기중'):
-            continue
-        try:
-            if force_retry:
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute('''UPDATE orders SET api_dispatch_status = '대기중',
-                    api_dispatch_message = '사용자 재전송 요청 대기열 처리 중'
-                    WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
-                conn.commit()
-                conn.close()
-            result = issue_tracking_numbers([order_id], tenant_id=tenant_id)
-            if not isinstance(result, dict):
-                continue
-            # Normal NARDA rejection and response-unknown outcomes are persisted by shipping_api.
-        except Exception as error:
+    for offset in range(0, len(order_ids), NARDA_QUEUE_DB_CHUNK_SIZE):
+        batch = order_ids[offset:offset + NARDA_QUEUE_DB_CHUNK_SIZE]
+        for order_id in batch:
             conn = get_connection()
             cur = conn.cursor()
-            cur.execute('''UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
-                WHERE tenant_id = ? AND id = ? AND api_dispatch_status IN ('대기중', '전송중')''',
-                (f'서버 처리 중 응답을 확인하지 못했습니다. 나르다 등록 여부를 확인해주세요. ({str(error)[:180]})', tenant_id, order_id))
-            conn.commit()
+            cur.execute('''SELECT api_dispatch_status FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
+            row = cur.fetchone()
             conn.close()
-            app.logger.exception('Background NARDA dispatch failed for order id=%s', order_id)
+            state = str(row['api_dispatch_status'] or '').strip() if row else ''
+            if not row or (not force_retry and state != '대기중'):
+                continue
+            try:
+                if force_retry:
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute('''UPDATE orders SET api_dispatch_status = '대기중',
+                        api_dispatch_message = '사용자 재전송 요청 대기열 처리 중'
+                        WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
+                    conn.commit()
+                    conn.close()
+                result = issue_tracking_numbers([order_id], tenant_id=tenant_id)
+                if not isinstance(result, dict):
+                    continue
+                # Normal NARDA rejection and response-unknown outcomes are persisted by shipping_api.
+            except Exception as error:
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute('''UPDATE orders SET api_dispatch_status = '확인필요', api_dispatch_message = ?
+                    WHERE tenant_id = ? AND id = ? AND api_dispatch_status IN ('대기중', '전송중')''',
+                    (f'서버 처리 중 응답을 확인하지 못했습니다. 나르다 등록 여부를 확인해주세요. ({str(error)[:180]})', tenant_id, order_id))
+                conn.commit()
+                conn.close()
+                app.logger.exception('Background NARDA dispatch failed for order id=%s', order_id)
+        if offset + NARDA_QUEUE_DB_CHUNK_SIZE < len(order_ids):
+            # Give the DB and external API a short breather between large batches.
+            time.sleep(1)
 
 
 def _enqueue_narda_dispatch(order_ids, tenant_id):
@@ -165,51 +171,100 @@ def _enqueue_narda_dispatch(order_ids, tenant_id):
     if len(clean_ids) > 500:
         return {'queued_ids': [], 'active_ids': [], 'rejected': [{'order_id': None, 'error': '한 번에 최대 500건까지 처리할 수 있습니다.'}]}
 
-    conn = get_connection()
-    cur = conn.cursor()
     queued_ids, active_ids, rejected = [], [], []
-    try:
-        for order_id in clean_ids:
-            cur.execute('''SELECT id, order_no, status, tracking_no, api_dispatch_status, api_dispatch_message
-                FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
-            row = cur.fetchone()
-            if not row:
-                rejected.append({'order_id': order_id, 'error': '주문을 찾을 수 없습니다.'})
-                continue
-            order = dict(row)
-            dispatch_state = str(order.get('api_dispatch_status') or '').strip()
-            if dispatch_state in ('대기중', '전송중'):
-                active_ids.append(order_id)
-                continue
-            cur.execute('''UPDATE orders
-                SET api_dispatch_status = '대기중', api_dispatch_message = '나르다 순차 전송 대기열에 등록됨'
-                WHERE tenant_id = ? AND id = ?
-                  AND COALESCE(api_dispatch_status, '') NOT IN ('대기중', '전송중')''',
-                (tenant_id, order_id))
-            if cur.rowcount == 1:
-                queued_ids.append(order_id)
-            else:
-                cur.execute('''SELECT api_dispatch_status FROM orders WHERE tenant_id = ? AND id = ?''',
-                            (tenant_id, order_id))
-                latest = cur.fetchone()
-                if latest and str(latest['api_dispatch_status'] or '').strip() in ('대기중', '전송중'):
-                    active_ids.append(order_id)
+    for offset in range(0, len(clean_ids), NARDA_QUEUE_DB_CHUNK_SIZE):
+        chunk = clean_ids[offset:offset + NARDA_QUEUE_DB_CHUNK_SIZE]
+        chunk_queued, chunk_active, chunk_rejected = [], [], []
+        conn = None
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            for order_id in chunk:
+                cur.execute('''SELECT id, order_no, status, tracking_no, api_dispatch_status, api_dispatch_message
+                    FROM orders WHERE tenant_id = ? AND id = ?''', (tenant_id, order_id))
+                row = cur.fetchone()
+                if not row:
+                    chunk_rejected.append({'order_id': order_id, 'error': '주문을 찾을 수 없습니다.'})
+                    continue
+                order = dict(row)
+                dispatch_state = str(order.get('api_dispatch_status') or '').strip()
+                if dispatch_state in ('대기중', '전송중'):
+                    chunk_active.append(order_id)
+                    continue
+                cur.execute('''UPDATE orders
+                    SET api_dispatch_status = '대기중', api_dispatch_message = '나르다 순차 전송 대기열에 등록됨'
+                    WHERE tenant_id = ? AND id = ?
+                      AND COALESCE(api_dispatch_status, '') NOT IN ('대기중', '전송중')''',
+                    (tenant_id, order_id))
+                if cur.rowcount == 1:
+                    chunk_queued.append(order_id)
                 else:
-                    rejected.append({'order_id': order_id, 'order_no': order.get('order_no'),
-                                     'error': '주문 상태가 변경되어 전송 대기열에 추가하지 않았습니다.'})
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+                    cur.execute('''SELECT api_dispatch_status FROM orders WHERE tenant_id = ? AND id = ?''',
+                                (tenant_id, order_id))
+                    latest = cur.fetchone()
+                    if latest and str(latest['api_dispatch_status'] or '').strip() in ('대기중', '전송중'):
+                        chunk_active.append(order_id)
+                    else:
+                        chunk_rejected.append({'order_id': order_id, 'order_no': order.get('order_no'),
+                                               'error': '주문 상태가 변경되어 전송 대기열에 추가하지 않았습니다.'})
+            conn.commit()
+            queued_ids.extend(chunk_queued)
+            active_ids.extend(chunk_active)
+            rejected.extend(chunk_rejected)
+        except Exception as error:
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    app.logger.exception('Failed to roll back NARDA queue registration chunk')
+            app.logger.exception('NARDA queue registration failed for order chunk starting at %s', offset)
+            # Keep committed chunks runnable and isolate this failed chunk so
+            # one bad transaction does not discard the rest of a large request.
+            active_ids.extend(chunk_active)
+            failed_ids = [order_id for order_id in chunk if order_id not in chunk_active]
+            for order_id in failed_ids:
+                rejected.append({
+                    'order_id': order_id,
+                    'error': f'대기열 등록 중 서버 오류가 발생했습니다. 이 주문은 이번 요청에서 처리되지 않았습니다. ({type(error).__name__})'
+                })
+            continue
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    app.logger.exception('Failed to close NARDA queue registration connection')
 
     if queued_ids:
-        _narda_dispatch_executor.submit(_process_narda_dispatch_queue, queued_ids, tenant_id)
+        try:
+            _narda_dispatch_executor.submit(_process_narda_dispatch_queue, queued_ids, tenant_id)
+        except Exception as error:
+            app.logger.exception('NARDA queue worker could not start after orders were saved')
+            conn = get_connection()
+            cur = conn.cursor()
+            marks = ','.join(['?'] * len(queued_ids))
+            cur.execute(f'''UPDATE orders SET api_dispatch_status = '실패',
+                    api_dispatch_message = '대기열 저장은 완료했지만 처리 작업을 시작하지 못했습니다. 새로고침 후 다시 요청해주세요.'
+                WHERE tenant_id = ? AND id IN ({marks}) AND api_dispatch_status = '대기중' ''',
+                [tenant_id] + queued_ids)
+            conn.commit()
+            conn.close()
+            rejected.extend({
+                'order_id': order_id,
+                'error': f'대기열 저장은 됐지만 처리 작업을 시작하지 못했습니다. 새로고침 후 다시 요청해주세요. ({type(error).__name__})'
+            } for order_id in queued_ids)
+            queued_ids = []
     if active_ids:
         # 재전송 클릭은 현재 요청 뒤에 직렬로 추가합니다. 같은 주문을 동시 전송하지는 않지만,
         # 사용자가 다시 요청한 만큼 나르다 API를 다시 호출합니다.
-        _narda_dispatch_executor.submit(_process_narda_dispatch_queue, active_ids, tenant_id, True)
+        try:
+            _narda_dispatch_executor.submit(_process_narda_dispatch_queue, active_ids, tenant_id, True)
+        except Exception as error:
+            app.logger.exception('NARDA retry worker could not start')
+            rejected.extend({
+                'order_id': order_id,
+                'error': f'재전송 작업을 시작하지 못했습니다. 현재 발송 상태를 새로고침해 확인해주세요. ({type(error).__name__})'
+            } for order_id in active_ids)
     return {'queued_ids': queued_ids, 'active_ids': active_ids, 'rejected': rejected}
 
 
