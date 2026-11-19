@@ -569,7 +569,7 @@ def complete_dispatch(order_ids, tenant_id=None):
     conn.close()
     return {'dispatched_orders': dispatched_count, 'deducted_items': deducted_items}
 
-def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
+def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None, display_product_names=None):
     """
     발송 완료된 주문 목록을 원본 엑셀 형식에 송장번호가 채워진 파일로 다운로드
     """
@@ -643,7 +643,13 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         except (TypeError, ValueError):
             return {}
 
-    def product_name(order, item):
+    def product_name(order, item, item_index=0):
+        # The dispatched list sends the exact labels it rendered. Prefer those
+        # values so the spreadsheet cannot diverge from the visible list.
+        display_names = (display_product_names or {}).get(str(order['id']))
+        if isinstance(display_names, list) and item_index < len(display_names):
+            return str(display_names[item_index] or '')
+
         row_items = items_by_order.get(order['id'], [])
         is_multi_item_order = len(row_items) > 1
         if is_multi_item_order and item:
@@ -749,10 +755,11 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         # 한 주문에 여러 품목이 있으면 품목마다 한 행을 만들고 주문/송장 정보를 반복합니다.
         # 이렇게 하면 상품명과 각 수량이 각자의 셀에 한 개씩 들어갑니다.
         export_items = row_items or [None]
-        for item in export_items:
+        for item_index, item in enumerate(export_items):
             row_idx = ws.max_row + 1
             for col_idx, key in enumerate(ordered_keys, start=1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=column_definitions[key][1](o, item))
+                value = product_name(o, item, item_index) if key == 'product' else column_definitions[key][1](o, item)
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
                 cell.font = body_font
                 cell.border = cell_border
                 cell.alignment = Alignment(

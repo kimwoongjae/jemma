@@ -2895,12 +2895,23 @@ def api_dispatch():
         'details': res
     })
 
-@app.route('/api/shipping/export-excel', methods=['GET'])
+@app.route('/api/shipping/export-excel', methods=['GET', 'POST'])
 def api_export_excel():
-    order_ids_str = request.args.get('order_ids', '')
-    order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
-    column_order = [key.strip() for key in request.args.get('column_order', '').split(',') if key.strip()]
-    excel_buf = export_shipping_excel(order_ids if order_ids else None, column_order=column_order or None, tenant_id=g.company_id)
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        order_ids = [int(value) for value in data.get('order_ids', []) if str(value).isdigit()]
+        column_order = [str(key).strip() for key in data.get('column_order', []) if str(key).strip()]
+        display_product_names = data.get('display_product_names') or {}
+    else:
+        order_ids_str = request.args.get('order_ids', '')
+        order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
+        column_order = [key.strip() for key in request.args.get('column_order', '').split(',') if key.strip()]
+        display_product_names = None
+    excel_buf = export_shipping_excel(
+        order_ids if order_ids else None,
+        column_order=column_order or None,
+        tenant_id=g.company_id,
+        display_product_names=display_product_names)
     return send_file(
         excel_buf,
         as_attachment=True,

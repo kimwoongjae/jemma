@@ -4498,7 +4498,7 @@
         updateDispatchedSelectionCount();
     }
 
-    function exportDispatchedExcel(isSelectedOnly) {
+    async function exportDispatchedExcel(isSelectedOnly) {
         let ids = dispatchedOrdersList.map(order => Number(order.id));
         if (isSelectedOnly) {
             const selected = new Set(Array.from(document.querySelectorAll('.dispatched-row-check:checked')).map(ck => String(ck.value)));
@@ -4508,10 +4508,44 @@
             alert('다운로드할 날짜별 발송 내역이 없습니다.');
             return;
         }
-        const params = new URLSearchParams();
-        if (ids.length > 0) params.set('order_ids', ids.join(','));
-        params.set('column_order', getDispatchedColumnOrder().join(','));
-        window.location.href = `/api/shipping/export-excel?${params.toString()}`;
+        const selectedOrders = new Set(ids.map(Number));
+        const displayProductNames = {};
+        dispatchedOrdersList.filter(order => selectedOrders.has(Number(order.id))).forEach(order => {
+            const items = Array.isArray(order.items) && order.items.length ? order.items : [{
+                item_product_name: order.original_product_name,
+                item_option_name: order.original_option_name,
+                sku: '미지정',
+                option_quantity: 1,
+                quantity: order.original_quantity || 1
+            }];
+            displayProductNames[String(order.id)] = items.map((item, index) => getCleanCombinedName(order, item, index));
+        });
+        try {
+            const response = await fetch('/api/shipping/export-excel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    order_ids: ids,
+                    column_order: getDispatchedColumnOrder(),
+                    display_product_names: displayProductNames
+                })
+            });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error || '엑셀 파일을 만들지 못했습니다.');
+            }
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = '발송처리결과_송장완료.xlsx';
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            alert(`엑셀 다운로드 오류: ${error.message}`);
+        }
     }
 
     async function uploadDispatchedTrackingExcel(input) {
