@@ -3459,7 +3459,7 @@
     async function issueTrackingSelected() {
         const ids = getSelectedOrderIds();
         if (ids.length === 0) { alert('송장을 발급할 주문을 선택하세요.'); return; }
-        if (!confirm(`선택한 ${ids.length}건을 나르다 API로 전송하여 송장 발급 및 출고 처리할까요?\n서버가 30건씩 나눠 대기열에 저장한 뒤 한 주문씩 순차 처리합니다. 같은 주문도 다시 선택하면 재전송 요청됩니다.`)) return;
+        if (!confirm(`선택한 ${ids.length}건을 나르다 API로 송장 발급할까요?\n한 건을 전송하고 결과를 확인한 뒤 다음 건을 처리합니다. 같은 주문도 다시 선택하면 재전송 요청됩니다.`)) return;
 
         const modalEl = document.getElementById('issueTrackingProgressModal');
         const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
@@ -3474,19 +3474,17 @@
         };
         document.getElementById('trackingProgressSpinner').style.display = 'inline-block';
         document.getElementById('trackingProgressCheckIcon').style.display = 'none';
-        document.getElementById('trackingProgressTitle').textContent = '발송 대기열 등록 중...';
-        document.getElementById('trackingProgressSubtext').textContent = '서버가 30건씩 나눠 대기열에 저장한 뒤 한 주문씩 순차 처리합니다. 창을 닫아도 처리는 계속됩니다.';
+        document.getElementById('trackingProgressTitle').textContent = '발송 처리 준비 중...';
+        document.getElementById('trackingProgressSubtext').textContent = '한 건을 전송하고 처리 결과가 저장된 뒤 다음 주문을 보냅니다.';
         progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary fw-bold';
         document.getElementById('trackingProgressFooter').style.display = 'none';
-        logBox.innerHTML = '<div class="text-muted">발송 작업을 대기열에 등록하고 있습니다...</div>';
+        logBox.innerHTML = '<div class="text-muted">선택한 주문을 한 건씩 순서대로 처리합니다...</div>';
         setProgress(0, ids.length);
         modal.show();
 
         const successes = [];
         const failures = [];
         const uncertain = [];
-        const rejectedIds = new Set();
-        const terminalIds = new Set();
         const orderMap = new Map(ordersList.map(order => [Number(order.id), order]));
         const addLog = (className, message) => {
             const line = document.createElement('div');
@@ -3496,77 +3494,116 @@
             logBox.scrollTop = logBox.scrollHeight;
         };
 
-        try {
-            const queueResponse = await fetch('/api/shipping/issue-tracking', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ order_ids: ids, courier_name: '나르다' })
-            });
-            const queueText = await queueResponse.text();
-            let queueData;
-            try { queueData = JSON.parse(queueText); }
-            catch (_) { throw new Error(`대기열 등록 응답을 읽지 못했습니다 (HTTP ${queueResponse.status}). 페이지를 새로고침해 발송 상태를 확인해주세요.`); }
-            if (!queueResponse.ok || queueData.status !== 'success') {
-                throw new Error(queueData.error || `대기열 등록 실패 (HTTP ${queueResponse.status})`);
-            }
-
-            const watchIds = [...new Set([...(queueData.queued_ids || []), ...(queueData.active_ids || [])].map(Number))];
-            (queueData.rejected || []).forEach(item => {
-                const id = Number(item.order_id);
-                rejectedIds.add(id);
-                failures.push(item);
-                addLog('text-danger', `✕ [${item.order_no || orderMap.get(id)?.order_no || id}] ${item.error || '대기열 등록 실패'}`);
-            });
-            if (watchIds.length) addLog('text-primary', `${watchIds.length}건을 서버 대기열에 저장했습니다. 30건씩 나눠 한 건씩 순서대로 처리합니다.`);
-
-            let pollErrors = 0;
-            while (terminalIds.size < watchIds.length && pollErrors < 5) {
+        const readJson = async (response, label) => {
+            const text = await response.text();
+            let data;
+            try { data = JSON.parse(text); }
+            catch (_) { throw new Error(`${label} 응답을 읽을 수 없습니다 (HTTP ${response.status}).`); }
+            if (!response.ok) throw new Error(data.error || `${label} 실패 (HTTP ${response.status})`);
+            return data;
+        };
+        const readOrderStatus = async id => {
+            const params = new URLSearchParams({ order_ids: String(id) });
+            const response = await fetch(`/api/shipping/issue-tracking/status?${params.toString()}`);
+            const data = await readJson(response, '발송 상태 조회');
+            return (data.orders || []).find(order => Number(order.id) === Number(id)) || null;
+        };
+        const waitForOneOrder = async id => {
+            let consecutiveErrors = 0;
+            while (consecutiveErrors < 5) {
                 try {
-                    const params = new URLSearchParams({ order_ids: watchIds.join(',') });
-                    const response = await fetch(`/api/shipping/issue-tracking/status?${params.toString()}`);
-                    const text = await response.text();
-                    let data;
-                    try { data = JSON.parse(text); }
-                    catch (_) { throw new Error(`상태 응답을 읽을 수 없습니다 (HTTP ${response.status})`); }
-                    if (!response.ok) throw new Error(data.error || `상태 조회 실패 (HTTP ${response.status})`);
-                    pollErrors = 0;
-                    for (const order of (data.orders || [])) {
-                        const id = Number(order.id);
-                        if (terminalIds.has(id)) continue;
-                        const state = String(order.api_dispatch_status || '').trim();
-                        if (state === '성공' && order.tracking_no) {
-                            terminalIds.add(id);
-                            successes.push(order);
-                            addLog('text-success', `✓ [${order.order_no}] 송장 ${order.tracking_no}`);
-                        } else if (state === '실패') {
-                            terminalIds.add(id);
-                            failures.push(order);
-                            addLog('text-danger', `✕ [${order.order_no}] ${order.api_dispatch_message || '송장 발급 실패'}`);
-                        } else if (state === '확인필요') {
-                            terminalIds.add(id);
-                            uncertain.push(order);
-                            addLog('text-warning', `! [${order.order_no}] ${order.api_dispatch_message || '나르다 접수 여부 확인 필요'}`);
-                        }
+                    const order = await readOrderStatus(id);
+                    consecutiveErrors = 0;
+                    const state = String(order?.api_dispatch_status || '').trim();
+                    if (state === '성공' && order.tracking_no) return { kind: 'success', order };
+                    if (state === '실패') return { kind: 'failure', order };
+                    if (state === '확인필요') return { kind: 'uncertain', order };
+                    if (!order || !state) return { kind: 'failure', error: '서버에 발송 작업이 등록되지 않았습니다.' };
+                } catch (error) {
+                    consecutiveErrors += 1;
+                    if (consecutiveErrors >= 5) return { kind: 'uncertain', error };
+                }
+                await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+            return { kind: 'uncertain', error: new Error('발송 상태를 확인하지 못했습니다.') };
+        };
+
+        try {
+            for (let index = 0; index < ids.length; index++) {
+                const id = Number(ids[index]);
+                const knownOrder = orderMap.get(id);
+                const orderNo = knownOrder?.order_no || id;
+                const previousDispatchState = String(knownOrder?.api_dispatch_status || '').trim();
+                const previousTrackingNo = String(knownOrder?.tracking_no || '').trim();
+                const previousDispatchMessage = String(knownOrder?.api_dispatch_message || '').trim();
+                document.getElementById('trackingProgressTitle').textContent = `주문별 발송 처리 중 (${index + 1}/${ids.length})`;
+                addLog('text-primary', `→ [${orderNo}] 나르다에 전송합니다.`);
+                let started = false;
+                let uncertainRequest = false;
+
+                try {
+                    const response = await fetch('/api/shipping/issue-tracking', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order_ids: [id], courier_name: '나르다' })
+                    });
+                    const data = await readJson(response, '주문별 발송 요청');
+                    const rejected = (data.rejected || []).find(item => Number(item.order_id) === id);
+                    if (rejected) throw new Error(rejected.error || '발송 요청이 접수되지 않았습니다.');
+                    started = (data.queued_ids || []).concat(data.active_ids || []).some(value => Number(value) === id);
+                    if (!started) throw new Error(data.error || '발송 요청 접수 결과를 확인할 수 없습니다.');
+                } catch (requestError) {
+                    // A lost HTTP reply can happen after the server saved the order.
+                    // Check its persisted status before deciding it was not sent.
+                    let current;
+                    try {
+                        current = await readOrderStatus(id);
+                    } catch (statusError) {
+                        uncertain.push({ order_id: id, order_no: orderNo, error: '요청과 발송 상태 응답을 모두 확인하지 못했습니다.' });
+                        addLog('text-warning', `! [${orderNo}] 요청 결과와 저장 상태를 확인하지 못했습니다. 나르다 등록 여부를 확인해주세요.`);
+                        setProgress(index + 1, ids.length);
+                        continue;
                     }
-                    setProgress(terminalIds.size + rejectedIds.size, ids.length);
-                } catch (pollError) {
-                    pollErrors += 1;
-                    if (pollErrors >= 5) {
-                        const unresolved = watchIds.filter(id => !terminalIds.has(id));
-                        unresolved.forEach(id => {
-                            terminalIds.add(id);
-                            uncertain.push({ order_id: id, order_no: orderMap.get(id)?.order_no || id, error: pollError.message });
-                        });
-                        addLog('text-warning', '상태 조회가 끊겼습니다. 주문관리 목록에서 발송 상태를 새로고침해 확인해주세요.');
+                    const state = String(current?.api_dispatch_status || '').trim();
+                    started = ['대기중', '전송중'].includes(state);
+                    if (!started && ['성공', '실패', '확인필요'].includes(state)) {
+                        const trackingChanged = String(current?.tracking_no || '').trim() !== previousTrackingNo;
+                        const messageChanged = String(current?.api_dispatch_message || '').trim() !== previousDispatchMessage;
+                        started = state !== previousDispatchState || trackingChanged || messageChanged;
+                        uncertainRequest = !started;
+                    }
+                    if (uncertainRequest) {
+                        uncertain.push({ order_id: id, order_no: orderNo, error: '기존 발송 결과와 새 요청 결과를 구분할 수 없습니다.' });
+                        addLog('text-warning', `! [${orderNo}] 기존 결과와 새 요청 결과를 구분할 수 없어 확인이 필요합니다.`);
+                        setProgress(index + 1, ids.length);
+                        continue;
+                    }
+                    if (!started) {
+                        failures.push({ order_id: id, order_no: orderNo, error: requestError.message });
+                        addLog('text-danger', `✕ [${orderNo}] ${requestError.message}`);
+                        setProgress(index + 1, ids.length);
+                        continue;
+                    }
+                    addLog('text-warning', `! [${orderNo}] 요청 응답이 끊겨 저장된 발송 상태를 확인했습니다.`);
+                }
+
+                if (started) {
+                    const result = await waitForOneOrder(id);
+                    if (result.kind === 'success') {
+                        successes.push(result.order);
+                        addLog('text-success', `✓ [${result.order.order_no}] 송장 ${result.order.tracking_no}`);
+                    } else if (result.kind === 'failure') {
+                        const message = result.order?.api_dispatch_message || result.error?.message || '송장 발급 실패';
+                        failures.push(result.order || { order_id: id, order_no: orderNo, error: message });
+                        addLog('text-danger', `✕ [${orderNo}] ${message}`);
+                    } else {
+                        uncertain.push(result.order || { order_id: id, order_no: orderNo, error: result.error?.message || '발송 결과 확인 필요' });
+                        addLog('text-warning', `! [${orderNo}] 발송 결과를 확인하지 못했습니다. 다음 주문을 계속 처리합니다.`);
                     }
                 }
-                if (terminalIds.size < watchIds.length && pollErrors < 5) {
-                    await new Promise(resolve => setTimeout(resolve, 1500));
-                }
+                setProgress(index + 1, ids.length);
             }
 
-            const settledCount = terminalIds.size + rejectedIds.size;
-            setProgress(settledCount, ids.length);
             const hasUnknown = uncertain.length > 0;
             const hasFailures = failures.length > 0;
             progressBar.className = `progress-bar fw-bold ${hasUnknown ? 'bg-warning text-dark' : hasFailures ? (successes.length ? 'bg-warning text-dark' : 'bg-danger') : 'bg-success'}`;
@@ -3575,8 +3612,8 @@
             document.getElementById('trackingProgressCheckIcon').style.display = (!hasUnknown && !hasFailures) ? 'block' : 'none';
             document.getElementById('trackingProgressTitle').textContent = `결과: ${successes.length}건 성공 · ${failures.length}건 실패 · ${uncertain.length}건 확인 필요`;
             document.getElementById('trackingProgressSubtext').textContent = hasUnknown
-                ? '확인 필요 건은 나르다 응답을 자동 재시도한 뒤에도 결과가 불명확합니다. 나르다 등록 여부를 확인해주세요.'
-                : '서버가 주문별 처리 결과를 저장했습니다.';
+                ? '결과 확인이 필요한 주문은 나르다 등록 여부를 확인해주세요. 나머지 주문은 계속 처리했습니다.'
+                : '각 주문의 처리 결과와 송장번호를 저장했습니다.';
             document.getElementById('trackingProgressDoneMsg').innerHTML = hasUnknown
                 ? '<i class="fa-solid fa-triangle-exclamation me-1"></i>확인 필요 건이 있습니다. 나르다 접수 여부를 확인해주세요.'
                 : '<i class="fa-solid fa-circle-check me-1"></i>선택 건의 처리가 끝났습니다.';
@@ -3586,7 +3623,7 @@
         } catch (error) {
             document.getElementById('trackingProgressSpinner').style.display = 'none';
             progressBar.className = 'progress-bar bg-danger fw-bold';
-            document.getElementById('trackingProgressTitle').textContent = '대기열 등록 오류';
+            document.getElementById('trackingProgressTitle').textContent = '발송 처리 오류';
             document.getElementById('trackingProgressSubtext').textContent = error.message;
             addLog('text-danger', error.message);
             document.getElementById('trackingProgressFooter').style.display = 'flex';
