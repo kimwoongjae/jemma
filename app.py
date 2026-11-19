@@ -48,6 +48,78 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # DB 초기화
 init_db()
 
+
+def repair_legacy_order_item_quantities():
+    """Reconcile stored order quantities and inventory for items already deducted."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''SELECT oi.id, oi.tenant_id, oi.order_id, oi.order_no, oi.sku,
+                oi.item_product_name, oi.item_option_name, oi.product_quantity,
+                oi.option_quantity, oi.quantity, oi.stock_deducted
+            FROM order_items oi
+            WHERE COALESCE(oi.product_quantity, 1) * COALESCE(oi.option_quantity, 1)
+                  != COALESCE(oi.quantity, 1)''')
+        mismatches = [dict(row) for row in cur.fetchall()]
+        corrected = 0
+        for item in mismatches:
+            try:
+                product_qty = max(1, int(float(item.get('product_quantity') or 1)))
+                option_qty = max(1, int(float(item.get('option_quantity') or 1)))
+                old_qty = max(1, int(float(item.get('quantity') or 1)))
+            except (TypeError, ValueError):
+                continue
+            expected_qty = product_qty * option_qty
+            if expected_qty == old_qty:
+                continue
+
+            if int(item.get('stock_deducted') or 0):
+                sku = str(item.get('sku') or '').strip()
+                if sku:
+                    cur.execute('''SELECT id, sku, product_name, option_name, stock_quantity
+                        FROM products WHERE tenant_id = ? AND sku = ? LIMIT 1''',
+                        (item['tenant_id'], sku))
+                else:
+                    cur.execute('''SELECT id, sku, product_name, option_name, stock_quantity
+                        FROM products WHERE tenant_id = ? AND product_name = ? LIMIT 1''',
+                        (item['tenant_id'], item.get('item_product_name') or ''))
+                product_row = cur.fetchone()
+                # A missing current product means the original deduction cannot be
+                # reconstructed safely. Leave this row for a manual inventory audit.
+                if not product_row:
+                    continue
+                product = dict(product_row)
+                delta = expected_qty - old_qty
+                corrected_stock = int(float(product.get('stock_quantity') or 0)) - delta
+                cur.execute('''UPDATE products SET stock_quantity = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE tenant_id = ? AND id = ?''',
+                    (corrected_stock, item['tenant_id'], product['id']))
+                cur.execute('''INSERT INTO inventory_logs (
+                    tenant_id, product_id, sku, product_name, option_name,
+                    change_type, change_qty, resulting_stock, reference_no, memo, created_at
+                ) VALUES (?, ?, ?, ?, ?, '주문출고', ?, ?, ?, ?, ?)''',
+                    (item['tenant_id'], product['id'], product.get('sku') or '',
+                     product.get('product_name') or item.get('item_product_name') or '',
+                     product.get('option_name') or item.get('item_option_name') or '',
+                     -delta, corrected_stock, item.get('order_no') or '',
+                     f"주문 출고수량 자동 정합성 보정 ({old_qty}→{expected_qty})",
+                     datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+
+            cur.execute('UPDATE order_items SET quantity = ? WHERE id = ? AND tenant_id = ?',
+                        (expected_qty, item['id'], item['tenant_id']))
+            corrected += 1
+        conn.commit()
+        if corrected:
+            app.logger.info('Reconciled %s legacy order item quantities', corrected)
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Legacy order quantity reconciliation failed')
+    finally:
+        conn.close()
+
+
+repair_legacy_order_item_quantities()
+
 # 나르다 등록은 웹 요청을 붙잡지 않고 백그라운드에서 주문별로 순차 처리합니다.
 _narda_dispatch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='narda-dispatch')
 

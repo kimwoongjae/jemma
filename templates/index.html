@@ -4141,8 +4141,9 @@
 
     function getDispatchedQuantities(order, item) {
         const optionQuantity = Math.max(1, parseInt(item?.option_quantity) || 1);
-        const buyQuantity = Math.max(1, parseInt(item?.quantity) || ((parseInt(order?.original_quantity) || 1) * optionQuantity));
-        const productQuantity = Math.max(1, parseInt(item?.product_quantity) || parseInt(order?.original_quantity) || Math.round(buyQuantity / optionQuantity));
+        const storedBuyQuantity = Math.max(1, parseInt(item?.quantity) || 1);
+        const productQuantity = Math.max(1, parseInt(item?.product_quantity) || parseInt(order?.original_quantity) || Math.round(storedBuyQuantity / optionQuantity));
+        const buyQuantity = productQuantity * optionQuantity;
         return { productQuantity, optionQuantity, buyQuantity };
     }
 

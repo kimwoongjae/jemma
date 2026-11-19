@@ -203,6 +203,15 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
             })
             continue
         raw_items = items_by_order.get(oid, [])
+        for raw_item in raw_items:
+            try:
+                normalized_quantity = max(1, int(float(raw_item.get('product_quantity') or ord_dict.get('original_quantity') or 1))) * max(1, int(float(raw_item.get('option_quantity') or 1)))
+            except (TypeError, ValueError):
+                normalized_quantity = 1
+            if int(raw_item.get('quantity') or 0) != normalized_quantity:
+                cur.execute('UPDATE order_items SET quantity = ? WHERE id = ? AND tenant_id = ?',
+                            (normalized_quantity, raw_item['id'], tenant_id))
+                raw_item['quantity'] = normalized_quantity
 
         items = []
         for raw_item in raw_items:
@@ -276,7 +285,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
                 sku = str(item.get('sku') or '').strip()
                 product = prod_by_sku.get(sku) or prod_by_name.get(item.get('item_product_name'))
                 try:
-                    needed = max(1, int(float(item.get('quantity') or 1)))
+                    needed = max(1, int(float(item.get('product_quantity') or order.get('original_quantity') or 1))) * max(1, int(float(item.get('option_quantity') or 1)))
                 except (TypeError, ValueError):
                     needed = 1
                 name = str(item.get('item_product_name') or item.get('item_option_name') or sku or '상품').strip()
@@ -426,7 +435,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
                     matched_prod = dict(pr)
 
             if matched_prod:
-                deduct_qty = int(it.get('quantity') or 1)
+                deduct_qty = max(1, int(float(it.get('product_quantity') or ord_dict.get('original_quantity') or 1))) * max(1, int(float(it.get('option_quantity') or 1)))
                 cur_stock = matched_prod.get('stock_quantity') or 0
                 new_stock = cur_stock - deduct_qty
 
@@ -517,7 +526,8 @@ def complete_dispatch(order_ids, tenant_id=None):
             cur.execute('SELECT * FROM products WHERE sku = ? AND tenant_id = ?', (it['sku'], tenant_id))
             prod = cur.fetchone()
             if prod:
-                qty = it['quantity']
+                qty = max(1, int(float(it.get('product_quantity') or ord_row.get('original_quantity') or 1))) * max(1, int(float(it.get('option_quantity') or 1)))
+                cur.execute('UPDATE order_items SET quantity = ? WHERE id = ? AND tenant_id = ?', (qty, it['id'], tenant_id))
                 new_stock = prod['stock_quantity'] - qty
                 cur.execute('UPDATE products SET stock_quantity = ? WHERE id = ? AND tenant_id = ?', (new_stock, prod['id'], tenant_id))
                 
@@ -612,6 +622,15 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         except (TypeError, ValueError):
             return 1
 
+    def buy_quantity(order, item):
+        if not item:
+            return max(1, int(order.get('original_quantity') or 1))
+        try:
+            option_qty = max(1, int(item.get('option_quantity') or 1))
+        except (TypeError, ValueError):
+            option_qty = 1
+        return product_quantity(order, item) * option_qty
+
     def item_manifest(item):
         if not item:
             return {}
@@ -662,7 +681,7 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         'product': ('상품명 + 옵션명', product_name),
         'product_quantity': ('상품수량', lambda o, item: f"{product_quantity(o, item) if item else (o['original_quantity'] or 1)}개"),
         'option_quantity': ('옵션수량', lambda o, item: f"{(item.get('option_quantity') or 1) if item else 1}개"),
-        'buy_quantity': ('구매수량', lambda o, item: f"{(item.get('quantity') or 1) if item else (o['original_quantity'] or 1)}개"),
+        'buy_quantity': ('구매수량', lambda o, item: f"{buy_quantity(o, item)}개"),
         'courier': ('택배사', lambda o, its: o['courier'] or ''),
         'tracking_no': ('송장번호', lambda o, its: o['tracking_no'] or ''),
         'status': ('상태', lambda o, its: o['status'] or '')

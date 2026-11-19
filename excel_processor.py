@@ -335,7 +335,7 @@ def sync_order_items_sku(conn=None, tenant_id=None):
         cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products WHERE tenant_id = ?', (tenant_id,))
         prod_rows = [dict(r) for r in cur.fetchall()]
 
-        cur.execute('SELECT id, item_product_name, item_option_name, sku, option_quantity FROM order_items WHERE tenant_id = ?', (tenant_id,))
+        cur.execute('SELECT id, item_product_name, item_option_name, sku, product_quantity, option_quantity, quantity FROM order_items WHERE tenant_id = ?', (tenant_id,))
         items = cur.fetchall()
         for it in items:
             # 업로드에서 바코드로 지정된 품목은 이후 상품명 동기화가 다른 SKU로 덮어쓰지 않게 합니다.
@@ -345,8 +345,14 @@ def sync_order_items_sku(conn=None, tenant_id=None):
             if info['matched']:
                 new_sku = info['sku']
                 new_opt_qty = info['dispatched_quantity'] or 1
-                if new_sku != it['sku'] or (it['option_quantity'] == 1 and new_opt_qty > 1):
-                    cur.execute('UPDATE order_items SET sku = ?, option_quantity = ? WHERE id = ? AND tenant_id = ?', (new_sku, new_opt_qty, it['id'], tenant_id))
+                new_product_qty = max(1, int(it.get('product_quantity') or 1))
+                new_quantity = new_product_qty * max(1, int(new_opt_qty or 1))
+                if (new_sku != it['sku'] or it['option_quantity'] != new_opt_qty
+                        or int(it.get('quantity') or 0) != new_quantity):
+                    cur.execute('''UPDATE order_items
+                        SET sku = ?, option_quantity = ?, quantity = ?
+                        WHERE id = ? AND tenant_id = ?''',
+                        (new_sku, new_opt_qty, new_quantity, it['id'], tenant_id))
         conn.commit()
     finally:
         if close_after and conn:
