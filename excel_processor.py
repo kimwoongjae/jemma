@@ -101,16 +101,49 @@ def normalize_sku(value):
     return sku
 
 
-def find_product_info_by_sku(sku, opt_rows, prod_rows):
-    """Find inventory option/product by exact barcode and return its default pack quantity."""
+def find_product_info_by_sku(sku, opt_rows, prod_rows, product_name=None, option_name=None):
+    """Find the inventory row for an exact barcode, using uploaded names to disambiguate options."""
     normalized_sku = normalize_sku(sku)
     if not normalized_sku:
         return {'sku': None, 'dispatched_quantity': 1, 'unit_price': 0.0, 'matched': False}
 
     products_by_id = {str(row.get('id')): row for row in prod_rows if row.get('id') is not None}
-    for row in opt_rows:
-        if normalize_sku(row.get('sku')) != normalized_sku:
-            continue
+    def normalized_name(value):
+        return re.sub(r'\s+', '', str(value or '')).casefold()
+
+    uploaded_name = normalized_name(' '.join(
+        str(value or '').strip() for value in (product_name, option_name)
+        if str(value or '').strip() and str(value).strip() not in ('단일옵션', '단일상품')
+    ))
+
+    matching_products = [row for row in prod_rows if normalize_sku(row.get('sku')) == normalized_sku]
+    matching_options = [row for row in opt_rows if normalize_sku(row.get('sku')) == normalized_sku]
+
+    def name_score(product, option=None):
+        product_text = normalized_name(product.get('product_name'))
+        option_text = normalized_name((option or {}).get('option_name') or product.get('option_name'))
+        candidates = [value for value in (product_text, option_text,
+            product_text + option_text, option_text + product_text) if value]
+        if not uploaded_name:
+            return 0
+        if uploaded_name in candidates:
+            return 1000
+        # The uploaded label may include a pack count at its end while the
+        # inventory label omits it. Prefer the longest matching inventory name.
+        return max((len(value) for value in candidates
+                    if len(value) >= 3 and (value in uploaded_name or uploaded_name in value)), default=0)
+
+    matching_products.sort(key=lambda row: name_score(row), reverse=True)
+    matching_options.sort(key=lambda row: name_score(
+        products_by_id.get(str(row.get('product_id')), {}), row), reverse=True)
+
+    # A name-matched option is the most specific inventory mapping. Otherwise
+    # use the barcode's product row (one SKU -> one product), avoiding the first
+    # arbitrary option row when several options share a barcode.
+    selected_option = matching_options[0] if matching_options and name_score(
+        products_by_id.get(str(matching_options[0].get('product_id')), {}), matching_options[0]) else None
+    if selected_option:
+        row = selected_option
         parent = products_by_id.get(str(row.get('product_id')))
         try:
             option_quantity = max(1, int(row.get('dispatched_quantity') or 1))
@@ -128,9 +161,8 @@ def find_product_info_by_sku(sku, opt_rows, prod_rows):
             'matched_option_name': row.get('option_name') or (parent.get('option_name') if parent else None)
         }
 
-    for row in prod_rows:
-        if normalize_sku(row.get('sku')) != normalized_sku:
-            continue
+    if matching_products:
+        row = matching_products[0]
         try:
             option_quantity = max(1, int(row.get('dispatched_quantity') or 1))
         except (TypeError, ValueError):
@@ -339,7 +371,9 @@ def sync_order_items_sku(conn=None, tenant_id=None):
         items = cur.fetchall()
         for it in items:
             # 업로드에서 바코드로 지정된 품목은 이후 상품명 동기화가 다른 SKU로 덮어쓰지 않게 합니다.
-            info = find_product_info_by_sku(it['sku'], opt_rows, prod_rows) if it['sku'] else None
+            info = find_product_info_by_sku(
+                it['sku'], opt_rows, prod_rows,
+                product_name=it['item_product_name'], option_name=it['item_option_name']) if it['sku'] else None
             if not info or not info['matched']:
                 info = find_matching_product_info(it['item_product_name'], it['item_option_name'], conn, opt_rows=opt_rows, prod_rows=prod_rows)
             if info['matched']:
@@ -592,18 +626,20 @@ def process_excel_file(file_path, batch_name=None, column_mapping=None, header_r
         address = val('address')
         shipping_memo = val('shipping_memo')
 
-        # 바코드가 함께 있어도 재고 매칭은 업로드된 상품명+옵션명으로 먼저 수행합니다.
-        # 그래야 기재된 이름으로 여러 품목을 분리하고, 재고 마스터에서 각 품목의
-        # 바코드와 기본 옵션수량을 가져올 수 있습니다. 이름 매칭이 전혀 안 될 때만
-        # 업로드 바코드를 단일 품목의 대체 매칭값으로 사용합니다.
+        # 상품명/옵션명으로 품목 분할 여부를 먼저 판별합니다. 단일 품목이면
+        # 업로드 바코드와 원본 이름을 함께 사용해 재고 출고 배수를 결정합니다.
         split_items = split_order_items(
             product_name, option_name, quantity, conn,
             opt_rows=opt_rows, prod_rows=prod_rows,
             rules_cache=rules_cache, delimiters=delimiters
         )
 
-        if barcode and not any(item.get('matched') for item in split_items):
-            barcode_info = find_product_info_by_sku(barcode, opt_rows, prod_rows)
+        if barcode and len(split_items) == 1:
+            # For a single uploaded line, the exact barcode identifies the stock
+            # item. A loose name match can otherwise select a similar product
+            # whose pack multiplier is 1. Keep the uploaded label untouched.
+            barcode_info = find_product_info_by_sku(
+                barcode, opt_rows, prod_rows, product_name=product_name, option_name=option_name)
             if barcode_info.get('matched'):
                 try:
                     option_quantity = max(1, int(barcode_info.get('dispatched_quantity') or 1))
