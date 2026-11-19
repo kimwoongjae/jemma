@@ -648,8 +648,9 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None):
         is_multi_item_order = len(row_items) > 1
         if is_multi_item_order and item:
             manifest = item_manifest(item)
-            product = str(item.get('item_product_name') or manifest.get('Item Name') or '').strip()
-            option = str(item.get('item_option_name') or manifest.get('아이템상세정보') or '').strip()
+            # 화면 표시와 동일하게, 행의 품목명이 없으면 주문 원본명으로 보완합니다.
+            product = str(item.get('item_product_name') or order['original_product_name'] or manifest.get('Item Name') or '').strip()
+            option = str(item.get('item_option_name') or order['original_option_name'] or manifest.get('아이템상세정보') or '').strip()
         else:
             product = str(order['original_product_name'] or '').strip()
             option = str(order['original_option_name'] or '').strip()
