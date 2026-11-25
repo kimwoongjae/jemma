@@ -15,7 +15,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from werkzeug.utils import secure_filename
 
-from database import init_db, get_connection
+from database import init_db, get_connection, record_progress
 from excel_processor import HEADER_MAP, NARDA_MANIFEST_PROFILE, find_matching_product_info, get_auto_header_aliases, process_excel_file, process_narda_manifest_file, save_orders_to_db
 from shipping_api import (
     issue_tracking_numbers, complete_dispatch,
@@ -684,6 +684,8 @@ def admin_inventory_movement(company_id):
                     (company_id, product['id'], product['sku'], product['product_name'],
                      product['option_name'] or '', movement, change_qty, new_stock,
                      memo or f'관리자 바코드 {movement}', now_str))
+        if movement == '입고':
+            record_progress(cur, company_id, f"{product['product_name']} {quantity}개 입고", 'inventory_in')
         conn.commit()
         return jsonify({'status': 'success', 'movement': movement, 'quantity': quantity,
                         'stock_quantity': new_stock, 'product_name': product['product_name'],
@@ -1642,6 +1644,19 @@ def upload_confirm():
     batch_name = data.get('batch_name', '배치주문')
     try:
         result = save_orders_to_db(data, batch_name, tenant_id=g.company_id)
+        progress_conn = None
+        try:
+            progress_conn = get_connection()
+            progress_cur = progress_conn.cursor()
+            record_progress(progress_cur, g.company_id, '엑셀 주문파일업로드 함', 'order_upload')
+            progress_conn.commit()
+        except Exception:
+            if progress_conn:
+                progress_conn.rollback()
+            app.logger.exception('Could not record Excel order upload progress event')
+        finally:
+            if progress_conn:
+                progress_conn.close()
         return jsonify({
             'status': 'success',
             'message': f"{result['saved_orders']}건의 주문({result['saved_items']}개 품목)이 성공적으로 등록되었습니다.",
@@ -2370,6 +2385,10 @@ def edit_order(order_id):
         order = cur.fetchone()
         if not order:
             return jsonify({'error': '주문을 찾을 수 없습니다.'}), 404
+        if (str(order['recipient_name'] or '').strip() != recipient_name
+                or str(order['customs_id'] or '').strip().upper() != customs_id):
+            record_progress(cur, g.company_id, '개인통관고유부호 정보 수정 확인 대기', 'customs_name_pending',
+                            activity_key=f'customs_name_pending:{order_id}')
 
         submitted_items = data.get('items') if 'items' in data else data.get('manifest_items')
         if submitted_items is not None and not isinstance(submitted_items, list):
@@ -2893,6 +2912,16 @@ def validate_customs_batch():
                                 'status': res_status,
                                 'message': res_msg
                             })
+                            if res_status == '정상':
+                                cur.execute('''SELECT id FROM progress_events
+                                    WHERE tenant_id = ? AND activity_key = ? AND event_type = 'customs_name_pending'
+                                    LIMIT 1''', (g.company_id, f'customs_name_pending:{oid}'))
+                                pending_name_event = cur.fetchone()
+                                if pending_name_event:
+                                    cur.execute('''UPDATE progress_events
+                                        SET event_type = 'customs_name_edited', content = '개인통관고유부호 이름 수정됨',
+                                            activity_key = NULL, updated_at = CURRENT_TIMESTAMP
+                                        WHERE id = ? AND tenant_id = ?''', (pending_name_event['id'], g.company_id))
                             found_ids.add(oid)
 
                 # 검증 결과 매칭되지 않은 주문 처리
@@ -3560,6 +3589,7 @@ def barcode_stock_in():
         INSERT INTO inventory_logs (tenant_id, product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (g.company_id, prod_id, sku, p_name, '', '입고', qty, new_stock, memo, now_str))
+    record_progress(cur, g.company_id, f'{p_name} {qty}개 입고', 'inventory_in')
 
     conn.commit()
     conn.close()
@@ -3616,6 +3646,7 @@ def batch_stock_in():
             INSERT INTO inventory_logs (tenant_id, product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (g.company_id, prod_id, sku, actual_name, '', '입고', qty, new_stock, '일괄 바코드 스캔 입고', now_str))
+        record_progress(cur, g.company_id, f'{actual_name} {qty}개 입고', 'inventory_in')
 
         success_count += 1
         total_qty += qty
@@ -3945,6 +3976,8 @@ def move_orders_status():
     cur = conn.cursor()
     placeholders = ','.join(['?'] * len(order_ids))
     cur.execute(f'UPDATE orders SET status = ? WHERE tenant_id = ? AND id IN ({placeholders})', [target_status, g.company_id] + order_ids)
+    if target_status == '통관오류':
+        record_progress(cur, g.company_id, f'개인통관고유부호 확인 목록으로 {len(order_ids)}건 옮김', 'customs_moved')
     conn.commit()
     conn.close()
     return jsonify({'status': 'success', 'moved_count': len(order_ids), 'target_status': target_status})
@@ -4006,6 +4039,25 @@ def get_inventory_logs():
     for log in logs:
         log['created_at'] = format_inventory_log_datetime(log.get('created_at'))
     return jsonify(logs)
+
+
+@app.route('/api/progress-events', methods=['GET'])
+def get_progress_events():
+    limit = request.args.get('limit', '200').strip()
+    try:
+        limit = max(1, min(int(limit), 500))
+    except (TypeError, ValueError):
+        limit = 200
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('''SELECT id, event_type, content, created_at, updated_at
+        FROM progress_events WHERE tenant_id = ? AND event_type != 'customs_name_pending'
+        ORDER BY updated_at DESC, id DESC LIMIT ?''', (g.company_id, limit))
+    events = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    for event in events:
+        event['date'] = format_inventory_log_datetime(event.get('updated_at') or event.get('created_at'))
+    return jsonify(events)
 
 @app.route('/api/inventory/logs/dates', methods=['GET'])
 def get_inventory_log_dates():

@@ -159,11 +159,44 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+
+def record_progress(cur, tenant_id, content, event_type='info', activity_key=None, quantity_delta=0):
+    """Persist a tenant-scoped progress event; keyed quantity events update their daily total."""
+    if activity_key:
+        cur.execute('''SELECT id, total_quantity FROM progress_events
+            WHERE tenant_id = ? AND activity_key = ? LIMIT 1''', (tenant_id, activity_key))
+        existing = cur.fetchone()
+        total_quantity = int(existing['total_quantity'] or 0) + int(quantity_delta or 0) if existing else int(quantity_delta or 0)
+        rendered_content = content.replace('{quantity}', str(total_quantity))
+        if existing:
+            cur.execute('''UPDATE progress_events SET content = ?, total_quantity = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND tenant_id = ?''', (rendered_content, total_quantity, existing['id'], tenant_id))
+        else:
+            cur.execute('''INSERT INTO progress_events
+                (tenant_id, event_type, content, activity_key, total_quantity)
+                VALUES (?, ?, ?, ?, ?)''', (tenant_id, event_type, rendered_content, activity_key, total_quantity))
+        return
+
+    cur.execute('''INSERT INTO progress_events (tenant_id, event_type, content)
+        VALUES (?, ?, ?)''', (tenant_id, event_type, content))
+
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
     if isinstance(conn, PgConnectionWrapper):
+        cur.execute('''CREATE TABLE IF NOT EXISTS progress_events (
+            id BIGSERIAL PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL DEFAULT 'info',
+            content TEXT NOT NULL,
+            activity_key TEXT,
+            total_quantity INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_events_tenant_key ON progress_events (tenant_id, activity_key)')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_progress_events_tenant_updated ON progress_events (tenant_id, updated_at)')
         cur.execute('''CREATE TABLE IF NOT EXISTS shipping_rates (
             id BIGSERIAL PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
@@ -410,6 +443,19 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+
+    cur.execute('''CREATE TABLE IF NOT EXISTS progress_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL,
+        event_type TEXT NOT NULL DEFAULT 'info',
+        content TEXT NOT NULL,
+        activity_key TEXT,
+        total_quantity INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_events_tenant_key ON progress_events (tenant_id, activity_key)')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_progress_events_tenant_updated ON progress_events (tenant_id, updated_at)')
 
     # 6. 택배사 및 발송자 설정 (Courier Settings)
     cur.execute('''

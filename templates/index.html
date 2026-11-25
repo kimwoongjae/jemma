@@ -406,6 +406,11 @@
             </button>
         </li>
         <li class="nav-item">
+            <button class="nav-link" id="tab-progress" data-bs-toggle="tab" data-bs-target="#progress-pane" type="button" role="tab" onclick="loadProgressEvents(true)">
+                <i class="fa-solid fa-list-check me-1"></i> 진행사항
+            </button>
+        </li>
+        <li class="nav-item">
             <button class="nav-link" id="tab-labels" data-bs-toggle="tab" data-bs-target="#labels-pane" type="button" role="tab" onclick="loadShippingBatches(true)">
                 <i class="fa-solid fa-print me-1"></i> 송장 라벨 인쇄 센터
             </button>
@@ -1193,6 +1198,24 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-pane fade" id="progress-pane" role="tabpanel">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2 py-3">
+                    <div>
+                        <h5 class="fw-bold mb-1"><i class="fa-solid fa-list-check text-primary me-2"></i>진행사항</h5>
+                        <div class="small text-muted">입출고와 주문 처리 내용을 최신순으로 실시간 표시합니다.</div>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm" type="button" onclick="loadProgressEvents()"><i class="fa-solid fa-arrows-rotate me-1"></i>새로고침</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover table-custom align-middle mb-0">
+                        <thead><tr><th style="width:210px">날짜</th><th>내용</th></tr></thead>
+                        <tbody id="progressEventsTableBody"><tr><td colspan="2" class="text-center py-5 text-muted">진행사항을 불러오는 중입니다.</td></tr></tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -5610,6 +5633,47 @@
     // ==========================================
     // 4. 입출고 내역 목록 및 엑셀 다운로드
     // ==========================================
+    let progressEventsTimer = null;
+    let progressEventsLoading = false;
+
+    async function loadProgressEvents(startPolling = false) {
+        const tbody = document.getElementById('progressEventsTableBody');
+        if (!tbody || progressEventsLoading) return;
+        if (startPolling && !progressEventsTimer) {
+            progressEventsTimer = setInterval(() => {
+                const pane = document.getElementById('progress-pane');
+                if (!pane?.classList.contains('active')) {
+                    clearInterval(progressEventsTimer);
+                    progressEventsTimer = null;
+                    return;
+                }
+                loadProgressEvents();
+            }, 5000);
+        }
+
+        progressEventsLoading = true;
+        try {
+            const res = await fetch('/api/progress-events?limit=300');
+            const events = await res.json();
+            if (!res.ok) throw new Error(events.error || `서버 응답 오류 (${res.status})`);
+            if (!Array.isArray(events) || events.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" class="text-center py-5 text-muted">아직 기록된 진행사항이 없습니다.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = events.map(event => `
+                <tr>
+                    <td><code>${escapeHtml(event.date || '')}</code></td>
+                    <td class="fw-semibold">${escapeHtml(event.content || '')}</td>
+                </tr>
+            `).join('');
+        } catch (error) {
+            console.error('Progress event load error', error);
+            tbody.innerHTML = `<tr><td colspan="2" class="text-center py-5 text-danger">진행사항을 불러오지 못했습니다: ${escapeHtml(error.message)}</td></tr>`;
+        } finally {
+            progressEventsLoading = false;
+        }
+    }
+
     function renderInventoryLogDateList(dateGroups) {
         const container = document.getElementById('inventoryLogDateList');
         if (!container) return;

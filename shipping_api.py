@@ -9,7 +9,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from io import BytesIO
 from requests.adapters import HTTPAdapter
-from database import get_connection
+from database import get_connection, record_progress
 
 # 스레드별 HTTP 세션을 사용해 동시 요청 사이의 세션/쿠키 공유를 방지합니다.
 _narda_thread_local = threading.local()
@@ -486,6 +486,19 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
             -agg['total_qty'], agg['final_stock'], agg['order_no'], memo_text, now_log_str
         ))
 
+    outbound_totals = {}
+    for agg in aggregated_deductions.values():
+        key = str(agg.get('sku') or agg['product_id'])
+        summary = outbound_totals.setdefault(key, {
+            'sku': agg.get('sku') or '', 'product_id': agg['product_id'],
+            'product_name': agg['product_name'], 'quantity': 0
+        })
+        summary['quantity'] += int(agg['total_qty'] or 0)
+    for summary in outbound_totals.values():
+        daily_key = f"outbound:{now_log_str[:10]}:{summary['sku'] or summary['product_id']}"
+        record_progress(cur, tenant_id, f"{summary['product_name']} {{quantity}}개 출고", 'inventory_out',
+                        activity_key=daily_key, quantity_delta=summary['quantity'])
+
     conn.commit()
     conn.close()
     return {
@@ -564,6 +577,9 @@ def complete_dispatch(order_ids, tenant_id=None):
             tenant_id, agg['product_id'], agg['sku'], agg['product_name'], agg['option_name'],
             -agg['total_qty'], agg['final_stock'], ref_no, memo_text, now_log_str
         ))
+        daily_key = f"outbound:{now_log_str[:10]}:{agg['sku'] or agg['product_id']}"
+        record_progress(cur, tenant_id, f"{agg['product_name']} {{quantity}}개 출고", 'inventory_out',
+                        activity_key=daily_key, quantity_delta=agg['total_qty'])
 
     conn.commit()
     conn.close()
