@@ -1329,6 +1329,41 @@
 
         <!-- 6. 세트 분할 및 배송 설정 탭 -->
         <div class="tab-pane fade" id="settings-pane" role="tabpanel">
+            <div class="card border-0 shadow-sm mb-4" id="telegramSettingsCard">
+                <div class="card-header bg-white py-3">
+                    <h5 class="fw-bold mb-1"><i class="fa-brands fa-telegram text-primary me-2"></i>텔레그램 API 설정</h5>
+                    <p class="text-muted small mb-0">이 거래처의 진행사항을 지정한 텔레그램 채팅으로 전송합니다.</p>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-lg-4">
+                            <label class="form-label fw-bold" for="telegramBotToken">봇 토큰</label>
+                            <input type="password" class="form-control" id="telegramBotToken" autocomplete="new-password" placeholder="저장된 토큰을 유지하려면 비워두세요">
+                            <div class="form-text" id="telegramTokenStatus">토큰은 저장 여부만 표시되며 다시 읽어오지 않습니다.</div>
+                        </div>
+                        <div class="col-lg-4">
+                            <label class="form-label fw-bold" for="telegramChatId">채팅 ID</label>
+                            <input type="text" class="form-control" id="telegramChatId" placeholder="개인 채팅 또는 그룹 채팅 ID">
+                            <div class="form-text">그룹 채팅은 봇을 그룹에 추가한 뒤 해당 그룹의 채팅 ID를 입력하세요.</div>
+                        </div>
+                        <div class="col-lg-4">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="telegramEnabled">
+                                <label class="form-check-label fw-bold" for="telegramEnabled">진행사항 텔레그램 전송</label>
+                            </div>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="telegramClearToken">
+                                <label class="form-check-label text-danger" for="telegramClearToken">저장된 봇 토큰 삭제</label>
+                            </div>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button type="button" class="btn btn-primary" onclick="saveTelegramSettings()"><i class="fa-solid fa-floppy-disk me-1"></i>텔레그램 설정 저장</button>
+                                <button type="button" class="btn btn-outline-primary" onclick="testTelegramSettings()"><i class="fa-solid fa-paper-plane me-1"></i>테스트 메시지 전송</button>
+                            </div>
+                            <div class="small mt-2" id="telegramSettingsMessage" aria-live="polite"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             {% if session.get('account_role') == 'user' %}
             <div class="card border-0 shadow-sm mb-4">
                 <div class="card-header bg-white py-3">
@@ -1451,37 +1486,6 @@
                                     <i class="fa-solid fa-floppy-disk me-1"></i> 설정 저장하기
                                 </button>
                             </form>
-                        </div>
-                    </div>
-                    <div class="card border-0 shadow-sm mt-4">
-                        <div class="card-header bg-white py-3">
-                            <h5 class="fw-bold mb-1"><i class="fa-brands fa-telegram text-primary me-2"></i>텔레그램 API 설정</h5>
-                            <p class="text-muted small mb-0">이 거래처의 진행사항을 지정한 텔레그램 채팅으로 전송합니다.</p>
-                        </div>
-                        <div class="card-body">
-                            <div class="mb-3">
-                                <label class="form-label fw-bold" for="telegramBotToken">봇 토큰</label>
-                                <input type="password" class="form-control" id="telegramBotToken" autocomplete="new-password" placeholder="저장된 토큰을 유지하려면 비워두세요">
-                                <div class="form-text" id="telegramTokenStatus">토큰은 저장 여부만 표시되며 다시 읽어오지 않습니다.</div>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label fw-bold" for="telegramChatId">채팅 ID</label>
-                                <input type="text" class="form-control" id="telegramChatId" placeholder="개인 채팅 또는 그룹 채팅 ID">
-                                <div class="form-text">그룹 채팅은 봇을 그룹에 추가한 뒤 해당 그룹의 채팅 ID를 입력하세요.</div>
-                            </div>
-                            <div class="form-check form-switch mb-3">
-                                <input class="form-check-input" type="checkbox" id="telegramEnabled">
-                                <label class="form-check-label fw-bold" for="telegramEnabled">진행사항 텔레그램 전송</label>
-                            </div>
-                            <div class="form-check mb-3">
-                                <input class="form-check-input" type="checkbox" id="telegramClearToken">
-                                <label class="form-check-label text-danger" for="telegramClearToken">저장된 봇 토큰 삭제</label>
-                            </div>
-                            <div class="d-flex gap-2 flex-wrap">
-                                <button type="button" class="btn btn-primary" onclick="saveTelegramSettings()"><i class="fa-solid fa-floppy-disk me-1"></i>텔레그램 설정 저장</button>
-                                <button type="button" class="btn btn-outline-primary" onclick="testTelegramSettings()"><i class="fa-solid fa-paper-plane me-1"></i>테스트 메시지 전송</button>
-                            </div>
-                            <div class="small mt-2" id="telegramSettingsMessage" aria-live="polite"></div>
                         </div>
                     </div>
                 </div>
