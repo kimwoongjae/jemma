@@ -514,6 +514,9 @@
                             <button class="btn btn-outline-info" onclick="checkStockDispatchAvailability()" title="재고 수량을 바탕으로 순서대로 출고 가능 여부를 확인합니다">
                                 <i class="fa-solid fa-boxes-packing me-1"></i> 출고여부 확인
                             </button>
+                            <button class="btn btn-outline-success" id="btnRematchOrderInventory" onclick="rematchAllOrdersInventory()" title="현재 주문관리 목록의 모든 미발송 주문을 재고 상품과 다시 매칭합니다">
+                                <i class="fa-solid fa-arrows-rotate me-1"></i> 재고 다시 매칭
+                            </button>
                             <button class="btn btn-outline-primary" id="btnValidateCustoms" onclick="validateCustomsCodes()" title="관세청 개인통관고유부호 일치 여부를 검증합니다">
                                 <i class="fa-solid fa-shield-halved me-1"></i> 통관부호 검증
                             </button>
@@ -1765,7 +1768,7 @@
                         <div class="col-12 d-none" id="editManifestDetailsSection">
                             <hr class="my-1">
                             <div class="d-flex flex-wrap align-items-end justify-content-between gap-2 mb-2">
-                                <h6 class="fw-bold mb-0"><i class="fa-solid fa-file-excel me-1 text-success"></i>상품정보</h6>
+                                <h6 class="fw-bold mb-0"><i class="fa-solid fa-file-excel me-1 text-success"></i>상품 목록</h6>
                                 <button type="button" class="btn btn-sm btn-outline-primary" onclick="addEditManifestItem()"><i class="fa-solid fa-plus me-1"></i>상품 추가</button>
                             </div>
                             <div class="row g-2 mb-2">
@@ -2674,6 +2677,44 @@
             }
         } catch (e) {
             alert('출고여부 확인 오류: ' + e.message);
+        }
+    }
+
+    async function rematchAllOrdersInventory() {
+        if (!ordersList || ordersList.length === 0) {
+            alert('재고를 다시 매칭할 주문 목록이 없습니다.');
+            return;
+        }
+        const orderIds = ordersList.map(order => Number(order.id)).filter(Number.isFinite);
+        if (!orderIds.length) return alert('재고를 다시 매칭할 주문 목록이 없습니다.');
+        if (!confirm(`현재 주문관리 목록 ${orderIds.length}건의 상품을 재고관리와 다시 매칭할까요?\n발송 처리됐거나 재고가 이미 차감된 주문은 자동으로 제외됩니다.`)) return;
+
+        const button = document.getElementById('btnRematchOrderInventory');
+        const originalHtml = button?.innerHTML || '';
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i>재매칭 중...';
+        }
+        try {
+            const response = await fetch('/api/orders/rematch-inventory/bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_ids: orderIds })
+            });
+            const data = await response.json();
+            if (!response.ok || data.status !== 'success') throw new Error(data.error || `HTTP ${response.status}`);
+            await loadOrders();
+            const unmatchedNames = (data.unmatched_items || []).map(item => item.product_name).filter(Boolean);
+            let message = `재고 매칭 완료\n처리 주문: ${data.processed_orders}건\n매칭 품목: ${data.matched_items}건\n미매칭 품목: ${data.unmatched_count}건\n제외 주문: ${data.skipped_orders}건`;
+            if (unmatchedNames.length) message += `\n\n미매칭 상품: ${unmatchedNames.slice(0, 8).join(', ')}${unmatchedNames.length > 8 ? ` 외 ${unmatchedNames.length - 8}건` : ''}\n미매칭 품목은 기존 재고 연결을 유지했습니다.`;
+            alert(message);
+        } catch (error) {
+            alert(`재고 다시 매칭 오류: ${error.message}`);
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+            }
         }
     }
 

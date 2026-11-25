@@ -2417,7 +2417,8 @@ def edit_order(order_id):
                     return jsonify({'error': '수정할 상품을 확인할 수 없습니다. 새로고침 후 다시 시도해주세요.'}), 400
                 row = items_by_id[item_id]
                 try:
-                    row_manifest = json.loads(row.get('manifest_data') or '{}')
+                    raw_manifest = row.get('manifest_data') or '{}'
+                    row_manifest = json.loads(raw_manifest) if isinstance(raw_manifest, str) else dict(raw_manifest)
                 except (TypeError, ValueError):
                     row_manifest = {}
                 if not isinstance(row_manifest, dict):
@@ -2587,6 +2588,102 @@ def rematch_order_inventory(order_id):
         conn.rollback()
         app.logger.exception('Order inventory rematch failed')
         return jsonify({'error': '재고 다시 매칭 중 오류가 발생했습니다.'}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/orders/rematch-inventory/bulk', methods=['POST'])
+def rematch_orders_inventory_bulk():
+    data = request.get_json(silent=True) or {}
+    raw_order_ids = data.get('order_ids') or []
+    if not isinstance(raw_order_ids, list) or not raw_order_ids:
+        return jsonify({'error': '재고를 다시 매칭할 주문 목록이 없습니다.'}), 400
+    try:
+        order_ids = list(dict.fromkeys(int(value) for value in raw_order_ids))
+    except (TypeError, ValueError):
+        return jsonify({'error': '주문 선택 정보가 올바르지 않습니다.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id, product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options WHERE tenant_id = ?',
+                    (g.company_id,))
+        option_rows = [dict(row) for row in cur.fetchall()]
+        cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products WHERE tenant_id = ?',
+                    (g.company_id,))
+        product_rows = [dict(row) for row in cur.fetchall()]
+
+        orders_by_id = {}
+        order_chunk_size = 400
+        for offset in range(0, len(order_ids), order_chunk_size):
+            chunk = order_ids[offset:offset + order_chunk_size]
+            marks = ','.join(['?'] * len(chunk))
+            cur.execute(f'SELECT id, order_no, status, tracking_no FROM orders WHERE tenant_id = ? AND id IN ({marks})',
+                        [g.company_id] + chunk)
+            orders_by_id.update({int(row['id']): dict(row) for row in cur.fetchall()})
+
+        items_by_order = {}
+        for offset in range(0, len(order_ids), order_chunk_size):
+            chunk = order_ids[offset:offset + order_chunk_size]
+            marks = ','.join(['?'] * len(chunk))
+            cur.execute(f'SELECT * FROM order_items WHERE tenant_id = ? AND order_id IN ({marks}) ORDER BY id ASC',
+                        [g.company_id] + chunk)
+            for row in cur.fetchall():
+                item = dict(row)
+                items_by_order.setdefault(int(item['order_id']), []).append(item)
+
+        processed_orders = 0
+        matched_items = 0
+        unmatched_items = []
+        skipped_orders = 0
+        for order_id in order_ids:
+            order = orders_by_id.get(order_id)
+            items = items_by_order.get(order_id, [])
+            if (not order or order.get('status') in ('출고완료', '송장발급')
+                    or str(order.get('tracking_no') or '').strip()
+                    or any(int(item.get('stock_deducted') or 0) for item in items)):
+                skipped_orders += 1
+                continue
+
+            processed_orders += 1
+            order_quantity = 0
+            for item in items:
+                info = find_matching_product_info(
+                    item.get('item_product_name') or '', item.get('item_option_name') or '', conn,
+                    opt_rows=option_rows, prod_rows=product_rows)
+                if not info.get('matched'):
+                    unmatched_items.append({'order_no': order.get('order_no') or '',
+                                            'product_name': item.get('item_product_name') or ''})
+                    order_quantity += int(item.get('quantity') or 0)
+                    continue
+                try:
+                    product_quantity = max(1, int(float(item.get('product_quantity') or 1)))
+                    option_quantity = max(1, int(float(info.get('dispatched_quantity') or 1)))
+                except (TypeError, ValueError):
+                    product_quantity, option_quantity = 1, 1
+                quantity = product_quantity * option_quantity
+                cur.execute('''UPDATE order_items
+                    SET sku = ?, option_quantity = ?, quantity = ?
+                    WHERE id = ? AND tenant_id = ? AND order_id = ? AND stock_deducted = 0''',
+                    (info.get('sku') or '', option_quantity, quantity, item['id'], g.company_id, order_id))
+                item['quantity'] = quantity
+                matched_items += 1
+                order_quantity += quantity
+            cur.execute('UPDATE orders SET original_quantity = ? WHERE id = ? AND tenant_id = ?',
+                        (order_quantity, order_id, g.company_id))
+
+        conn.commit()
+        return jsonify({
+            'status': 'success',
+            'processed_orders': processed_orders,
+            'matched_items': matched_items,
+            'unmatched_count': len(unmatched_items),
+            'unmatched_items': unmatched_items,
+            'skipped_orders': skipped_orders
+        })
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Bulk order inventory rematch failed')
+        return jsonify({'error': '주문 목록 재고 다시 매칭 중 오류가 발생했습니다.'}), 500
     finally:
         conn.close()
 
