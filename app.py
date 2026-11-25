@@ -1859,13 +1859,13 @@ def get_picking_list():
             # option_quantity가 나중에 동기화된 과거 주문은 quantity 값이 예전 수량일 수 있어
             # 주문의 상품수량 × 현재 옵션의 실제 출고수량으로 피킹 수량을 계산합니다.
             purchase_quantity = product_quantity * option_quantity
-            # 먼저 주문 안에서 같은 바코드·상품 옵션의 분할 행을 합칩니다.
+            # 같은 주문 안에서는 상품명/옵션명과 관계없이 바코드별 구매 수량을 합칩니다.
             barcode_key = ('sku', sku) if sku else ('name', combined_name)
-            order_item_key = (barcode_key, order_id, combined_name or '(상품명 없음)')
+            order_item_key = (barcode_key, order_id)
             per_order_items[order_item_key] = per_order_items.get(order_item_key, 0) + purchase_quantity
 
         grouped = {}
-        for (barcode_key, order_id, combined_name), purchase_quantity in per_order_items.items():
+        for (barcode_key, order_id), purchase_quantity in per_order_items.items():
             sku = barcode_key[1] if barcode_key[0] == 'sku' else ''
             entry = grouped.setdefault(barcode_key, {
                 'sku': sku,
@@ -1873,28 +1873,21 @@ def get_picking_list():
                 'buckets': {}
             })
             entry['order_ids'].add(order_id)
-            bucket = entry['buckets'].setdefault(str(purchase_quantity), {
+            bucket = entry['buckets'].setdefault(purchase_quantity, {
                 'purchase_quantity': purchase_quantity,
-                'descriptions': {}
+                'order_ids': set()
             })
-            description = bucket['descriptions'].setdefault(combined_name, {
-                'orders': set(),
-                'total_quantity': 0
-            })
-            description['orders'].add(order_id)
-            description['total_quantity'] += purchase_quantity
+            bucket['order_ids'].add(order_id)
 
         groups = []
         for entry in grouped.values():
             buckets = [
                 {
                     'purchase_quantity': bucket['purchase_quantity'],
-                    'product_name': name,
-                    'order_count': len(description['orders']),
-                    'total_quantity': description['total_quantity']
+                    'order_count': len(bucket['order_ids']),
+                    'total_quantity': bucket['purchase_quantity'] * len(bucket['order_ids'])
                 }
                 for bucket in sorted(entry['buckets'].values(), key=lambda b: b['purchase_quantity'])
-                for name, description in sorted(bucket['descriptions'].items())
             ]
             groups.append({
                 'sku': entry['sku'],
