@@ -1846,21 +1846,24 @@ def get_picking_list():
 
         cur.execute('''
             SELECT o.id AS order_id, o.original_quantity, oi.product_quantity, oi.sku,
-                   oi.item_product_name, oi.item_option_name,
+                   oi.item_product_name, oi.item_option_name, p.product_name AS inventory_product_name,
                    oi.option_quantity, oi.quantity
             FROM orders o
             JOIN order_items oi ON oi.order_id = o.id
+            LEFT JOIN products p ON p.tenant_id = oi.tenant_id AND p.sku = oi.sku
             WHERE o.tenant_id = ? AND o.status IN ('주문접수', '출고대기')
             ORDER BY oi.sku ASC, oi.item_product_name ASC, oi.item_option_name ASC, o.id ASC
         ''', (g.company_id,))
 
         per_order_items = {}
+        product_names_by_barcode = {}
         for row in cur.fetchall():
             item = dict(row)
             sku = str(item.get('sku') or '').strip()
             product = str(item.get('item_product_name') or '').strip()
             option = str(item.get('item_option_name') or '').strip()
             combined_name = combined_item_name(product, option)
+            inventory_product_name = str(item.get('inventory_product_name') or '').strip()
 
             order_id = item.get('order_id')
             try:
@@ -1878,12 +1881,15 @@ def get_picking_list():
             barcode_key = ('sku', sku) if sku else ('name', combined_name)
             order_item_key = (barcode_key, order_id)
             per_order_items[order_item_key] = per_order_items.get(order_item_key, 0) + purchase_quantity
+            if barcode_key not in product_names_by_barcode:
+                product_names_by_barcode[barcode_key] = inventory_product_name or combined_name or '(상품명 없음)'
 
         grouped = {}
         for (barcode_key, order_id), purchase_quantity in per_order_items.items():
             sku = barcode_key[1] if barcode_key[0] == 'sku' else ''
             entry = grouped.setdefault(barcode_key, {
                 'sku': sku,
+                'product_name': product_names_by_barcode.get(barcode_key, '(상품명 없음)'),
                 'order_ids': set(),
                 'buckets': {}
             })
@@ -1906,6 +1912,7 @@ def get_picking_list():
             ]
             groups.append({
                 'sku': entry['sku'],
+                'product_name': entry['product_name'],
                 'order_count': len(entry['order_ids']),
                 'total_quantity': sum(bucket['total_quantity'] for bucket in buckets),
                 'buckets': buckets

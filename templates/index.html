@@ -676,6 +676,7 @@
                             <thead class="table-light">
                                 <tr>
                                     <th class="text-center" style="width:60px">순번</th>
+                                    <th style="min-width:240px">상품명</th>
                                     <th style="width:190px">바코드 (SKU)</th>
                                     <th style="min-width:260px">구매 수량별 합계</th>
                                     <th class="text-center" style="width:110px">주문 건수</th>
@@ -3028,7 +3029,7 @@
         const tbody = document.getElementById('pickingListTableBody');
         const mobileList = document.getElementById('pickingMobileList');
         if (!tbody || !mobileList) return;
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-5 text-muted"><i class="fa-solid fa-spinner fa-spin me-2"></i>피킹리스트를 불러오는 중입니다...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted"><i class="fa-solid fa-spinner fa-spin me-2"></i>피킹리스트를 불러오는 중입니다...</td></tr>';
         mobileList.innerHTML = '<div class="text-center py-4 text-muted"><i class="fa-solid fa-spinner fa-spin me-2"></i>피킹리스트를 불러오는 중입니다...</div>';
         try {
             const res = await fetch('/api/picking-list');
@@ -3040,7 +3041,7 @@
             document.getElementById('pickingTotalQuantity').textContent = Number(data.total_quantity || 0).toLocaleString();
 
             if (!groups.length) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-center py-5 text-muted">피킹할 미발송 상품이 없습니다.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center py-5 text-muted">피킹할 미발송 상품이 없습니다.</td></tr>';
                 mobileList.innerHTML = '<div class="text-center py-4 text-muted">피킹할 미발송 상품이 없습니다.</div>';
                 return;
             }
@@ -3053,6 +3054,7 @@
                 const rowspan = buckets.length;
                 const firstSequence = sequence + 1;
                 const skuHtml = group.sku ? `<code class="fs-6">${escapeHtml(group.sku)}</code>` : '<span class="text-muted">바코드 없음</span>';
+                const productNameHtml = `<span class="fw-semibold">${escapeHtml(group.product_name || '(상품명 없음)')}</span>`;
                 buckets.forEach((bucket, bucketIndex) => {
                     sequence += 1;
                     const purchaseQuantity = Number(bucket.purchase_quantity || 0);
@@ -3060,6 +3062,7 @@
                     const bucketTotal = Number(bucket.total_quantity || 0);
                     desktopRows.push(`<tr>
                         <td class="text-center text-muted">${sequence}</td>
+                        ${bucketIndex === 0 ? `<td rowspan="${rowspan}" class="picking-merged-cell">${productNameHtml}</td>` : ''}
                         ${bucketIndex === 0 ? `<td rowspan="${rowspan}" class="text-center picking-merged-cell">${skuHtml}</td>` : ''}
                         <td><span class="badge bg-light text-dark border">${purchaseQuantity.toLocaleString()}개 구매 × ${orderCount.toLocaleString()}건 <strong class="text-success">= ${bucketTotal.toLocaleString()}개</strong></span></td>
                         <td class="text-center">${orderCount.toLocaleString()}건</td>
@@ -3068,7 +3071,7 @@
                 });
                 mobileGroups.push(`<section class="picking-mobile-group">
                     <div class="picking-mobile-head">
-                        <div class="min-w-0"><strong>바코드</strong><code class="picking-mobile-sku">${group.sku ? escapeHtml(group.sku) : '바코드 없음'}</code></div>
+                        <div class="min-w-0"><strong class="d-block">${escapeHtml(group.product_name || '(상품명 없음)')}</strong><code class="picking-mobile-sku">${group.sku ? escapeHtml(group.sku) : '바코드 없음'}</code></div>
                         <div class="picking-mobile-total">총 ${Number(group.total_quantity || 0).toLocaleString()}개</div>
                     </div>
                     ${buckets.map((bucket, bucketIndex) => {
@@ -3087,7 +3090,7 @@
             mobileList.innerHTML = mobileGroups.join('');
         } catch (error) {
             console.error('Picking list load error', error);
-            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-5 text-danger">피킹리스트를 불러오지 못했습니다: ${escapeHtml(error.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadPickingList()">다시 시도</button></td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-5 text-danger">피킹리스트를 불러오지 못했습니다: ${escapeHtml(error.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadPickingList()">다시 시도</button></td></tr>`;
             mobileList.innerHTML = `<div class="text-center py-4 text-danger">피킹리스트를 불러오지 못했습니다: ${escapeHtml(error.message)} <button class="btn btn-sm btn-outline-secondary ms-2" onclick="loadPickingList()">다시 시도</button></div>`;
         }
     }
