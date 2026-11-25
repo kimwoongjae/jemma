@@ -3196,6 +3196,9 @@ def api_shipping_labels():
             ''', (g.company_id,))
 
         orders = [dict(row) for row in cur.fetchall()]
+        if order_ids:
+            requested_order = {order_id: index for index, order_id in enumerate(order_ids)}
+            orders.sort(key=lambda order: requested_order.get(int(order['id']), len(requested_order)))
 
         if orders:
             oids = [o['id'] for o in orders]
@@ -3242,7 +3245,7 @@ def _narda_pdf_bundle_for_tenant(tenant_id):
     cur = conn.cursor()
 
     if order_ids_str:
-        order_ids = [int(x) for x in order_ids_str.split(',') if x.strip().isdigit()]
+        order_ids = list(dict.fromkeys(int(x) for x in order_ids_str.split(',') if x.strip().isdigit()))
         if not order_ids:
             conn.close()
             return "유효한 주문 ID가 없습니다.", 400
@@ -3262,6 +3265,9 @@ def _narda_pdf_bundle_for_tenant(tenant_id):
     conn.close()
 
     rows = [dict(r) for r in raw_rows] if raw_rows else []
+    if order_ids_str and rows:
+        requested_order = {order_id: index for index, order_id in enumerate(order_ids)}
+        rows.sort(key=lambda row: requested_order.get(int(row['id']), len(requested_order)))
     if not rows:
         return "선택한 주문에 발급된 나르다 송장 PDF가 없습니다. 먼저 송장을 발급해주세요.", 404
 
