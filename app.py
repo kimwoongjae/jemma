@@ -16,7 +16,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 from database import init_db, get_connection
-from excel_processor import HEADER_MAP, NARDA_MANIFEST_PROFILE, get_auto_header_aliases, process_excel_file, process_narda_manifest_file, save_orders_to_db
+from excel_processor import HEADER_MAP, NARDA_MANIFEST_PROFILE, find_matching_product_info, get_auto_header_aliases, process_excel_file, process_narda_manifest_file, save_orders_to_db
 from shipping_api import (
     issue_tracking_numbers, complete_dispatch,
     export_shipping_excel
@@ -2378,9 +2378,11 @@ def edit_order(order_id):
         if not order:
             return jsonify({'error': '주문을 찾을 수 없습니다.'}), 404
 
-        manifest_items = data.get('manifest_items') or []
-        if not isinstance(manifest_items, list):
-            return jsonify({'error': '기본형식 품목 정보가 올바르지 않습니다.'}), 400
+        submitted_items = data.get('items') if 'items' in data else data.get('manifest_items')
+        if submitted_items is not None and not isinstance(submitted_items, list):
+            return jsonify({'error': '상품 품목 정보가 올바르지 않습니다.'}), 400
+        item_list_submitted = submitted_items is not None
+        submitted_items = submitted_items or []
         order_manifest = order['manifest_data'] or '{}'
         try:
             order_manifest = json.loads(order_manifest) if isinstance(order_manifest, str) else dict(order_manifest)
@@ -2389,49 +2391,60 @@ def edit_order(order_id):
         if not isinstance(order_manifest, dict):
             order_manifest = {}
         ctns = str(data.get('ctns') or '').strip()
-        order_manifest['CTNS'] = ctns
+        if item_list_submitted:
+            order_manifest['CTNS'] = ctns
 
         cur.execute('SELECT * FROM order_items WHERE tenant_id = ? AND order_id = ? ORDER BY id ASC',
                     (g.company_id, order_id))
         all_owned_items = [dict(row) for row in cur.fetchall()]
-        manifest_owned = {}
-        for row in all_owned_items:
-            try:
-                row_manifest = json.loads(row.get('manifest_data') or '{}')
-            except (TypeError, ValueError):
-                row_manifest = {}
-            if isinstance(row_manifest, dict) and str(row_manifest.get('Item Name') or '').strip():
-                manifest_owned[str(row['id'])] = (row, row_manifest)
+        items_by_id = {str(row['id']): row for row in all_owned_items}
+        order_dict = dict(order)
+        if item_list_submitted and any(int(row.get('stock_deducted') or 0) for row in all_owned_items):
+            return jsonify({'error': '이미 재고가 차감된 주문의 상품은 여기서 수정할 수 없습니다.'}), 409
+        if item_list_submitted and (order_dict.get('status') in ('출고완료', '송장발급') or str(order_dict.get('tracking_no') or '').strip()):
+            return jsonify({'error': '발송 완료된 주문의 상품은 주문관리에서 수정할 수 없습니다.'}), 409
 
         allowed_fields = {'HS Code 1', 'Item Name', '아이템상세정보', 'Unit Price', 'Piece', 'Amount', '상품 URL', '원산지'}
         item_updates = []
         item_inserts = []
         retained_ids = set()
-        for submitted in manifest_items:
+        for submitted in submitted_items:
             if not isinstance(submitted, dict) or not isinstance(submitted.get('fields'), dict):
                 return jsonify({'error': '수정할 상품 정보를 확인해주세요.'}), 400
             item_id = str(submitted.get('id') or '').strip()
             if item_id:
-                if item_id not in manifest_owned:
+                if item_id not in items_by_id:
                     return jsonify({'error': '수정할 상품을 확인할 수 없습니다. 새로고침 후 다시 시도해주세요.'}), 400
-                row, fields = manifest_owned[item_id]
-                fields = dict(fields)
+                row = items_by_id[item_id]
+                try:
+                    row_manifest = json.loads(row.get('manifest_data') or '{}')
+                except (TypeError, ValueError):
+                    row_manifest = {}
+                if not isinstance(row_manifest, dict):
+                    row_manifest = {}
+                fields = dict(row_manifest)
             else:
                 row = None
+                row_manifest = {}
                 fields = {}
             for field in allowed_fields:
                 if field in submitted['fields']:
                     fields[field] = str(submitted['fields'][field] if submitted['fields'][field] is not None else '').strip()
-            fields['CTNS'] = ctns
-            if not str(fields.get('Item Name') or '').strip():
-                return jsonify({'error': 'Item Name은 비워둘 수 없습니다. 상품 행을 삭제하거나 상품명을 입력해주세요.'}), 400
+
+            product_name = str(submitted.get('item_product_name') if 'item_product_name' in submitted
+                               else fields.get('Item Name') or (row.get('item_product_name') if row else '')).strip()
+            option_name = str(submitted.get('item_option_name') if 'item_option_name' in submitted
+                              else fields.get('아이템상세정보') or (row.get('item_option_name') if row else '')).strip()
+            if not product_name:
+                return jsonify({'error': '상품명은 비워둘 수 없습니다. 상품을 삭제하거나 상품명을 입력해주세요.'}), 400
             try:
-                piece_value = float(fields.get('Piece') or 0)
+                piece_value = float(submitted.get('product_quantity') if 'product_quantity' in submitted
+                                    else fields.get('Piece') or (row.get('product_quantity') if row else 1) or 0)
                 if not math.isfinite(piece_value) or not piece_value.is_integer() or piece_value < 1:
                     raise ValueError
                 piece = int(piece_value)
             except (TypeError, ValueError):
-                return jsonify({'error': 'Piece는 1 이상의 정수로 입력해주세요.'}), 400
+                return jsonify({'error': 'Piece/상품수량은 1 이상의 정수로 입력해주세요.'}), 400
             for field in ('Unit Price', 'Amount'):
                 value = str(fields.get(field) or '').replace(',', '').strip()
                 if value:
@@ -2442,19 +2455,33 @@ def edit_order(order_id):
                     except ValueError:
                         return jsonify({'error': f'{field}는 0 이상의 숫자로 입력해주세요.'}), 400
                     fields[field] = value
-            manifest_json = json.dumps(fields, ensure_ascii=False)
-            entry = (manifest_json, fields['Item Name'], fields.get('아이템상세정보', ''), piece)
+
+            has_manifest = bool(submitted.get('has_manifest')) or bool(row_manifest) or any(
+                str(fields.get(field) or '').strip()
+                for field in ('HS Code 1', 'Unit Price', 'Amount', '상품 URL', '원산지'))
+            if has_manifest:
+                fields['Item Name'] = product_name
+                fields['아이템상세정보'] = option_name
+                fields['Piece'] = str(piece)
+                fields['CTNS'] = ctns
+                manifest_json = json.dumps(fields, ensure_ascii=False)
+            else:
+                manifest_json = '{}'
             if row:
                 retained_ids.add(item_id)
-                item_updates.append((*entry, item_id))
+                try:
+                    option_quantity = max(1, int(float(row.get('option_quantity') or 1)))
+                except (TypeError, ValueError):
+                    option_quantity = 1
+                item_updates.append((manifest_json, product_name, option_name, piece, option_quantity,
+                                     piece * option_quantity, row.get('sku') or '', item_id))
             else:
-                item_inserts.append(entry)
+                item_inserts.append((manifest_json, product_name, option_name, piece))
 
-        # 상품 목록에서 제거한 행은 기본형식 manifest 품목만 삭제합니다.
-        deleted_ids = set(manifest_owned) - retained_ids
-        for deleted_id in deleted_ids:
-            cur.execute('DELETE FROM order_items WHERE id = ? AND order_id = ? AND tenant_id = ?',
-                        (int(deleted_id), order_id, g.company_id))
+        if item_list_submitted:
+            for deleted_id in set(items_by_id) - retained_ids:
+                cur.execute('DELETE FROM order_items WHERE id = ? AND order_id = ? AND tenant_id = ?',
+                            (int(deleted_id), order_id, g.company_id))
 
         cur.execute('''UPDATE orders
             SET recipient_name = ?, recipient_phone1 = ?, recipient_phone2 = ?, customs_id = ?,
@@ -2462,19 +2489,20 @@ def edit_order(order_id):
             WHERE id = ? AND tenant_id = ?''',
             (recipient_name, recipient_phone1, recipient_phone2, customs_id, postal_code,
              address, shipping_memo, weight, packaging_type, json.dumps(order_manifest, ensure_ascii=False), order_id, g.company_id))
-        for manifest_data, item_name, item_detail, piece, item_id in item_updates:
+        for manifest_data, item_name, item_detail, piece, option_quantity, quantity, sku, item_id in item_updates:
             cur.execute('''UPDATE order_items
                 SET manifest_data = ?, item_product_name = ?, item_option_name = ?,
-                    product_quantity = ?, quantity = ?
+                    product_quantity = ?, option_quantity = ?, quantity = ?, sku = ?
                 WHERE id = ? AND order_id = ? AND tenant_id = ?''',
-                (manifest_data, item_name, item_detail, piece, piece, int(item_id), order_id, g.company_id))
+                (manifest_data, item_name, item_detail, piece, option_quantity, quantity, sku,
+                 int(item_id), order_id, g.company_id))
         for manifest_data, item_name, item_detail, piece in item_inserts:
             cur.execute('''INSERT INTO order_items (
                 tenant_id, order_id, order_no, sku, item_product_name, item_option_name,
                 product_quantity, option_quantity, quantity, stock_deducted, status, manifest_data
             ) VALUES (?, ?, ?, '', ?, ?, ?, 1, ?, 0, '준비중', ?)''',
                 (g.company_id, order_id, order['order_no'], item_name, item_detail, piece, piece, manifest_data))
-        if manifest_owned or item_inserts:
+        if item_list_submitted:
             cur.execute('''SELECT item_product_name, item_option_name, quantity FROM order_items
                 WHERE order_id = ? AND tenant_id = ? ORDER BY id ASC''', (order_id, g.company_id))
             current_items = [dict(row) for row in cur.fetchall()]
@@ -2494,6 +2522,71 @@ def edit_order(order_id):
         conn.rollback()
         app.logger.exception('Order edit failed')
         return jsonify({'error': '주문 정보를 저장하지 못했습니다. 다시 시도해주세요.'}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/orders/<int:order_id>/rematch-inventory', methods=['POST'])
+def rematch_order_inventory(order_id):
+    """Explicitly rematch an unshipped order's item names to its tenant inventory."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id, status, tracking_no FROM orders WHERE id = ? AND tenant_id = ?',
+                    (order_id, g.company_id))
+        order = cur.fetchone()
+        if not order:
+            return jsonify({'error': '주문을 찾을 수 없습니다.'}), 404
+        order = dict(order)
+        if order.get('status') in ('출고완료', '송장발급') or str(order.get('tracking_no') or '').strip():
+            return jsonify({'error': '발송이 시작된 주문은 재고 재매칭할 수 없습니다.'}), 409
+
+        cur.execute('SELECT id, product_id, sku, option_name, unit_price, dispatched_quantity FROM product_options WHERE tenant_id = ?',
+                    (g.company_id,))
+        option_rows = [dict(row) for row in cur.fetchall()]
+        cur.execute('SELECT id, sku, product_name, option_name, unit_price, dispatched_quantity FROM products WHERE tenant_id = ?',
+                    (g.company_id,))
+        product_rows = [dict(row) for row in cur.fetchall()]
+        cur.execute('SELECT * FROM order_items WHERE tenant_id = ? AND order_id = ? ORDER BY id ASC',
+                    (g.company_id, order_id))
+        items = [dict(row) for row in cur.fetchall()]
+        if any(int(item.get('stock_deducted') or 0) for item in items):
+            return jsonify({'error': '이미 재고가 차감된 주문은 재고 재매칭할 수 없습니다.'}), 409
+
+        results = []
+        for item in items:
+            info = find_matching_product_info(
+                item.get('item_product_name') or '', item.get('item_option_name') or '', conn,
+                opt_rows=option_rows, prod_rows=product_rows)
+            if not info.get('matched'):
+                results.append({'item_id': item['id'], 'matched': False,
+                                'product_name': item.get('item_product_name') or ''})
+                continue
+            try:
+                product_quantity = max(1, int(float(item.get('product_quantity') or 1)))
+                option_quantity = max(1, int(float(info.get('dispatched_quantity') or 1)))
+            except (TypeError, ValueError):
+                product_quantity, option_quantity = 1, 1
+            quantity = product_quantity * option_quantity
+            cur.execute('''UPDATE order_items
+                SET sku = ?, option_quantity = ?, quantity = ?
+                WHERE id = ? AND tenant_id = ? AND order_id = ? AND stock_deducted = 0''',
+                (info.get('sku') or '', option_quantity, quantity, item['id'], g.company_id, order_id))
+            results.append({'item_id': item['id'], 'matched': True, 'sku': info.get('sku') or '',
+                            'option_quantity': option_quantity, 'quantity': quantity})
+
+        matched_count = sum(1 for result in results if result['matched'])
+        cur.execute('SELECT COALESCE(SUM(quantity), 0) AS total_quantity FROM order_items WHERE tenant_id = ? AND order_id = ?',
+                    (g.company_id, order_id))
+        total_quantity_row = cur.fetchone()
+        cur.execute('UPDATE orders SET original_quantity = ? WHERE id = ? AND tenant_id = ?',
+                    (int(total_quantity_row['total_quantity'] or 0), order_id, g.company_id))
+        conn.commit()
+        return jsonify({'status': 'success', 'matched_count': matched_count,
+                        'unmatched_count': len(results) - matched_count, 'results': results})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Order inventory rematch failed')
+        return jsonify({'error': '재고 다시 매칭 중 오류가 발생했습니다.'}), 500
     finally:
         conn.close()
 

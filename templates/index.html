@@ -1779,7 +1779,7 @@
                                     <thead class="table-light">
                                         <tr>
                                             <th>HS Code</th><th>Item Name</th><th>아이템상세정보</th>
-                                            <th>Unit Price</th><th>Piece</th><th>Amount</th><th>상품 URL</th><th>원산지</th><th>관리</th>
+                                            <th>Unit Price</th><th>Piece</th><th>Amount</th><th>상품 URL</th><th>원산지</th><th>현재 재고 매칭</th><th>관리</th>
                                         </tr>
                                     </thead>
                                     <tbody id="editManifestDetailsBody"></tbody>
@@ -1791,6 +1791,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-outline-primary" id="btnSaveAndRematch" onclick="saveOrderEdit(true)"><i class="fa-solid fa-arrows-rotate me-1"></i>저장 후 재고 다시 매칭</button>
                 <button type="button" class="btn btn-primary px-4" onclick="saveOrderEdit()"><i class="fa-solid fa-check me-1"></i>수정 저장</button>
             </div>
         </div>
@@ -2748,6 +2749,7 @@
         if (!order) return;
         document.getElementById('editOrderId').value = order.id;
         document.getElementById('editOrderContext').value = 'order';
+        document.getElementById('btnSaveAndRematch').classList.remove('d-none');
         document.getElementById('editOrderModal').querySelector('.modal-title').innerHTML = '<i class="fa-solid fa-pen-to-square me-2 text-primary"></i>주문 및 수취인 정보 수정';
         document.getElementById('editOrderNo').value = order.order_no;
         document.getElementById('editRecipientName').value = order.recipient_name || '';
@@ -2770,6 +2772,8 @@
         if (!order) return;
         openEditOrderModal(orderId);
         document.getElementById('editOrderContext').value = 'dispatched';
+        document.getElementById('btnSaveAndRematch').classList.add('d-none');
+        document.getElementById('editManifestDetailsSection').classList.add('d-none');
         document.getElementById('editOrderModal').querySelector('.modal-title').innerHTML = '<i class="fa-solid fa-pen-to-square me-2 text-primary"></i>발송 정보 수정';
     }
 
@@ -2787,14 +2791,18 @@
             if (typeof data === 'string') {
                 try { data = JSON.parse(data || '{}'); } catch (_) { data = {}; }
             }
-            return { item, data };
-        }).filter(entry => fields.some(field => entry.data[field] !== undefined && entry.data[field] !== null && String(entry.data[field]).trim() !== ''));
+            const hasManifest = fields.some(field => data[field] !== undefined && data[field] !== null && String(data[field]).trim() !== '');
+            if (!String(data['Item Name'] || '').trim()) data['Item Name'] = item.item_product_name || '';
+            if (!String(data['아이템상세정보'] || '').trim()) data['아이템상세정보'] = item.item_option_name || '';
+            if (!String(data.Piece || '').trim()) data.Piece = item.product_quantity || item.quantity || 1;
+            return { item, data, hasManifest };
+        });
 
-        body.innerHTML = items.map(({ item, data }) => `
-            <tr data-item-id="${Number(item.id)}">${fields.map(field => {
+        body.innerHTML = items.map(({ item, data, hasManifest }) => `
+            <tr data-item-id="${Number(item.id)}" data-has-manifest="${hasManifest ? 'true' : 'false'}">${fields.map(field => {
                 const value = data[field] === undefined || data[field] === null ? '' : String(data[field]);
                 return `<td><input type="text" class="form-control form-control-sm manifest-edit-field" data-field="${field}" value="${escapeHtml(value)}" aria-label="${field}" style="min-width:${field === 'Item Name' || field === '아이템상세정보' ? '220px' : '100px'}"></td>`;
-            }).join('')}<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()" aria-label="상품 삭제"><i class="fa-solid fa-trash"></i></button></td></tr>
+            }).join('')}<td class="small text-nowrap stock-rematch-status">${escapeHtml(item.sku || '미매칭')} / ${Number(item.option_quantity || 1)}개</td><td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()" aria-label="상품 삭제"><i class="fa-solid fa-trash"></i></button></td></tr>
         `).join('');
         section.classList.remove('d-none');
     }
@@ -2804,14 +2812,16 @@
         const row = document.createElement('tr');
         row.dataset.itemId = '';
         row.dataset.newItem = 'true';
+        row.dataset.hasManifest = 'false';
         row.innerHTML = fields.map(field => `<td><input type="text" class="form-control form-control-sm manifest-edit-field" data-field="${field}" value="${field === 'Piece' ? '1' : ''}" aria-label="${field}" style="min-width:${field === 'Item Name' || field === '아이템상세정보' ? '220px' : '100px'}"></td>`).join('')
-            + '<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest(\'tr\').remove()" aria-label="상품 삭제"><i class="fa-solid fa-trash"></i></button></td>';
+            + '<td class="small text-muted stock-rematch-status">저장 후 매칭</td><td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest(\'tr\').remove()" aria-label="상품 삭제"><i class="fa-solid fa-trash"></i></button></td>';
         document.getElementById('editManifestDetailsBody').appendChild(row);
         row.querySelector('[data-field="Item Name"]')?.focus();
     }
 
-    async function saveOrderEdit() {
+    async function saveOrderEdit(rematchAfterSave = false) {
         const orderId = document.getElementById('editOrderId').value;
+        const editContext = document.getElementById('editOrderContext').value;
         const payload = {
             recipient_name: document.getElementById('editRecipientName').value,
             recipient_phone1: document.getElementById('editRecipientPhone1').value,
@@ -2822,15 +2832,23 @@
             shipping_memo: document.getElementById('editShippingMemo').value,
             weight: parseFloat(document.getElementById('editWeight').value) || 0.0,
             packaging_type: document.getElementById('editPackagingType').value,
-            ctns: document.getElementById('editManifestCtns').value,
-            manifest_items: [...document.querySelectorAll('#editManifestDetailsBody tr[data-item-id]')].map(row => ({
-                id: row.dataset.itemId || null,
-                fields: Object.fromEntries([...row.querySelectorAll('.manifest-edit-field')].map(input => [input.dataset.field, input.value]))
-            }))
+            ctns: document.getElementById('editManifestCtns').value
         };
+        if (editContext !== 'dispatched') {
+            payload.items = [...document.querySelectorAll('#editManifestDetailsBody tr[data-item-id]')].map(row => {
+                const fields = Object.fromEntries([...row.querySelectorAll('.manifest-edit-field')].map(input => [input.dataset.field, input.value]));
+                return {
+                    id: row.dataset.itemId || null,
+                    has_manifest: row.dataset.hasManifest === 'true',
+                    item_product_name: fields['Item Name'],
+                    item_option_name: fields['아이템상세정보'],
+                    product_quantity: fields.Piece,
+                    fields
+                };
+            });
+        }
 
         try {
-            const editContext = document.getElementById('editOrderContext').value;
             const editUrl = editContext === 'dispatched'
                 ? `/api/dispatched-orders/${orderId}/edit`
                 : `/api/orders/${orderId}/edit`;
@@ -2841,9 +2859,26 @@
             });
             const data = await res.json();
             if (data.status === 'success') {
+                let rematchMessage = '';
+                if (rematchAfterSave) {
+                    const rematchResponse = await fetch(`/api/orders/${orderId}/rematch-inventory`, { method: 'POST' });
+                    const rematchData = await rematchResponse.json();
+                    if (!rematchResponse.ok || rematchData.status !== 'success') {
+                        throw new Error(rematchData.error || '재고 다시 매칭에 실패했습니다.');
+                    }
+                    const unmatchedNames = rematchData.results
+                        .filter(result => !result.matched)
+                        .map(result => result.product_name)
+                        .filter(Boolean);
+                    rematchMessage = `\n재고 매칭 ${rematchData.matched_count}건 완료, 미매칭 ${rematchData.unmatched_count}건`;
+                    if (unmatchedNames.length) {
+                        rematchMessage += `\n미매칭(기존 연결 유지): ${unmatchedNames.slice(0, 5).join(', ')}${unmatchedNames.length > 5 ? ` 외 ${unmatchedNames.length - 5}건` : ''}`;
+                    }
+                }
                 const modalEl = document.getElementById('editOrderModal');
                 const modalInst = bootstrap.Modal.getInstance(modalEl);
                 if (modalInst) modalInst.hide();
+                if (rematchAfterSave) alert(`주문 정보 저장 및 재고 다시 매칭을 완료했습니다.${rematchMessage}`);
                 if (editContext === 'dispatched') {
                     await loadDispatchedOrders();
                 } else {
