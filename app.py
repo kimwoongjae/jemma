@@ -21,6 +21,7 @@ from shipping_api import (
     issue_tracking_numbers, complete_dispatch,
     export_shipping_excel
 )
+from telegram_notifications import queue_telegram_message, send_telegram_message
 
 SHIPPING_WEIGHT_STEPS = [i / 2 for i in range(1, 61)] + list(range(35, 101, 5))
 
@@ -685,8 +686,15 @@ def admin_inventory_movement(company_id):
                      product['option_name'] or '', movement, change_qty, new_stock,
                      memo or f'관리자 바코드 {movement}', now_str))
         if movement == '입고':
-            record_progress(cur, company_id, f"{product['product_name']} {quantity}개 입고", 'inventory_in')
+            progress_content = f"{product['product_name']} {quantity}개 입고"
+            record_progress(cur, company_id, progress_content, 'inventory_in')
+        else:
+            progress_content = f"{product['product_name']} {{quantity}}개 출고"
+            daily_key = f"outbound:{datetime.now().strftime('%Y-%m-%d')}:{product['sku'] or product['id']}"
+            record_progress(cur, company_id, progress_content, 'inventory_out',
+                            activity_key=daily_key, quantity_delta=quantity)
         conn.commit()
+        queue_telegram_message(company_id, f"{product['product_name']} {quantity}개 {movement}")
         return jsonify({'status': 'success', 'movement': movement, 'quantity': quantity,
                         'stock_quantity': new_stock, 'product_name': product['product_name'],
                         'sku': product['sku'], 'created_at': now_str})
@@ -1650,6 +1658,7 @@ def upload_confirm():
             progress_cur = progress_conn.cursor()
             record_progress(progress_cur, g.company_id, '엑셀 주문파일업로드 함', 'order_upload')
             progress_conn.commit()
+            queue_telegram_message(g.company_id, '엑셀 주문파일업로드 함')
         except Exception:
             if progress_conn:
                 progress_conn.rollback()
@@ -2845,6 +2854,7 @@ def validate_customs_batch():
             return jsonify({'status': 'success', 'message': '검증할 주문이 없습니다.', 'total_checked': 0, 'results': []})
 
         results = []
+        customs_edit_notifications = set()
         batch_size = 50
 
         for i in range(0, len(target_orders), batch_size):
@@ -2929,6 +2939,7 @@ def validate_customs_batch():
                                         SET event_type = 'customs_name_edited', content = '개인통관고유부호 이름 수정됨',
                                             activity_key = NULL, updated_at = CURRENT_TIMESTAMP
                                         WHERE id = ? AND tenant_id = ?''', (pending_name_event['id'], g.company_id))
+                                    customs_edit_notifications.add(oid)
                             found_ids.add(oid)
 
                 # 검증 결과 매칭되지 않은 주문 처리
@@ -2969,6 +2980,8 @@ def validate_customs_batch():
                     })
 
         conn.commit()
+        for _order_id in customs_edit_notifications:
+            queue_telegram_message(g.company_id, '개인통관고유부호 이름 수정됨')
         return jsonify({
             'status': 'success',
             'total_checked': len(results),
@@ -3600,6 +3613,7 @@ def barcode_stock_in():
 
     conn.commit()
     conn.close()
+    queue_telegram_message(g.company_id, f'{p_name} {qty}개 입고')
     return jsonify({'status': 'success', 'new_stock': new_stock, 'product_name': p_name})
 
 @app.route('/api/inventory/batch-stock-in', methods=['POST'])
@@ -3615,6 +3629,7 @@ def batch_stock_in():
     total_qty = 0
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
 
+    progress_messages = []
     for it in items:
         sku = str(it.get('sku', '')).strip()
         qty = int(it.get('quantity', 0) or 0)
@@ -3654,12 +3669,15 @@ def batch_stock_in():
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (g.company_id, prod_id, sku, actual_name, '', '입고', qty, new_stock, '일괄 바코드 스캔 입고', now_str))
         record_progress(cur, g.company_id, f'{actual_name} {qty}개 입고', 'inventory_in')
+        progress_messages.append(f'{actual_name} {qty}개 입고')
 
         success_count += 1
         total_qty += qty
 
     conn.commit()
     conn.close()
+    for progress_message in progress_messages:
+        queue_telegram_message(g.company_id, progress_message)
     return jsonify({'status': 'success', 'processed_items': success_count, 'total_quantity': total_qty})
 
 @app.route('/api/inventory/template', methods=['GET'])
@@ -3987,6 +4005,8 @@ def move_orders_status():
         record_progress(cur, g.company_id, f'개인통관고유부호 확인 목록으로 {len(order_ids)}건 옮김', 'customs_moved')
     conn.commit()
     conn.close()
+    if target_status == '통관오류':
+        queue_telegram_message(g.company_id, f'개인통관고유부호 확인 목록으로 {len(order_ids)}건 옮김')
     return jsonify({'status': 'success', 'moved_count': len(order_ids), 'target_status': target_status})
 
 
@@ -4617,6 +4637,73 @@ def save_settings():
         return jsonify({'error': '나르다 API 설정을 저장하지 못했습니다.'}), 500
     finally:
         conn.close()
+
+
+@app.route('/api/telegram/settings', methods=['GET'])
+def get_telegram_settings():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT bot_token, chat_id, enabled FROM telegram_settings WHERE tenant_id = ?', (g.company_id,))
+    row = cur.fetchone()
+    conn.close()
+    settings = dict(row) if row else {}
+    return jsonify({
+        'chat_id': settings.get('chat_id') or '',
+        'enabled': int(settings.get('enabled') or 0) == 1,
+        'has_bot_token': bool(str(settings.get('bot_token') or '').strip())
+    })
+
+
+@app.route('/api/telegram/settings', methods=['POST'])
+def save_telegram_settings():
+    data = request.get_json(silent=True) or {}
+    chat_id = str(data.get('chat_id') or '').strip()
+    submitted_token = str(data.get('bot_token') or '').strip()
+    clear_token = bool(data.get('clear_token'))
+    enabled = 1 if data.get('enabled') else 0
+    if len(chat_id) > 120 or len(submitted_token) > 300:
+        return jsonify({'error': '텔레그램 설정 값이 너무 깁니다.'}), 400
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT bot_token FROM telegram_settings WHERE tenant_id = ?', (g.company_id,))
+        existing = cur.fetchone()
+        bot_token = '' if clear_token else (submitted_token or (str(existing['bot_token'] or '') if existing else ''))
+        if enabled and (not bot_token or not chat_id):
+            return jsonify({'error': '전송을 켜려면 봇 토큰과 채팅 ID를 입력해주세요.'}), 400
+
+        if existing:
+            cur.execute('''UPDATE telegram_settings SET bot_token = ?, chat_id = ?, enabled = ?,
+                updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?''', (bot_token, chat_id, enabled, g.company_id))
+        else:
+            cur.execute('''INSERT INTO telegram_settings (tenant_id, bot_token, chat_id, enabled, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)''', (g.company_id, bot_token, chat_id, enabled))
+        conn.commit()
+        return jsonify({'status': 'success', 'has_bot_token': bool(bot_token), 'enabled': bool(enabled)})
+    except Exception:
+        conn.rollback()
+        app.logger.exception('Telegram settings save failed for tenant_id=%s', g.company_id)
+        return jsonify({'error': '텔레그램 설정을 저장하지 못했습니다.'}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/telegram/test', methods=['POST'])
+def test_telegram_settings():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT bot_token, chat_id FROM telegram_settings WHERE tenant_id = ?', (g.company_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row or not str(row['bot_token'] or '').strip() or not str(row['chat_id'] or '').strip():
+        return jsonify({'error': '봇 토큰과 채팅 ID를 먼저 저장해주세요.'}), 400
+    success, message = send_telegram_message(
+        row['bot_token'], row['chat_id'], '✅ 진행사항 텔레그램 연동 테스트 메시지입니다.'
+    )
+    if not success:
+        return jsonify({'error': f'테스트 전송 실패: {message}'}), 502
+    return jsonify({'status': 'success', 'message': message})
 
 import sys
 import io

@@ -1453,6 +1453,37 @@
                             </form>
                         </div>
                     </div>
+                    <div class="card border-0 shadow-sm mt-4">
+                        <div class="card-header bg-white py-3">
+                            <h5 class="fw-bold mb-1"><i class="fa-brands fa-telegram text-primary me-2"></i>텔레그램 API 설정</h5>
+                            <p class="text-muted small mb-0">이 거래처의 진행사항을 지정한 텔레그램 채팅으로 전송합니다.</p>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label class="form-label fw-bold" for="telegramBotToken">봇 토큰</label>
+                                <input type="password" class="form-control" id="telegramBotToken" autocomplete="new-password" placeholder="저장된 토큰을 유지하려면 비워두세요">
+                                <div class="form-text" id="telegramTokenStatus">토큰은 저장 여부만 표시되며 다시 읽어오지 않습니다.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold" for="telegramChatId">채팅 ID</label>
+                                <input type="text" class="form-control" id="telegramChatId" placeholder="개인 채팅 또는 그룹 채팅 ID">
+                                <div class="form-text">그룹 채팅은 봇을 그룹에 추가한 뒤 해당 그룹의 채팅 ID를 입력하세요.</div>
+                            </div>
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="telegramEnabled">
+                                <label class="form-check-label fw-bold" for="telegramEnabled">진행사항 텔레그램 전송</label>
+                            </div>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="telegramClearToken">
+                                <label class="form-check-label text-danger" for="telegramClearToken">저장된 봇 토큰 삭제</label>
+                            </div>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button type="button" class="btn btn-primary" onclick="saveTelegramSettings()"><i class="fa-solid fa-floppy-disk me-1"></i>텔레그램 설정 저장</button>
+                                <button type="button" class="btn btn-outline-primary" onclick="testTelegramSettings()"><i class="fa-solid fa-paper-plane me-1"></i>테스트 메시지 전송</button>
+                            </div>
+                            <div class="small mt-2" id="telegramSettingsMessage" aria-live="polite"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -6181,6 +6212,7 @@
 
     async function loadSettingsAndBundles() {
         loadDelimiters();
+        loadTelegramSettings();
         try {
             const sRes = await fetch('/api/settings');
             const s = await sRes.json();
@@ -6218,6 +6250,72 @@
                 tbody.appendChild(tr);
             });
         } catch (e) {}
+    }
+
+    async function loadTelegramSettings() {
+        const message = document.getElementById('telegramSettingsMessage');
+        try {
+            const response = await fetch('/api/telegram/settings');
+            const settings = await response.json();
+            if (!response.ok) throw new Error(settings.error || '텔레그램 설정을 불러오지 못했습니다.');
+            document.getElementById('telegramChatId').value = settings.chat_id || '';
+            document.getElementById('telegramEnabled').checked = Boolean(settings.enabled);
+            document.getElementById('telegramBotToken').value = '';
+            document.getElementById('telegramClearToken').checked = false;
+            document.getElementById('telegramTokenStatus').textContent = settings.has_bot_token
+                ? '봇 토큰이 저장되어 있습니다. 새 토큰을 입력하면 교체되고, 비워두면 기존 토큰을 유지합니다.'
+                : '저장된 봇 토큰이 없습니다.';
+            if (message) message.textContent = '';
+        } catch (error) {
+            if (message) {
+                message.textContent = error.message;
+                message.className = 'small mt-2 text-danger';
+            }
+        }
+    }
+
+    async function saveTelegramSettings() {
+        const message = document.getElementById('telegramSettingsMessage');
+        message.textContent = '';
+        message.className = 'small mt-2';
+        try {
+            const response = await fetch('/api/telegram/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    bot_token: document.getElementById('telegramBotToken').value,
+                    chat_id: document.getElementById('telegramChatId').value,
+                    enabled: document.getElementById('telegramEnabled').checked,
+                    clear_token: document.getElementById('telegramClearToken').checked
+                })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '텔레그램 설정 저장에 실패했습니다.');
+            message.textContent = '텔레그램 설정을 저장했습니다.';
+            message.classList.add('text-success');
+            await loadTelegramSettings();
+            message.textContent = '텔레그램 설정을 저장했습니다.';
+            message.className = 'small mt-2 text-success';
+        } catch (error) {
+            message.textContent = error.message;
+            message.classList.add('text-danger');
+        }
+    }
+
+    async function testTelegramSettings() {
+        const message = document.getElementById('telegramSettingsMessage');
+        message.textContent = '테스트 메시지를 전송하고 있습니다…';
+        message.className = 'small mt-2 text-muted';
+        try {
+            const response = await fetch('/api/telegram/test', { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '테스트 메시지 전송에 실패했습니다.');
+            message.textContent = '테스트 메시지를 전송했습니다. 텔레그램을 확인해주세요.';
+            message.className = 'small mt-2 text-success';
+        } catch (error) {
+            message.textContent = error.message;
+            message.className = 'small mt-2 text-danger';
+        }
     }
 
     async function saveCourierSettings(e) {

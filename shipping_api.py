@@ -10,6 +10,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from io import BytesIO
 from requests.adapters import HTTPAdapter
 from database import get_connection, record_progress
+from telegram_notifications import queue_telegram_message
 
 # 스레드별 HTTP 세션을 사용해 동시 요청 사이의 세션/쿠키 공유를 방지합니다.
 _narda_thread_local = threading.local()
@@ -501,6 +502,8 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
 
     conn.commit()
     conn.close()
+    for summary in outbound_totals.values():
+        queue_telegram_message(tenant_id, f"{summary['product_name']} {summary['quantity']}개 출고")
     return {
         'updated_orders': updated_orders,
         'failed_orders': failed_orders
@@ -583,6 +586,8 @@ def complete_dispatch(order_ids, tenant_id=None):
 
     conn.commit()
     conn.close()
+    for agg in aggregated_deductions.values():
+        queue_telegram_message(tenant_id, f"{agg['product_name']} {agg['total_qty']}개 출고")
     return {'dispatched_orders': dispatched_count, 'deducted_items': deducted_items}
 
 def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None, display_product_names=None):

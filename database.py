@@ -185,6 +185,13 @@ def init_db():
     cur = conn.cursor()
 
     if isinstance(conn, PgConnectionWrapper):
+        cur.execute('''CREATE TABLE IF NOT EXISTS telegram_settings (
+            tenant_id INTEGER PRIMARY KEY,
+            bot_token TEXT NOT NULL DEFAULT '',
+            chat_id TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
         cur.execute('''CREATE TABLE IF NOT EXISTS progress_events (
             id BIGSERIAL PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
@@ -456,6 +463,14 @@ def init_db():
     )''')
     cur.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_events_tenant_key ON progress_events (tenant_id, activity_key)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_progress_events_tenant_updated ON progress_events (tenant_id, updated_at)')
+
+    cur.execute('''CREATE TABLE IF NOT EXISTS telegram_settings (
+        tenant_id INTEGER PRIMARY KEY,
+        bot_token TEXT NOT NULL DEFAULT '',
+        chat_id TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
 
     # 6. 택배사 및 발송자 설정 (Courier Settings)
     cur.execute('''
