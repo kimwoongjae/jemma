@@ -4,12 +4,12 @@ import requests
 import json
 import concurrent.futures
 import threading
-from datetime import datetime
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from io import BytesIO
 from requests.adapters import HTTPAdapter
 from database import get_connection, record_progress
+from time_utils import format_japan_datetime, utc_now_naive
 from telegram_notifications import queue_telegram_message
 
 # 스레드별 HTTP 세션을 사용해 동시 요청 사이의 세션/쿠키 공유를 방지합니다.
@@ -336,7 +336,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
     if orders_data:
         active_ids = [item['oid'] for item in orders_data]
         active_placeholders = ','.join(['?'] * len(active_ids))
-        started_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        started_at = utc_now_naive().strftime('%Y-%m-%d %H:%M:%S')
         waiting_message = f'나르다 API 응답 대기 중 | 시작시각={started_at}'
         cur.execute(f'''
             UPDATE orders
@@ -372,7 +372,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
         api_results = list(executor.map(call_api_single, orders_data))
 
     # 3. 결과 DB 일괄 반영 및 재고 차감 처리 (메인 스레드 안전 트랜잭션)
-    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    now_str = utc_now_naive().strftime('%Y-%m-%d %H:%M')
     for oid, ord_dict, api_res in api_results:
         if not api_res.get('success'):
             err_msg = api_res.get('error') or '등록 실패'
@@ -474,7 +474,7 @@ def issue_tracking_numbers(order_ids, tenant_id=None):
     # ==========================================
     # 주문별·바코드별로 출고 내역을 남겨 처리 건을 추적할 수 있도록 기록
     # ==========================================
-    now_log_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    now_log_str = utc_now_naive().strftime('%Y-%m-%d %H:%M')
     for agg in aggregated_deductions.values():
         memo_text = f"주문 출고 ({agg['courier']} 송장발급)"
         cur.execute('''
@@ -531,7 +531,7 @@ def complete_dispatch(order_ids, tenant_id=None):
         if not ord_row:
             continue
 
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        now_str = utc_now_naive().strftime('%Y-%m-%d %H:%M')
         cur.execute("UPDATE orders SET status = '출고완료', dispatched_at = ? WHERE id = ? AND tenant_id = ?", (now_str, oid, tenant_id))
         dispatched_count += 1
 
@@ -566,7 +566,7 @@ def complete_dispatch(order_ids, tenant_id=None):
             deducted_items += 1
 
     # 바코드 기준 1건만 기록
-    now_log_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    now_log_str = utc_now_naive().strftime('%Y-%m-%d %H:%M')
     for agg in aggregated_deductions.values():
         cnt = len(agg['order_nos'])
         memo_text = f"총 {cnt}건 주문 일괄 출고"
@@ -728,7 +728,7 @@ def export_shipping_excel(order_ids=None, column_order=None, tenant_id=None, dis
         'packaging': ('포장 방식', lambda o, its: o['packaging_type'] if ('packaging_type' in o.keys() and o['packaging_type']) else '기본포장'),
         'shipping_fee': ('포장 추가요금', lambda o, its: packaging_fee(o)),
         'order_no': ('주문번호', lambda o, its: o['order_no'] or ''),
-        'dispatched_at': ('발송 일시', lambda o, its: o['dispatched_at'] or ''),
+        'dispatched_at': ('발송 일시', lambda o, its: format_japan_datetime(o['dispatched_at']) if o['dispatched_at'] else ''),
         'recipient': ('수취인 / 연락처', lambda o, its: ' / '.join(value for value in [o['recipient_name'] or '', o['recipient_phone1'] or ''] if value)),
         'customs_id': ('통관부호', lambda o, its: o['customs_id'] or ''),
         'address': ('배송지 주소', lambda o, its: o['address'] or ''),

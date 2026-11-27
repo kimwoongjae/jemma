@@ -2,11 +2,10 @@
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-
 import requests
 
 from database import get_connection
+from time_utils import japan_now
 
 
 logger = logging.getLogger(__name__)
@@ -67,7 +66,7 @@ def queue_telegram_message(tenant_id, message):
     if not tenant_id or not str(message or '').strip():
         return
     try:
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = japan_now().strftime('%Y-%m-%d %H:%M:%S')
         formatted = f'진행사항\n{timestamp}\n{str(message).strip()}'
         _telegram_executor.submit(_send_for_tenant, int(tenant_id), formatted)
     except RuntimeError:

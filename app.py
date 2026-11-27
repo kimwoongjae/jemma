@@ -9,13 +9,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 import requests
 from datetime import datetime
-from email.utils import parsedate_to_datetime
 from flask import Flask, request, jsonify, render_template, send_file, redirect, session, g
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from werkzeug.utils import secure_filename
 
-from database import init_db, get_connection, record_progress
+from database import USE_POSTGRES, init_db, get_connection, record_progress
+from time_utils import format_japan_datetime, japan_date_sql, japan_now, utc_now_naive
 from excel_processor import HEADER_MAP, NARDA_MANIFEST_PROFILE, find_matching_product_info, get_auto_header_aliases, process_excel_file, process_narda_manifest_file, save_orders_to_db
 from shipping_api import (
     issue_tracking_numbers, complete_dispatch,
@@ -104,7 +104,7 @@ def repair_legacy_order_item_quantities():
                      product.get('option_name') or item.get('item_option_name') or '',
                      -delta, corrected_stock, item.get('order_no') or '',
                      f"주문 출고수량 자동 정합성 보정 ({old_qty}→{expected_qty})",
-                     datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                     utc_now_naive().strftime('%Y-%m-%d %H:%M:%S')))
 
             cur.execute('UPDATE order_items SET quantity = ? WHERE id = ? AND tenant_id = ?',
                         (expected_qty, item['id'], item['tenant_id']))
@@ -677,7 +677,7 @@ def admin_inventory_movement(company_id):
         new_stock = current_stock + change_qty
         cur.execute('UPDATE products SET stock_quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?',
                     (new_stock, product['id'], company_id))
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        now_str = utc_now_naive().strftime('%Y-%m-%d %H:%M:%S')
         cur.execute('''INSERT INTO inventory_logs
                        (tenant_id, product_id, sku, product_name, option_name, change_type, change_qty,
                         resulting_stock, memo, created_at)
@@ -690,7 +690,7 @@ def admin_inventory_movement(company_id):
             record_progress(cur, company_id, progress_content, 'inventory_in')
         else:
             progress_content = f"{product['product_name']} {{quantity}}개 출고"
-            daily_key = f"outbound:{datetime.now().strftime('%Y-%m-%d')}:{product['sku'] or product['id']}"
+            daily_key = f"outbound:{japan_now().strftime('%Y-%m-%d')}:{product['sku'] or product['id']}"
             record_progress(cur, company_id, progress_content, 'inventory_out',
                             activity_key=daily_key, quantity_delta=quantity)
         conn.commit()
@@ -1105,7 +1105,7 @@ def admin_issue_tracking_status():
     cur.execute(f'''SELECT id, order_no, tracking_no, api_dispatch_status, api_dispatch_message
         FROM orders WHERE tenant_id = ? AND id IN ({marks})''', [int(company_id)] + order_ids)
     rows = [dict(row) for row in cur.fetchall()]
-    now = datetime.now()
+    now = utc_now_naive()
     for order in rows:
         if str(order.get('api_dispatch_status') or '').strip() != '전송중':
             continue
@@ -1187,21 +1187,8 @@ def get_current_company():
 
 
 def format_inventory_log_datetime(value):
-    """Normalize SQLite strings and PostgreSQL datetime values for the logs screen/export."""
-    if value is None:
-        return ''
-    if isinstance(value, datetime):
-        return value.strftime('%Y-%m-%d %H:%M')
-    raw = str(value).strip()
-    if not raw:
-        return ''
-    try:
-        return datetime.fromisoformat(raw.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M')
-    except (TypeError, ValueError):
-        try:
-            return parsedate_to_datetime(raw).strftime('%Y-%m-%d %H:%M')
-        except (TypeError, ValueError, OverflowError):
-            return raw[:16]
+    """Format UTC database timestamps in Korea/Japan local time."""
+    return format_japan_datetime(value)
 
 @app.route('/')
 def index():
@@ -1694,12 +1681,13 @@ def get_orders():
     query = 'SELECT * FROM orders WHERE tenant_id = ?'
     params = [g.company_id]
 
-    # 등록일(created_at) 기준 기간 검색. ISO 날짜만 받아 SQL 조건에 사용합니다.
+    # 등록일(created_at) 기준 기간 검색은 한국/일본 달력 날짜로 처리합니다.
+    created_date_expr = japan_date_sql('created_at', USE_POSTGRES)
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
-        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?"
+        query += f' AND {created_date_expr} >= ?'
         params.append(date_from)
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
-        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?"
+        query += f' AND {created_date_expr} <= ?'
         params.append(date_to)
 
     if status == '출고대기':
@@ -1765,7 +1753,6 @@ def get_orders():
 
     cur.execute(query, params)
     orders = [dict(row) for row in cur.fetchall()]
-
     # 모든 주문의 order_items를 1번의 쿼리로 일괄 조회 (N+1 문제 해결 -> 초고속 로딩)
     if orders:
         order_ids = [o['id'] for o in orders]
@@ -1969,7 +1956,10 @@ def get_dispatched_orders():
         wild = f'%{search}%'
         params.extend([wild, wild, wild, wild, wild, wild, wild, wild, wild, wild, wild])
 
-    dispatch_date_expr = "COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10))"
+    dispatch_date_expr = japan_date_sql(
+        "COALESCE(NULLIF(CAST(dispatched_at AS TEXT), ''), CAST(created_at AS TEXT))",
+        USE_POSTGRES
+    )
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date):
         query += f' AND {dispatch_date_expr} = ?'
         params.append(selected_date)
@@ -1990,6 +1980,11 @@ def get_dispatched_orders():
 
     cur.execute(query, params)
     orders = [dict(row) for row in cur.fetchall()]
+    for order in orders:
+        if order.get('dispatched_at'):
+            order['dispatched_at'] = format_japan_datetime(order['dispatched_at'])
+        elif order.get('created_at'):
+            order['created_at'] = format_japan_datetime(order['created_at'])
 
     if orders:
         order_ids = [o['id'] for o in orders]
@@ -2283,8 +2278,11 @@ def get_dispatched_order_dates():
     date_to = request.args.get('date_to', '').strip()
     conn = get_connection()
     cur = conn.cursor()
-    query = """SELECT COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''),
-                    SUBSTR(CAST(created_at AS TEXT), 1, 10)) AS date, COUNT(*) AS count
+    dispatch_date_expr = japan_date_sql(
+        "COALESCE(NULLIF(CAST(dispatched_at AS TEXT), ''), CAST(created_at AS TEXT))",
+        USE_POSTGRES
+    )
+    query = f"""SELECT {dispatch_date_expr} AS date, COUNT(*) AS count
                FROM orders
                WHERE tenant_id = ? AND (status IN ('출고완료', '송장발급')
                   OR (tracking_no IS NOT NULL AND TRIM(tracking_no) != ''))"""
@@ -2302,10 +2300,10 @@ def get_dispatched_order_dates():
         wild = f'%{search}%'
         params.extend([wild] * 11)
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
-        query += " AND COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10)) >= ?"
+        query += f' AND {dispatch_date_expr} >= ?'
         params.append(date_from)
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
-        query += " AND COALESCE(NULLIF(SUBSTR(CAST(dispatched_at AS TEXT), 1, 10), ''), SUBSTR(CAST(created_at AS TEXT), 1, 10)) <= ?"
+        query += f' AND {dispatch_date_expr} <= ?'
         params.append(date_to)
     query += ' GROUP BY date ORDER BY date DESC'
     cur.execute(query, params)
@@ -2937,8 +2935,9 @@ def validate_customs_batch():
                                 if pending_name_event:
                                     cur.execute('''UPDATE progress_events
                                         SET event_type = 'customs_name_edited', content = '개인통관고유부호 이름 수정됨',
-                                            activity_key = NULL, updated_at = CURRENT_TIMESTAMP
-                                        WHERE id = ? AND tenant_id = ?''', (pending_name_event['id'], g.company_id))
+                                            activity_key = NULL, updated_at = ?
+                                        WHERE id = ? AND tenant_id = ?''',
+                                        (utc_now_naive().strftime('%Y-%m-%d %H:%M:%S'), pending_name_event['id'], g.company_id))
                                     customs_edit_notifications.add(oid)
                             found_ids.add(oid)
 
@@ -3063,7 +3062,7 @@ def api_issue_tracking_status():
     cur.execute(f'''SELECT id, order_no, tracking_no, api_dispatch_status, api_dispatch_message
         FROM orders WHERE tenant_id = ? AND id IN ({marks})''', [g.company_id] + order_ids)
     rows = [dict(row) for row in cur.fetchall()]
-    now = datetime.now()
+    now = utc_now_naive()
     for order in rows:
         if str(order.get('api_dispatch_status') or '').strip() != '전송중':
             continue
@@ -3176,10 +3175,10 @@ def api_shipping_batches():
         for o in orders:
             dt_str = o.get('dispatched_at') or ''
             if dt_str and len(dt_str) >= 10:
-                d_key = dt_str[:10]
+                d_key = format_japan_datetime(dt_str, '%Y-%m-%d')
             else:
                 c_str = str(o.get('created_at') or '')
-                d_key = c_str[:10] if len(c_str) >= 10 else datetime.now().strftime('%Y-%m-%d')
+                d_key = format_japan_datetime(c_str, '%Y-%m-%d') if c_str else japan_now().strftime('%Y-%m-%d')
 
             courier = o.get('courier') or '나르다'
             group_key = f"{d_key}_{courier}"
@@ -3604,7 +3603,7 @@ def barcode_stock_in():
 
 
     # 입고 이력 로그
-    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    now_str = utc_now_naive().strftime('%Y-%m-%d %H:%M')
     cur.execute('''
         INSERT INTO inventory_logs (tenant_id, product_id, sku, product_name, option_name, change_type, change_qty, resulting_stock, memo, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -3627,7 +3626,7 @@ def batch_stock_in():
     cur = conn.cursor()
     success_count = 0
     total_qty = 0
-    now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    now_str = utc_now_naive().strftime('%Y-%m-%d %H:%M')
 
     progress_messages = []
     for it in items:
@@ -3759,7 +3758,7 @@ def upload_products_excel():
         conn = get_connection()
         cur = conn.cursor()
         saved_count = 0
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        now_str = utc_now_naive().strftime('%Y-%m-%d %H:%M')
 
         import math
         for _, row in df.iterrows():
@@ -4022,6 +4021,7 @@ def get_inventory_logs():
     conn = get_connection()
     cur = conn.cursor()
     query = 'SELECT * FROM inventory_logs WHERE tenant_id = ?'
+    inventory_date_expr = japan_date_sql('created_at', USE_POSTGRES)
     params = [g.company_id]
 
     if change_type and change_type != '전체':
@@ -4043,13 +4043,13 @@ def get_inventory_logs():
     )
     if has_valid_range:
         if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
-            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?'
+            query += f' AND {inventory_date_expr} >= ?'
             params.append(date_from)
         if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
-            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?'
+            query += f' AND {inventory_date_expr} <= ?'
             params.append(date_to)
     elif has_valid_date:
-        query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
+        query += f' AND {inventory_date_expr} = ?'
         params.append(selected_date)
 
     # 날짜 또는 기간을 지정하면 해당 범위 전체를 표시하고, 미지정 시 최근 내역만 표시합니다.
@@ -4094,7 +4094,8 @@ def get_inventory_log_dates():
     date_to = request.args.get('date_to', '').strip()
     conn = get_connection()
     cur = conn.cursor()
-    query = "SELECT SUBSTR(CAST(created_at AS TEXT), 1, 10) AS date, COUNT(*) AS count FROM inventory_logs WHERE tenant_id = ?"
+    inventory_date_expr = japan_date_sql('created_at', USE_POSTGRES)
+    query = f'SELECT {inventory_date_expr} AS date, COUNT(*) AS count FROM inventory_logs WHERE tenant_id = ?'
     params = [g.company_id]
     if change_type and change_type != '전체':
         if change_type == '출고':
@@ -4107,10 +4108,10 @@ def get_inventory_log_dates():
         wild = f'%{search}%'
         params.extend([wild, wild, wild])
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
-        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?"
+        query += f' AND {inventory_date_expr} >= ?'
         params.append(date_from)
     if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
-        query += " AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?"
+        query += f' AND {inventory_date_expr} <= ?'
         params.append(date_to)
     query += ' GROUP BY date ORDER BY date DESC'
     cur.execute(query, params)
@@ -4138,10 +4139,10 @@ def export_inventory_logs():
         query = 'SELECT * FROM inventory_logs WHERE tenant_id = ?'
         params = [g.company_id]
         if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_from):
-            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) >= ?'
+            query += f' AND {japan_date_sql("created_at", USE_POSTGRES)} >= ?'
             params.append(date_from)
         if re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_to):
-            query += ' AND SUBSTR(CAST(created_at AS TEXT), 1, 10) <= ?'
+            query += f' AND {japan_date_sql("created_at", USE_POSTGRES)} <= ?'
             params.append(date_to)
         if change_type and change_type != '전체':
             if change_type == '출고':
@@ -4155,7 +4156,7 @@ def export_inventory_logs():
             params.extend([wild, wild, wild])
         cur.execute(query + ' ORDER BY id ASC', params)
     elif re.fullmatch(r'\d{4}-\d{2}-\d{2}', selected_date):
-        query = 'SELECT * FROM inventory_logs WHERE tenant_id = ? AND SUBSTR(CAST(created_at AS TEXT), 1, 10) = ?'
+        query = f'SELECT * FROM inventory_logs WHERE tenant_id = ? AND {japan_date_sql("created_at", USE_POSTGRES)} = ?'
         params = [g.company_id, selected_date]
         if change_type and change_type != '전체':
             if change_type == '출고':

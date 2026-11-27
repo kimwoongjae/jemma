@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import secrets
 from datetime import datetime
+from time_utils import utc_now_naive
 
 # Supabase PostgreSQL 연결 설정
 SUPABASE_CONFIG = {
@@ -162,6 +163,7 @@ def get_connection():
 
 def record_progress(cur, tenant_id, content, event_type='info', activity_key=None, quantity_delta=0):
     """Persist a tenant-scoped progress event; keyed quantity events update their daily total."""
+    timestamp = utc_now_naive().strftime('%Y-%m-%d %H:%M:%S')
     if activity_key:
         cur.execute('''SELECT id, total_quantity FROM progress_events
             WHERE tenant_id = ? AND activity_key = ? LIMIT 1''', (tenant_id, activity_key))
@@ -169,16 +171,17 @@ def record_progress(cur, tenant_id, content, event_type='info', activity_key=Non
         total_quantity = int(existing['total_quantity'] or 0) + int(quantity_delta or 0) if existing else int(quantity_delta or 0)
         rendered_content = content.replace('{quantity}', str(total_quantity))
         if existing:
-            cur.execute('''UPDATE progress_events SET content = ?, total_quantity = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND tenant_id = ?''', (rendered_content, total_quantity, existing['id'], tenant_id))
+            cur.execute('''UPDATE progress_events SET content = ?, total_quantity = ?, updated_at = ?
+                WHERE id = ? AND tenant_id = ?''', (rendered_content, total_quantity, timestamp, existing['id'], tenant_id))
         else:
             cur.execute('''INSERT INTO progress_events
-                (tenant_id, event_type, content, activity_key, total_quantity)
-                VALUES (?, ?, ?, ?, ?)''', (tenant_id, event_type, rendered_content, activity_key, total_quantity))
+                (tenant_id, event_type, content, activity_key, total_quantity, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (tenant_id, event_type, rendered_content, activity_key, total_quantity, timestamp, timestamp))
         return
 
-    cur.execute('''INSERT INTO progress_events (tenant_id, event_type, content)
-        VALUES (?, ?, ?)''', (tenant_id, event_type, content))
+    cur.execute('''INSERT INTO progress_events (tenant_id, event_type, content, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)''', (tenant_id, event_type, content, timestamp, timestamp))
 
 def init_db():
     conn = get_connection()
